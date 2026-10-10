@@ -1,8 +1,58 @@
-//! Fonts: egui's defaults and bundled Thai fallbacks, plus the operating system's own UI fonts
+//! Fonts: egui's defaults and bundled Noto fallbacks, plus the operating system's own UI fonts
 //! loaded at runtime when present (never redistributed). The fallbacks also work on Web/WASM.
 
 use egui::{FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
+
+struct BundledFont {
+    name: &'static str,
+    regular: &'static [u8],
+    bold: &'static [u8],
+    index: u32,
+}
+
+macro_rules! noto {
+    ($family:literal) => {
+        BundledFont {
+            name: $family,
+            regular: include_bytes!(concat!("../../../assets/fonts/noto/", $family, "-Regular.ttf")),
+            bold: include_bytes!(concat!("../../../assets/fonts/noto/", $family, "-Bold.ttf")),
+            index: 0,
+        }
+    };
+}
+
+const BUNDLED: &[BundledFont] = &[
+    BundledFont {
+        name: "NotoSansThai",
+        regular: include_bytes!("../../../assets/fonts/noto-sans-thai/NotoSansThai-Regular.ttf"),
+        bold: include_bytes!("../../../assets/fonts/noto-sans-thai/NotoSansThai-Bold.ttf"),
+        index: 0,
+    },
+    noto!("NotoSansArabic"),
+    noto!("NotoSansHebrew"),
+    noto!("NotoSansDevanagari"),
+    noto!("NotoSansBengali"),
+    noto!("NotoSansGujarati"),
+    noto!("NotoSansGurmukhi"),
+    noto!("NotoSansOriya"),
+    noto!("NotoSansTamil"),
+    noto!("NotoSansTelugu"),
+    noto!("NotoSansKannada"),
+    noto!("NotoSansMalayalam"),
+    noto!("NotoSansOlChiki"),
+    noto!("NotoSansMeeteiMayek"),
+    noto!("NotoSansSinhala"),
+    noto!("NotoSerifTibetan"),
+    BundledFont {
+        name: "NotoSansCJK",
+        regular: include_bytes!("../../../assets/fonts/noto-cjk/NotoSansCJK-Regular.ttc"),
+        bold: include_bytes!("../../../assets/fonts/noto-cjk/NotoSansCJK-Bold.ttc"),
+        // The pan-CJK collection shares coverage across all regional faces. Use Simplified
+        // Chinese forms for shared Han; kana, Hangul and Traditional Chinese are also covered.
+        index: 2,
+    },
+];
 
 /// (path, ttc index) candidates for regular and bold UI text, by platform.
 const REGULAR: &[(&str, u32)] = &[
@@ -76,23 +126,25 @@ fn load(_: &[(&str, u32)], _: bool) -> Option<FontData> {
     None
 }
 
-/// Always available, including on machines without Thai fonts or filesystem access.
+/// Always available, including on machines without language fonts or filesystem access.
 fn bundled_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(
-        "noto-sans-thai-regular".into(),
-        Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/noto-sans-thai/NotoSansThai-Regular.ttf"))),
-    );
-    fonts.font_data.insert(
-        "noto-sans-thai-bold".into(),
-        Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/noto-sans-thai/NotoSansThai-Bold.ttf"))),
-    );
     let mut bold_family = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    bold_family.push("noto-sans-thai-bold".into());
-    fonts.families.insert(FontFamily::Name("bold".into()), bold_family);
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push("noto-sans-thai-regular".into());
+    for font in BUNDLED {
+        let regular_name = format!("{}-regular", font.name);
+        let bold_name = format!("{}-bold", font.name);
+        let mut regular = FontData::from_static(font.regular);
+        let mut bold = FontData::from_static(font.bold);
+        regular.index = font.index;
+        bold.index = font.index;
+        fonts.font_data.insert(regular_name.clone(), Arc::new(regular));
+        fonts.font_data.insert(bold_name.clone(), Arc::new(bold));
+        bold_family.push(bold_name);
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(regular_name.clone());
+        }
     }
+    fonts.families.insert(FontFamily::Name("bold".into()), bold_family);
     fonts
 }
 
@@ -124,6 +176,53 @@ pub fn install(ctx: &egui::Context) {
 mod tests {
     use super::*;
     use egui::{Color32, FontId};
+
+    #[test]
+    fn bundled_fonts_cover_requested_scripts_without_system_fonts() {
+        let samples = [
+            ("Simplified Chinese", "录音轨道 汉字"),
+            ("Traditional Chinese", "錄音軌道 漢字"),
+            ("Japanese", "ボーカル 音楽 録音"),
+            ("Korean", "보컬 녹음 트랙 한글"),
+            ("Arabic", "تسجيل الصوت مُوسيقى"),
+            ("Hebrew", "הקלטת שירה שָׁלוֹם"),
+            ("Devanagari", "स्वर रिकॉर्डिंग हिन्दी मराठी"),
+            ("Bengali / Assamese", "কণ্ঠ রেকর্ডিং অসমীয়া"),
+            ("Gujarati", "અવાજ રેકોર્ડિંગ"),
+            ("Gurmukhi", "ਆਵਾਜ਼ ਰਿਕਾਰਡਿੰਗ"),
+            ("Odia", "ସ୍ୱର ରେକର୍ଡିଂ"),
+            ("Tamil", "குரல் பதிவு"),
+            ("Telugu", "గాత్రం రికార్డింగ్"),
+            ("Kannada", "ಧ್ವನಿ ರೆಕಾರ್ಡಿಂಗ್"),
+            ("Malayalam", "ശബ്ദം റെക്കോർഡിംഗ്"),
+            ("Ol Chiki", "ᱥᱟᱱᱛᱟᱲᱤ"),
+            ("Meetei Mayek", "ꯃꯤꯇꯩ ꯂꯣꯟ"),
+            ("Sinhala", "හඬ පටිගත කිරීම"),
+            ("Tibetan", "བོད་ཡིག"),
+        ];
+        let ctx = egui::Context::default();
+        ctx.set_fonts(bundled_definitions());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.ctx().fonts_mut(|fonts| {
+                for family in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name("bold".into())] {
+                    let id = FontId::new(14.0, family);
+                    let replacement = fonts.layout_no_wrap("\u{10FFFF}".into(), id.clone(), Color32::WHITE);
+                    let missing_uv: Vec<_> = replacement.rows.iter().flat_map(|row| row.row.glyphs.iter().map(|g| g.uv_rect)).collect();
+                    for (script, sample) in samples {
+                        for ch in sample.chars().filter(|ch| !ch.is_whitespace()) {
+                            let galley = fonts.layout_no_wrap(ch.to_string(), id.clone(), Color32::WHITE);
+                            let uv: Vec<_> = galley.rows.iter().flat_map(|row| row.row.glyphs.iter().map(|g| g.uv_rect)).collect();
+                            assert_ne!(uv, missing_uv, "missing {script} character {ch} in {:?}", id.family);
+                        }
+                        let galley = fonts.layout_no_wrap(format!("{sample} - take 123.wav"), id.clone(), Color32::WHITE);
+                        assert!(galley.size().x.is_finite() && galley.size().x > 0.0, "{script} layout must be finite");
+                        assert!(galley.mesh_bounds.is_finite(), "{script} glyph bounds must be finite");
+                    }
+                }
+            });
+        });
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn bundled_fonts_cover_thai_in_every_ui_family() {
