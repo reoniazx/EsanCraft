@@ -1,17 +1,10 @@
 //! Design tokens. Colours were chosen by eye to give a dark, studio-style look; they are ours.
 
 use egui::{Color32, FontFamily, FontId};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Whether the Light palette is active. Dark is the default (the incumbent is dark-only).
 static LIGHT_THEME: AtomicBool = AtomicBool::new(false);
-
-/// The operating system's appearance, asked once off the UI thread.
-static SYSTEM: AtomicU8 = AtomicU8::new(SYSTEM_UNKNOWN);
-const SYSTEM_UNKNOWN: u8 = 0;
-const SYSTEM_ASKING: u8 = 1;
-const SYSTEM_DARK: u8 = 2;
-const SYSTEM_LIGHT: u8 = 3;
 
 /// The Appearance setting (`ui.theme {mode}`). Dark by default; System and Light are opt-in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -335,47 +328,13 @@ pub fn is_light() -> bool {
     LIGHT_THEME.load(Ordering::Relaxed)
 }
 
-/// Whether `mode` resolves to the Light palette right now. Never blocks.
+/// Resolve each frame from the integration's current OS appearance. Unknown uses Dark.
 pub fn wants_light(ctx: &egui::Context, mode: ThemeMode) -> bool {
     match mode {
         ThemeMode::Light => true,
         ThemeMode::Dark => false,
-        ThemeMode::System => system_is_light(ctx),
+        ThemeMode::System => ctx.system_theme() == Some(egui::Theme::Light),
     }
-}
-
-/// Forget the cached system appearance so the next System lookup asks again.
-pub fn refresh_system() {
-    let _ = SYSTEM.compare_exchange(SYSTEM_DARK, SYSTEM_UNKNOWN, Ordering::Relaxed, Ordering::Relaxed);
-    let _ = SYSTEM.compare_exchange(SYSTEM_LIGHT, SYSTEM_UNKNOWN, Ordering::Relaxed, Ordering::Relaxed);
-}
-
-/// The OS appearance. The query (a D-Bus call on Linux) runs once on a background thread; until it
-/// answers this reports dark, and `ctx` is repainted when the answer arrives.
-#[cfg(not(target_arch = "wasm32"))]
-fn system_is_light(ctx: &egui::Context) -> bool {
-    if SYSTEM.compare_exchange(SYSTEM_UNKNOWN, SYSTEM_ASKING, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
-        let ctx = ctx.clone();
-        let spawned = std::thread::Builder::new().name("soundcraft-theme".into()).spawn(move || {
-            let light = matches!(dark_light::detect(), Ok(dark_light::Mode::Light));
-            SYSTEM.store(if light { SYSTEM_LIGHT } else { SYSTEM_DARK }, Ordering::Relaxed);
-            ctx.request_repaint();
-        });
-        if spawned.is_err() {
-            SYSTEM.store(SYSTEM_DARK, Ordering::Relaxed);
-        }
-    }
-    SYSTEM.load(Ordering::Relaxed) == SYSTEM_LIGHT
-}
-
-/// On the web the query is a synchronous `matchMedia` lookup (no threads there).
-#[cfg(target_arch = "wasm32")]
-fn system_is_light(_ctx: &egui::Context) -> bool {
-    if SYSTEM.compare_exchange(SYSTEM_UNKNOWN, SYSTEM_ASKING, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
-        let light = matches!(dark_light::detect(), Ok(dark_light::Mode::Light));
-        SYSTEM.store(if light { SYSTEM_LIGHT } else { SYSTEM_DARK }, Ordering::Relaxed);
-    }
-    SYSTEM.load(Ordering::Relaxed) == SYSTEM_LIGHT
 }
 
 /// Track colours tinted for clip bodies.
@@ -430,8 +389,13 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     v.widgets.inactive.fg_stroke.color = t.text;
     v.window_corner_radius = egui::CornerRadius::same(6);
     v.menu_corner_radius = egui::CornerRadius::same(4);
-    ctx.set_visuals(v);
-    ctx.global_style_mut(|s| {
+    // Keep receiving native OS appearance changes even when our palette is manual. On macOS,
+    // pinning egui's theme also pins the window appearance and hides later OS changes.
+    ctx.set_theme(egui::ThemePreference::System);
+    // Both egui style branches must use our resolved palette: egui can select either branch
+    // as the OS changes, including while SoundCraft's manual Light/Dark choice stays fixed.
+    ctx.all_styles_mut(|s| {
+        s.visuals = v.clone();
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(6.0, 2.0);
         s.interaction.tooltip_delay = 0.4;
@@ -475,5 +439,79 @@ mod tests {
         assert_eq!(app.ui.theme, ThemeMode::Light);
         assert_eq!(app.run("ui.theme", json!({"mode": "system"})), Ok(json!({"mode": "system"})));
         assert!(crate::menus::UI_COMMANDS.iter().any(|c| c.0 == "ui.theme"));
+    }
+
+    #[test]
+    fn application_frames_follow_system_appearance_and_preserve_manual_palettes() {
+        // Keep all frame assertions in one test: custom-painted tokens share LIGHT_THEME.
+        fn frame(app: &mut SoundApp, ctx: &egui::Context, system_theme: Option<egui::Theme>, light: bool) {
+            let mode = app.ui.theme;
+            let colors = |app: &SoundApp| {
+                app.engine
+                    .session()
+                    .tracks
+                    .iter()
+                    .map(|track| {
+                        (track.color, track.playlists.iter().flat_map(|playlist| &playlist.clips).map(|clip| clip.color).collect::<Vec<_>>())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let before = colors(app);
+            let mut output = ctx.run_ui(egui::RawInput { system_theme, ..Default::default() }, |ui| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                let tokens = if light { Tokens::LIGHT } else { Tokens::DARK };
+                assert_eq!(is_light(), light, "custom palette for {mode:?} with {system_theme:?}");
+                assert_eq!(Tokens::current().panel_bg, tokens.panel_bg);
+                assert_eq!(ctx.options(|options| options.theme_preference), egui::ThemePreference::System);
+                for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                    let style = ctx.style_of(theme);
+                    assert_eq!(style.visuals.dark_mode, !light);
+                    assert_eq!(style.visuals.panel_fill, tokens.panel_bg);
+                    assert_eq!(style.visuals.widgets.inactive.bg_fill, tokens.button);
+                    assert_eq!(style.visuals.widgets.inactive.fg_stroke.color, tokens.text);
+                    assert_eq!(style.spacing.button_padding, egui::vec2(6.0, 2.0));
+                }
+                app.ui(ui);
+                assert_eq!(ui.visuals().panel_fill, tokens.panel_bg);
+                assert_eq!(ui.visuals().widgets.inactive.bg_fill, tokens.button);
+            });
+            output.textures_delta.clear();
+            assert_eq!(app.ui.theme, mode);
+            assert_eq!(serde_json::to_value(&app.ui).unwrap()["theme"], mode.id());
+            assert_eq!(colors(app), before, "appearance must preserve track and clip colors");
+        }
+
+        let appearances = [Some(egui::Theme::Light), Some(egui::Theme::Dark), Some(egui::Theme::Light), None];
+        for initial in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
+            let ctx = egui::Context::default();
+            let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, Services::default());
+            app.ui = serde_json::from_value(json!({"theme": "system"})).unwrap();
+            frame(&mut app, &ctx, initial, initial == Some(egui::Theme::Light));
+        }
+
+        let ctx = egui::Context::default();
+        let mut engine = soundcraft_engine::demo::demo_engine();
+        let track = engine.session_mut().tracks.first_mut().unwrap();
+        track.color = [19, 83, 147];
+        track.playlists.iter_mut().flat_map(|playlist| &mut playlist.clips).next().unwrap().color = Some([211, 57, 99]);
+        let mut app = SoundApp::new(engine, None, Services::default());
+        for mode in [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark] {
+            app.run("ui.theme", json!({"mode": mode.id()})).unwrap();
+            for appearance in appearances {
+                let light = mode == ThemeMode::Light || (mode == ThemeMode::System && appearance == Some(egui::Theme::Light));
+                frame(&mut app, &ctx, appearance, light);
+            }
+            if mode != ThemeMode::System {
+                let latest = if mode == ThemeMode::Light { egui::Theme::Dark } else { egui::Theme::Light };
+                frame(&mut app, &ctx, Some(latest), mode == ThemeMode::Light);
+                app.run("ui.theme", json!({"mode": "system"})).unwrap();
+                // Resolve the current context immediately, without another OS appearance event.
+                app.logic(&ctx);
+                assert_eq!(is_light(), latest == egui::Theme::Light);
+                assert_eq!(ctx.global_style().visuals.dark_mode, latest != egui::Theme::Light);
+                frame(&mut app, &ctx, Some(latest), latest == egui::Theme::Light);
+            }
+        }
     }
 }

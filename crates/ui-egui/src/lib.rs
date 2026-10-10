@@ -838,6 +838,8 @@ impl SoundApp {
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // The integration creates this Ui before logic resolves the current frame's palette.
+        ui.set_style(ctx.global_style());
         if !self.fonts_ready {
             ctx.request_repaint();
             return;

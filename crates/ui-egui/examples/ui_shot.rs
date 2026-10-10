@@ -1,9 +1,10 @@
 //! Render the real UI offscreen (no window, no focus stealing) and save PNGs.
 //!
-//! `cargo run -p soundcraft-ui-egui --example ui_shot -- out.png [script.jsonl] [--blank] [--size WxH]`
+//! `cargo run -p soundcraft-ui-egui --example ui_shot -- out.png [script.jsonl] [--blank] [--size WxH] [--system-theme light|dark|none]`
 //!
 //! Script lines are control requests (`{"method": "...", "params": {...}}`), `{"shot": "path.png"}`
-//! or `{"steps": n}`. The demo session is loaded unless `--blank`.
+//! or `{"steps": n}`. `{"system_theme": "light"}` (also `"dark"` or `"none"`) changes the
+//! simulated OS appearance for subsequent frames. The demo session is loaded unless `--blank`.
 
 use soundcraft_ui_egui::{ControlRequest, Services, SoundApp};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,11 +12,29 @@ use std::sync::mpsc;
 
 static READY: AtomicBool = AtomicBool::new(false);
 
+fn system_theme(value: &str) -> Option<Option<egui::Theme>> {
+    match value {
+        "light" => Some(Some(egui::Theme::Light)),
+        "dark" => Some(Some(egui::Theme::Dark)),
+        "none" => Some(None),
+        _ => None,
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let out = args.first().cloned().unwrap_or_else(|| "soundcraft.png".into());
     let script = args.get(1).filter(|a| !a.starts_with("--")).cloned();
     let blank = args.iter().any(|a| a == "--blank");
+    let appearance = if let Some(i) = args.iter().position(|a| a == "--system-theme") {
+        let Some(appearance) = args.get(i + 1).and_then(|value| system_theme(value)) else {
+            eprintln!("--system-theme requires light, dark or none");
+            return;
+        };
+        appearance
+    } else {
+        None
+    };
     let (w, h) = args
         .iter()
         .position(|a| a == "--size")
@@ -39,6 +58,7 @@ fn main() {
             app,
         );
     harness.input_mut().max_texture_side = Some(8192);
+    harness.input_mut().system_theme = appearance;
     READY.store(true, Ordering::Relaxed);
     let step = |h: &mut egui_kittest::Harness<SoundApp>| {
         let mut raw = std::mem::take(h.input_mut());
@@ -63,6 +83,15 @@ fn main() {
                 eprintln!("bad line: {line}");
                 continue;
             };
+            if let Some(value) = v.get("system_theme") {
+                let Some(appearance) = value.as_str().and_then(system_theme) else {
+                    eprintln!("system_theme requires light, dark or none: {line}");
+                    continue;
+                };
+                harness.input_mut().system_theme = appearance;
+                step(&mut harness);
+                continue;
+            }
             if let Some(p) = v.get("shot").and_then(|x| x.as_str()) {
                 for _ in 0..3 {
                     step(&mut harness);

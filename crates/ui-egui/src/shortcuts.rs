@@ -170,6 +170,12 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers, mac: bool) -> bool {
             let _ = app.run(id, json!({}));
             true
         }
+        // Ctrl+Shift+Up/Down nudge clip gain off macOS too (the registry's Ctrl is the Mac Control key).
+        Key::ArrowUp | Key::ArrowDown if !mac && m.ctrl && m.shift && !m.alt => {
+            let id = if key == Key::ArrowUp { "clip.gain_nudge_up" } else { "clip.gain_nudge_down" };
+            let _ = app.run(id, json!({}));
+            true
+        }
         // Commands Keyboard Focus: single-key editing (Edit window only).
         k if plain && app.ui.window == MainWindow::Edit && app.engine.session().edit.keyboard_focus == "commands" && commands_focus(app, k) => true,
         Key::R | Key::T if plain => {
