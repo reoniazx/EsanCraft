@@ -521,6 +521,11 @@ fn about(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.label("Dual-licensed MIT OR Apache-2.0. Made with Rust and egui.");
                 ui.hyperlink_to("getartcraft.com/apps/soundcraft", "https://getartcraft.com/apps/soundcraft");
                 ui.hyperlink_to("Join us on Discord", "https://discord.gg/artcraft");
+                ui.collapsing("Noto Sans Thai font license", |ui| {
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        ui.label(include_str!("../../../assets/fonts/noto-sans-thai/OFL.txt"));
+                    });
+                });
             }
         }
     });

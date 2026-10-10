@@ -21,7 +21,10 @@ are bundled.
 
 ## Fonts
 
-SoundCraft bundles no font files. It uses the default fonts shipped inside the `egui` crate
+SoundCraft bundles Noto Sans Thai (regular and bold) as fallback fonts on all platforms, including
+Web/WASM, under the SIL Open Font License 1.1. The unmodified upstream fonts and license are in
+`assets/fonts/noto-sans-thai/`; the license is also available in About SoundCraft.
+It uses the default fonts shipped inside the `egui` crate
 (Ubuntu-Light: Ubuntu Font Licence 1.0; Hack: MIT; Noto Emoji: OFL-1.1; emoji-icon-font: OFL-1.1/MIT)
 and, at runtime, the operating system's own UI fonts when available (never redistributed).
 
@@ -29,6 +32,9 @@ and, at runtime, the operating system's own UI fonts when available (never redis
 
 | Path | Author | Source | License |
 |---|---|---|---|
+| `assets/fonts/noto-sans-thai/NotoSansThai-Regular.ttf` | The Noto Project Authors | [Noto Sans Thai](https://github.com/notofonts/noto-fonts/tree/main/hinted/ttf/NotoSansThai), revision recorded in the adjacent README | SIL Open Font License 1.1 (`assets/fonts/noto-sans-thai/OFL.txt`) |
+| `assets/fonts/noto-sans-thai/NotoSansThai-Bold.ttf` | The Noto Project Authors | [Noto Sans Thai](https://github.com/notofonts/noto-fonts/tree/main/hinted/ttf/NotoSansThai), revision recorded in the adjacent README | SIL Open Font License 1.1 (`assets/fonts/noto-sans-thai/OFL.txt`) |
+| `assets/fonts/noto-sans-thai/OFL.txt` | The Noto Project Authors | [upstream license](https://github.com/notofonts/noto-fonts/blob/main/LICENSE) | SIL Open Font License 1.1 |
 | `docs/brand/artcraft-logo.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) |
 | `docs/brand/artcraft-logo.png` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
 | `docs/brand/artcraft-logo-white.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
