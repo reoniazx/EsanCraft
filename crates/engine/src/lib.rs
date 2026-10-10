@@ -53,6 +53,8 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 /// Requests for the transport/audio engine, drained by the host app each frame.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum TransportRequest {
+    /// Stop the old session's transport without applying stop-time edits to the new document.
+    ResetSession,
     Play,
     Stop,
     TogglePlay,
@@ -158,6 +160,9 @@ impl Engine {
 
     /// Replace the whole document (open / new); clears history.
     pub fn replace_session(&mut self, s: Session) {
+        self.transport = TransportStatus { position: s.edit.selection.start.max(0), ..TransportStatus::default() };
+        self.transport_requests.clear();
+        self.transport_requests.push(TransportRequest::ResetSession);
         self.doc = Arc::new(s);
         self.undo.clear();
         self.redo.clear();

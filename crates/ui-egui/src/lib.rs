@@ -642,6 +642,25 @@ impl SoundApp {
         let reqs: Vec<TransportRequest> = std::mem::take(&mut self.engine.transport_requests);
         for r in reqs {
             match r {
+                TransportRequest::ResetSession => {
+                    if let Some(p) = &self.player {
+                        p.stop();
+                        p.set_recording(false);
+                        p.set_speed(1.0);
+                        p.locate(self.engine.transport.position);
+                    }
+                    self.sim = None;
+                    // The old capture belongs to the replaced document, never to the new one.
+                    self.recorder = None;
+                    self.recorder_failed = false;
+                    self.punch = None;
+                    self.gesture = None;
+                    self.touched.clear();
+                    self.last_write_at = i64::MIN;
+                    self.edit_layout.follow_hold = false;
+                    self.meters.clear();
+                    self.main_meter = MeterDisplay::default();
+                }
                 TransportRequest::Play => {
                     if !self.is_playing() {
                         self.play_from_selection();
@@ -761,13 +780,14 @@ impl SoundApp {
                 self.engine.end_merge();
             }
         }
+        // Stop the old playback before sending a replacement session to the audio thread.
+        self.handle_transport(dt);
         if self.engine.revision != self.last_rev {
             self.last_rev = self.engine.revision;
             if let Some(p) = &self.player {
                 p.update_session(self.engine.session_arc());
             }
         }
-        self.handle_transport(dt);
         self.write_automation(ctx);
         self.autosave(now);
         if self.recorder.is_none()
@@ -889,7 +909,64 @@ fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], gr: f32, dt: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::automation_step_due;
+    use super::{Services, SoundApp, automation_step_due};
+    use serde_json::json;
+
+    #[test]
+    fn new_session_stops_playback_and_the_old_clock() {
+        for (command, params) in [
+            ("session.new", json!({"name": "New project", "sample_rate": 96_000})),
+            ("session.new", json!({"template": "demo"})),
+            ("session.close", json!({})),
+        ] {
+            let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+            app.run("transport.play", json!({"from": 48_000})).unwrap();
+            app.handle_transport(0.25);
+            assert!(app.is_playing());
+            assert!(app.position() > 48_000);
+            app.run(command, params).unwrap();
+            let insertion = app.engine.session().edit.selection.start;
+            app.handle_transport(0.25);
+            assert!(!app.is_playing(), "{command}");
+            assert_eq!(app.position(), insertion, "{command}");
+            assert_eq!(app.engine.transport.position, insertion, "{command}");
+            app.handle_transport(0.25);
+            assert_eq!(app.engine.transport.position, insertion, "the old clock must stay stopped");
+            app.run("transport.play", json!({})).unwrap();
+            app.handle_transport(0.25);
+            assert!(app.is_playing());
+            assert_eq!(app.position(), insertion + i64::from(app.engine.session().sample_rate.hz()) / 4);
+        }
+    }
+
+    #[test]
+    fn new_session_cancels_play_queued_before_the_next_frame() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("transport.play", json!({})).unwrap();
+        app.run("session.new", json!({})).unwrap();
+        app.handle_transport(0.25);
+        assert!(!app.is_playing());
+        assert_eq!(app.engine.transport.position, 0);
+    }
+
+    #[test]
+    fn session_reset_does_not_apply_old_stop_edits_to_the_new_session() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("transport.play", json!({"from": 48_000})).unwrap();
+        app.handle_transport(0.25);
+        let mut session = soundcraft_model::Session::default();
+        session.edit.selection = soundcraft_time::Range::new(12_000, 24_000);
+        session.edit.insertion_follows_playback = true;
+        session.edit.scrolling = "after_playback".into();
+        let selection = session.edit.selection;
+        app.engine.replace_session(session);
+        app.handle_transport(0.25);
+        assert!(!app.is_playing());
+        assert_eq!(app.engine.session().edit.selection, selection);
+        assert_eq!(app.position(), selection.start);
+        assert_eq!(app.engine.session().edit.zoom.scroll, 0);
+        assert!(!app.engine.is_dirty());
+    }
 
     #[test]
     fn automation_first_pass_after_start_is_due_without_overflow() {
