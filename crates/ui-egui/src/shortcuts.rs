@@ -73,6 +73,13 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
         if fixed(app, key, mods, mac) {
             continue;
         }
+        if let Some((id, _, _, _)) = crate::menus::UI_COMMANDS
+            .iter()
+            .find(|(_, _, _, shortcut)| shortcut.and_then(parse).is_some_and(|(m, k)| k == key && mods_match(m, mods, mac)))
+        {
+            let _ = app.run(id, json!({}));
+            continue;
+        }
         let hit =
             soundcraft_engine::command_specs().iter().find(|c| c.shortcut.and_then(parse).is_some_and(|(m, k)| k == key && mods_match(m, mods, mac)));
         if let Some(c) = hit {

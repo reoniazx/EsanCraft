@@ -47,6 +47,26 @@ Errors: `{"id": 1, "ok": false, "error": "bad parameters for `mix.volume`: no tr
 
 ## Positions and references
 
+### Edit and Mix windows
+
+`window.mix` and `window.edit` open or bring the requested main window to the front.
+Both views stay open and share the same session, selection, undo history, transport and audio
+engine. `window.toggle_mix_edit` (Cmd+=, Ctrl+= off macOS) switches focus between them.
+`window.close` closes the active main view when both are open, keeping the other view and
+session alive; the closed view can be reopened from the Window menu.
+
+`window.arrange_tile`, `window.arrange_tile_h`, `window.arrange_tile_v`, and
+`window.arrange_cascade` open both views and arrange them within the original main-window
+workspace. Horizontal tiles stack the views; vertical tiles place them side by side;
+automatic Tile chooses based on the workspace dimensions. Native hosts use separate OS
+windows; browser and offscreen hosts use movable, resizable windows within the canvas.
+
+`ui.inspect.main_windows` reports the primary and active view, whether Edit/Mix are open,
+and their last known rectangles. Native rectangles use desktop coordinates in egui points;
+embedded rectangles use canvas coordinates. `ui.window` identifies the active view and
+`ui.both_windows` records whether both are open. Existing preferences and `ui.set` requests
+that select a single view remain supported.
+
 In the Edit window, two-finger scrolling pans the timeline horizontally and the tracks vertically,
 including when the pointer is over a ruler or track header. Pinching zooms the timeline continuously
 around the pointer, preserving the sample underneath it within the zoom and timeline-start limits.
