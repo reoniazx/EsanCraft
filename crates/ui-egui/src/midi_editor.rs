@@ -56,6 +56,9 @@ fn is_black(p: i32) -> bool {
 }
 
 pub fn show(app: &mut SoundApp, ui: &mut Ui) {
+    // Painter-only contents do not advance the layout. Claim the resized
+    // space, including the empty state, so the dock keeps its chosen height.
+    ui.take_available_space();
     let t = Tokens::current();
     let full = ui.max_rect();
     ui.painter().rect_filled(full, 0.0, t.panel_bg);
