@@ -193,18 +193,29 @@ fn main_area(app: &mut SoundApp, ui: &mut Ui) {
     let rulers_rect = Rect::from_min_max(pos2(full.min.x, full.min.y), pos2(full.max.x, full.min.y + rulers_h));
     app.edit_layout.timeline = [tl.min.x, tl.min.y, tl.max.x, tl.max.y];
     ui.painter().rect_filled(full, 0.0, t.window_bg);
+    let tracks: Vec<(TrackId, f32)> = app
+        .engine
+        .session()
+        .tracks
+        .iter()
+        .filter(|track| !track.hidden && !folder_collapsed(app.engine.session(), track))
+        .map(|track| (track.id, track_height(track)))
+        .collect();
+    let content_h = tracks.iter().map(|(_, h)| h + 1.0).sum::<f32>();
+    app.edit_layout.content_h = content_h;
+    // A closed/resized dock, a larger window, or fewer/shorter visible tracks
+    // can invalidate the old offset without any wheel input. Clamp before
+    // handling gestures and drawing rows, using this frame's geometry.
+    // Keep the existing 40-point allowance below the last track.
+    app.edit_layout.scroll_y = app.edit_layout.scroll_y.clamp(0.0, (content_h - tl.height() + 40.0).max(0.0));
     // Include the rulers and headers; only the hovered editor consumes its gestures.
     trackpad(app, ui, full, tl);
     draw_rulers(app, ui, rulers_rect, tl, &rulers);
     // Tracks.
-    let ids: Vec<TrackId> =
-        app.engine.session().tracks.iter().filter(|x| !x.hidden && !folder_collapsed(app.engine.session(), x)).map(|x| x.id).collect();
     let mut y = tl.min.y - app.edit_layout.scroll_y;
     app.edit_layout.rows.clear();
     let clip_rect = Rect::from_min_max(pos2(full.min.x, tl.min.y), pos2(full.max.x, tl.max.y));
-    let mut content_h = 0.0;
-    for id in ids {
-        let Some(h) = app.engine.session().track(id).map(track_height) else { continue };
+    for (id, h) in tracks {
         let row = Rect::from_min_max(pos2(full.min.x, y), pos2(tl.max.x, y + h));
         if row.max.y >= clip_rect.min.y && row.min.y <= clip_rect.max.y {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
@@ -213,9 +224,7 @@ fn main_area(app: &mut SoundApp, ui: &mut Ui) {
         }
         app.edit_layout.rows.push((id.0, [row.min.x, row.min.y, row.max.x, row.max.y]));
         y += h + 1.0;
-        content_h += h + 1.0;
     }
-    app.edit_layout.content_h = content_h;
     // Empty area click clears track selection.
     let empty = Rect::from_min_max(pos2(full.min.x, y.max(tl.min.y)), tl.max);
     if empty.height() > 4.0 && ui.interact(empty, ui.id().with("empty"), Sense::click()).clicked() {
