@@ -5,7 +5,7 @@ use crate::theme::{Tokens, bold};
 use egui::{Align2, vec2};
 use serde_json::{Value, json};
 use soundcraft_engine::Engine;
-use soundcraft_model::{ClipId, TrackId};
+use soundcraft_model::{ClipId, Session, SourceId, TrackId};
 use soundcraft_time::Samples;
 
 #[derive(Debug, Clone)]
@@ -15,6 +15,7 @@ pub enum Dialog {
     Bounce { path: String, format: String, bit_depth: String, normalize: bool },
     RenameTrack { id: TrackId, name: String },
     RenameClip { id: ClipId, name: String },
+    ClearClips { clips: Vec<ClipId>, sources: Vec<SourceId>, message: String },
     PathPrompt { cmd: String, title: String, path: String, key: String },
     Number { cmd: String, title: String, key: String, value: f64, suffix: String },
     TempoChange { at: Samples, bpm: f64 }, // from double-clicking the tempo ruler
@@ -23,11 +24,14 @@ pub enum Dialog {
     Group { name: String, edit: bool, mix: bool, members: Vec<(u64, String, bool)> },
     Session { frame_rate: String, bit_depth: String },
     ScoreSetup { title: String, composer: String, bars_per_system: u32, show_track_names: bool },
+    SaveChanges { then: (String, Value) },
 }
 
 #[derive(Default)]
 pub struct Dialogs {
     pub open: Option<Dialog>,
+    /// Runs once the session has been saved from `SaveChanges`.
+    after_save: Option<(String, Value)>,
 }
 
 impl Dialogs {
@@ -38,6 +42,7 @@ impl Dialogs {
             Dialog::Bounce { .. } => "bounce",
             Dialog::RenameTrack { .. } => "rename_track",
             Dialog::RenameClip { .. } => "rename_clip",
+            Dialog::ClearClips { .. } => "clear_clips",
             Dialog::PathPrompt { .. } => "path",
             Dialog::Number { .. } => "number",
             Dialog::TempoChange { .. } => "tempo_change",
@@ -46,6 +51,7 @@ impl Dialogs {
             Dialog::Group { .. } => "group",
             Dialog::Session { .. } => "session",
             Dialog::ScoreSetup { .. } => "score_setup",
+            Dialog::SaveChanges { .. } => "save_changes",
         })
     }
 
@@ -57,11 +63,23 @@ impl Dialogs {
         self.open = Some(Dialog::RenameClip { id, name: name.to_string() });
     }
 
+    /// Clip List › Clear: confirm before clips and files leave the session. False when there is nothing to clear.
+    pub fn open_clear(&mut self, e: &Engine, clips: Vec<ClipId>, sources: Vec<SourceId>) -> bool {
+        let Some(message) = clear_message(e.session(), &clips, &sources) else { return false };
+        self.open = Some(Dialog::ClearClips { clips, sources, message });
+        true
+    }
+
     /// Open the dialog for a command; false when the command has no dialog.
     pub fn open_for_command(&mut self, e: &Engine, id: &str) -> bool {
+        self.after_save = None;
         let home = default_dir();
         let name = e.session().name.clone();
         self.open = Some(match id {
+            "clip.clear" => {
+                let ed = &e.session().edit;
+                return self.open_clear(e, ed.selected_clips.clone(), ed.selected_sources.clone());
+            }
             "track.new" => {
                 Dialog::NewTracks { count: 1, format: "Mono".into(), kind: "audio".into(), timebase: "samples".into(), name: "Audio".into() }
             }
@@ -72,10 +90,16 @@ impl Dialogs {
             "file.import_audio" => Dialog::PathPrompt { cmd: id.into(), title: "Import Audio".into(), path: home, key: "path".into() },
             "file.import_midi" => Dialog::PathPrompt { cmd: id.into(), title: "Import MIDI".into(), path: home, key: "path".into() },
             "session.open" => Dialog::PathPrompt { cmd: id.into(), title: "Open Session".into(), path: home, key: "path".into() },
-            "session.save_as" | "session.save_copy" => Dialog::PathPrompt {
-                cmd: id.into(),
+            "session.save" if e.path.is_some() => return false,
+            "session.save" | "session.save_as" | "session.save_copy" => Dialog::PathPrompt {
+                cmd: if id == "session.save_copy" { id } else { "session.save_as" }.into(),
                 title: "Save Session As".into(),
-                path: format!("{home}/{name}/{name}.scraft"),
+                // The browser has no folders: the name becomes the bundle file's name.
+                path: if home.is_empty() {
+                    format!("{name}.{}", soundcraft_engine::io::BUNDLE_EXTENSION)
+                } else {
+                    format!("{home}/{name}/{name}.scraft")
+                },
                 key: "path".into(),
             },
             "edit.repeat" => Dialog::Number { cmd: id.into(), title: "Repeat".into(), key: "count".into(), value: 2.0, suffix: "times".into() },
@@ -100,6 +124,11 @@ impl Dialogs {
                 let s = soundcraft_engine::score::ScoreSetup::from_session(e.session());
                 Dialog::ScoreSetup { title: s.title, composer: s.composer, bars_per_system: s.bars_per_system, show_track_names: s.show_track_names }
             }
+            "clip.rename" => {
+                let target = soundcraft_engine::cmd::clip_ids_param(e, &json!({})).first().and_then(|id| e.session().find_clip(*id));
+                let Some((_, clip)) = target else { return false };
+                Dialog::RenameClip { id: clip.id, name: clip.name.clone() }
+            }
             _ => match path_dialog(id, &home, &name) {
                 Some(d) => d,
                 None => return false,
@@ -107,6 +136,32 @@ impl Dialogs {
         });
         true
     }
+}
+
+/// When `id` would close a session with unsaved changes, ask first; true when the question is
+/// open instead. A take in progress is stopped first, so it counts as a change.
+pub fn ask_to_save(app: &mut SoundApp, id: &str, params: &Value) -> bool {
+    if !matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "app.quit")
+        || soundcraft_engine::find_command(id).is_some_and(|c| (c.enabled)(&app.engine).is_err())
+    {
+        return false;
+    }
+    if app.engine.transport.recording {
+        app.stop_play();
+    }
+    if !app.engine.is_dirty() {
+        return false;
+    }
+    app.dialogs.open = Some(Dialog::SaveChanges { then: (id.into(), params.clone()) });
+    true
+}
+
+/// Runs `id`, unless it asks to save first (`ask_to_save`).
+pub fn run_or_ask(app: &mut SoundApp, id: &str, params: Value) -> Result<Value, String> {
+    if ask_to_save(app, id, &params) {
+        return Ok(Value::Null);
+    }
+    app.run(id, params)
 }
 
 /// A path prompt for any command whose parameters start with a required `path` or `dir` (plus
@@ -146,6 +201,41 @@ fn path_dialog(id: &str, home: &str, name: &str) -> Option<Dialog> {
     Some(Dialog::PathPrompt { cmd: id.into(), title, path, key: key.into() })
 }
 
+fn clear_message(s: &Session, clips: &[ClipId], sources: &[SourceId]) -> Option<String> {
+    let listed: std::collections::BTreeSet<ClipId> = clips.iter().copied().collect();
+    let names: Vec<&str> = s.tracks.iter().flat_map(|t| t.clips()).filter(|c| listed.contains(&c.id)).map(|c| c.name.as_str()).collect();
+    let files: Vec<_> = sources.iter().filter_map(|id| s.source(*id)).collect();
+    let count = |n: usize, what: &str| if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") };
+    let what = match (names.as_slice(), files.as_slice()) {
+        ([], []) => return None,
+        ([name], []) => format!("the clip \"{name}\""),
+        ([], [f]) => format!("the file \"{}\"", f.name),
+        (c, []) => count(c.len(), "clip"),
+        ([], f) => count(f.len(), "file"),
+        (c, f) => format!("{} and {}", count(c.len(), "clip"), count(f.len(), "file")),
+    };
+    let mut text = format!("Remove {what} from the session?");
+    let used: Vec<(&str, usize)> =
+        files.iter().map(|f| (f.name.as_str(), s.clips_using(f.id).filter(|c| !listed.contains(&c.id)).count())).filter(|(_, n)| *n > 0).collect();
+    let n: usize = used.iter().map(|u| u.1).sum();
+    let users = if n == 1 {
+        "a clip on the timeline, which is removed too.".to_string()
+    } else {
+        format!("{n} clips on the timeline, which are removed too.")
+    };
+    match used.as_slice() {
+        [] => {}
+        [_] if files.len() == 1 => text += &format!(" It is used by {users}"),
+        u if u.len() == files.len() => text += &format!(" They are used by {users}"),
+        [(name, _)] => text += &format!(" \"{name}\" is used by {users}"),
+        many => text += &format!(" {} of the files are used by {users}", many.len()),
+    }
+    if !files.is_empty() && files.iter().all(|f| !f.unsaved) {
+        text += if files.len() == 1 { " The file stays on disk." } else { " The files stay on disk." };
+    }
+    Some(text)
+}
+
 fn default_dir() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -163,12 +253,15 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialogs.open.take() else { return };
     let mut keep = true;
     let mut action: Option<(String, Value)> = None;
+    let mut save_first: Option<(String, Value)> = None;
+    let confirmed = matches!(d, Dialog::SaveChanges { .. });
     let title = match &d {
         Dialog::NewTracks { .. } => "New Tracks",
         Dialog::NewSession { .. } => "New Session",
         Dialog::Bounce { .. } => "Bounce Mix",
         Dialog::RenameTrack { .. } => "Rename Track",
         Dialog::RenameClip { .. } => "Rename Clip",
+        Dialog::ClearClips { .. } => "Clear",
         Dialog::PathPrompt { title, .. } | Dialog::Number { title, .. } => title.as_str(),
         Dialog::TempoChange { .. } => "Tempo Change (BPM)",
         Dialog::Fades { .. } => "Fades",
@@ -176,6 +269,8 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::Group { .. } => "Create Group",
         Dialog::Session { .. } => "Session Setup",
         Dialog::ScoreSetup { .. } => "Score Setup",
+        Dialog::SaveChanges { then } if then.0 == "session.revert" => "Revert to Saved",
+        Dialog::SaveChanges { .. } => "Unsaved Changes",
     }
     .to_string();
     let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
@@ -273,17 +368,22 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::RenameTrack { id, name } => {
-                    let r = ui.text_edit_singleline(name);
-                    r.request_focus();
+                    name_field(ui, name);
                     if buttons(ui, "OK", enter) {
                         action = Some(("track.rename".into(), json!({"track": id.0, "name": name})));
                     }
                 }
                 Dialog::RenameClip { id, name } => {
-                    let r = ui.text_edit_singleline(name);
-                    r.request_focus();
+                    name_field(ui, name);
                     if buttons(ui, "OK", enter) {
                         action = Some(("clip.rename".into(), json!({"clip": id.0, "name": name})));
+                    }
+                }
+                Dialog::ClearClips { clips, sources, message } => {
+                    ui.set_max_width(340.0);
+                    ui.label(message.as_str());
+                    if buttons(ui, "Remove", enter) {
+                        action = Some(("clip.clear".into(), json!({"clips": clips, "sources": sources, "with_clips": true})));
                     }
                 }
                 Dialog::PathPrompt { cmd, path, key, .. } => {
@@ -291,8 +391,16 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     if let Some(pick) = &app.services.pick_open
                         && cmd != "session.save_as"
                         && cmd != "session.save_copy"
+                        && key != "dir"
                         && ui.button("Browse…").clicked()
                         && let Some(p) = pick(cmd, &[])
+                    {
+                        *path = p;
+                    }
+                    if let Some(pick) = &app.services.pick_folder
+                        && key == "dir"
+                        && ui.button("Browse…").clicked()
+                        && let Some(p) = pick(path)
                     {
                         *path = p;
                     }
@@ -303,9 +411,17 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     {
                         *path = p;
                     }
-                    if buttons(ui, "OK", enter) {
+                    let file = soundcraft_engine::io::session_file(path);
+                    let replaces = soundcraft_engine::io::replaces(&app.engine, cmd, &file);
+                    if replaces {
+                        ui.label(format!("“{}” already exists. Do you want to replace it?", file.file_name().unwrap_or_default().to_string_lossy()));
+                    }
+                    if buttons(ui, if replaces { "Replace" } else { "OK" }, enter && !replaces) {
                         let mut v = json!({});
                         v[key.as_str()] = json!(path);
+                        if replaces {
+                            v["replace"] = json!(true);
+                        }
                         action = Some((cmd.clone(), v));
                     }
                 }
@@ -404,17 +520,70 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                         ));
                     }
                 }
+                Dialog::SaveChanges { then } => {
+                    let name = &app.engine.session().name;
+                    let revert = then.0 == "session.revert";
+                    if revert || cfg!(target_arch = "wasm32") {
+                        let (question, ok) = if revert {
+                            (format!("Revert “{name}” to its last saved version?"), "Revert")
+                        } else {
+                            (format!("Close “{name}” without saving?"), "Don't Save")
+                        };
+                        ui.label(format!("{question} Your changes will be lost."));
+                        if buttons(ui, ok, false) {
+                            action = Some(then.clone());
+                        }
+                    } else {
+                        ui.label(format!("Save changes to “{name}” before closing?"));
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("Don't Save").clicked() {
+                                action = Some(then.clone());
+                            }
+                            if buttons(ui, "Save", enter) {
+                                save_first = Some(then.clone());
+                            }
+                        });
+                    }
+                }
             }
         });
     if esc || ctx.memory(|m| m.data.get_temp::<bool>(egui::Id::new("dlg_cancel")).unwrap_or(false)) {
         keep = false;
+        app.dialogs.after_save = None;
         ctx.memory_mut(|m| m.data.remove::<bool>(egui::Id::new("dlg_cancel")));
     }
+    if let Some(then) = save_first {
+        keep = false;
+        if !app.dialogs.open_for_command(&app.engine, "session.save") {
+            action = Some(("session.save".into(), json!({})));
+        }
+        app.dialogs.after_save = Some(then);
+    }
+    if let Some((cmd, params)) = &action
+        && !confirmed
+        && ask_to_save(app, cmd, params)
+    {
+        keep = false;
+        action = None;
+    }
+    let saving = action.as_ref().is_some_and(|(cmd, _)| cmd.starts_with("session.save"));
     if let Some((cmd, params)) = action {
         keep = false;
-        if let Err(e) = app.run(&cmd, params) {
-            app.ui.status = e;
+        match app.run(&cmd, params) {
+            Ok(v) if cmd == "file.export_clips" => {
+                app.ui.status = format!("Exported {} clip(s) to {}", v["written"], v["dir"].as_str().unwrap_or_default());
+            }
+            Ok(_) => {}
+            Err(e) => app.ui.status = e,
         }
+    }
+    if saving
+        && let Some((then, params)) = app.dialogs.after_save.take()
+        && !app.engine.is_dirty()
+        && let Err(e) = app.run(&then, params)
+    {
+        app.ui.status = e;
     }
     if keep {
         app.dialogs.open = Some(d);
@@ -434,6 +603,17 @@ fn buttons(ui: &mut egui::Ui, ok: &str, enter: bool) -> bool {
         }
     });
     pressed
+}
+
+/// A name field that takes the focus with its text selected, so typing replaces the old name.
+fn name_field(ui: &mut egui::Ui, name: &mut String) {
+    let mut out = egui::TextEdit::singleline(name).show(ui);
+    if !out.response.has_focus() {
+        out.response.request_focus();
+        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(name.chars().count()));
+        out.state.cursor.set_char_range(Some(all));
+        out.state.store(ui.ctx(), out.response.id);
+    }
 }
 
 /// The command the tempo-change dialog runs on OK.
@@ -516,10 +696,54 @@ mod tests {
     }
 
     #[test]
+    fn clip_rename_opens_the_rename_dialog_for_the_selected_clip() {
+        let mut e = soundcraft_engine::demo::demo_engine();
+        let mut d = Dialogs::default();
+        e.execute("edit.select_none", &json!({})).unwrap();
+        assert!(!d.open_for_command(&e, "clip.rename"));
+        let clip = e.session().track_by_name("Kick").unwrap().clips()[0].clone();
+        e.execute("edit.select", &json!({"clips": [clip.id.0]})).unwrap();
+        assert!(d.open_for_command(&e, "clip.rename"));
+        assert!(matches!(d.open, Some(Dialog::RenameClip { id, ref name }) if id == clip.id && *name == clip.name));
+    }
+
+    #[test]
     fn tempo_change_dialog_runs_a_real_command_at_its_position() {
         let (cmd, params) = tempo_change_action(96_000, 133.5);
         assert!(soundcraft_engine::command_specs().iter().any(|c| c.id == cmd), "{cmd} is not a command");
         assert_eq!(params["at"], 96_000);
         assert_eq!(params["bpm"], 133.5);
+    }
+
+    #[test]
+    fn clear_always_asks_and_names_the_timeline_clips_that_go_too() {
+        let mut e = soundcraft_engine::demo::demo_engine();
+        let file = |e: &Engine, name: &str| e.session().sources.iter().find(|f| f.name == name).map(|f| f.id).unwrap();
+        let (kick, hats) = (file(&e, "Kick"), file(&e, "Hats"));
+        let kick_clips: Vec<ClipId> = e.session().clips_using(kick).map(|c| c.id).collect();
+        let snare = e.session().track_by_name("Snare").unwrap().clips()[0].id;
+        let message = |d: &Dialogs| match &d.open {
+            Some(Dialog::ClearClips { message, .. }) => message.clone(),
+            other => panic!("{other:?}"),
+        };
+        let mut d = Dialogs::default();
+        assert!(!d.open_for_command(&e, "clip.clear"));
+        e.execute("edit.select", &json!({"clips": [snare]})).unwrap();
+        assert!(d.open_for_command(&e, "clip.clear"));
+        assert_eq!(message(&d), "Remove the clip \"Snare\" from the session?");
+        e.execute("edit.select", &json!({"sources": [kick]})).unwrap();
+        assert!(d.open_for_command(&e, "clip.clear"));
+        assert!(matches!(&d.open, Some(Dialog::ClearClips { clips, sources, .. }) if clips.is_empty() && *sources == vec![kick]));
+        assert_eq!(message(&d), "Remove the file \"Kick\" from the session? It is used by 3 clips on the timeline, which are removed too.");
+        assert!(d.open_clear(&e, kick_clips.clone(), vec![kick]));
+        assert_eq!(message(&d), "Remove 3 clips and 1 file from the session?");
+        assert!(d.open_clear(&e, kick_clips, vec![kick, hats]));
+        assert_eq!(message(&d), "Remove 3 clips and 2 files from the session? \"Hats\" is used by a clip on the timeline, which is removed too.");
+        e.session_mut().sources.iter_mut().for_each(|f| f.unsaved = false);
+        assert!(d.open_clear(&e, vec![], vec![kick, hats]));
+        assert_eq!(
+            message(&d),
+            "Remove 2 files from the session? They are used by 4 clips on the timeline, which are removed too. The files stay on disk."
+        );
     }
 }

@@ -304,3 +304,47 @@ fn fully_covered_windows_are_parked_without_closing_and_tile_restores_them() {
     assert!(output.viewport_output[&main_windows::secondary_id()].commands.contains(&ViewportCommand::Visible(true)));
     assert!(host.state.borrow().ui.both_windows);
 }
+
+#[test]
+fn a_save_prompt_opened_from_root_logic_invalidates_the_active_mixer() {
+    let host = host();
+    let ctx = egui::Context::default();
+    ready(&ctx, &host);
+    let callback = open(&ctx, &host);
+    child(&ctx, &callback, vec![], 0.3);
+    let _ = root(&ctx, &host, vec![], 0.4);
+    {
+        let mut app = host.state.borrow_mut();
+        app.run("mix.volume", json!({"track":"Kick","db":-18})).unwrap();
+        assert!(soundcraft_ui_egui::dialogs::ask_to_save(&mut app, "app.quit", &json!({})));
+    }
+    let output = root(&ctx, &host, vec![], 0.5);
+    assert_eq!(output.viewport_output[&main_windows::secondary_id()].repaint_delay, std::time::Duration::ZERO);
+    child(&ctx, &callback, vec![], 0.6);
+    assert_eq!(host.state.borrow().dialogs.open_name(), Some("save_changes"));
+    assert!(!host.state.borrow().quit_requested);
+    let _ = root(
+        &ctx,
+        &host,
+        vec![Event::Key { key: egui::Key::Equals, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND }],
+        0.7,
+    );
+    assert_eq!(host.state.borrow().ui.window, MainWindow::Mix, "the modal save prompt owns input");
+}
+
+#[test]
+fn a_visible_mixer_schedules_paced_shared_logic_when_the_root_is_occluded() {
+    let host = host();
+    let ctx = egui::Context::default();
+    ready(&ctx, &host);
+    let callback = open(&ctx, &host);
+    host.state.borrow_mut().run("transport.play", json!({})).unwrap();
+    let _ = root(&ctx, &host, vec![], 1.0);
+    let mut input = raw(main_windows::secondary_id(), vec![], 1.1);
+    input.viewports.get_mut(&ViewportId::ROOT).unwrap().occluded = Some(true);
+    let mut output = ctx.run_ui(input, |ui| callback(ui));
+    output.textures_delta.clear();
+    let delay = output.viewport_output[&ViewportId::ROOT].repaint_delay;
+    assert!(delay <= std::time::Duration::from_millis(50), "shared logic was scheduled after {delay:?}");
+    assert!(host.state.borrow().is_playing());
+}

@@ -27,7 +27,6 @@ pub struct WindowState {
     secondary_initial_rect: Option<Rect>,
     embedded_arrangement: Option<Arrangement>,
     close_request: Option<MainWindow>,
-    root_title: String,
     pub(crate) deferred: bool,
     sent_focus: Option<(MainWindow, f64)>,
     parent_woken: bool,
@@ -91,14 +90,12 @@ pub fn activate(app: &mut SoundApp, window: MainWindow) {
 /// Consume global native focus shortcuts before egui can retain them across
 /// logic-only passes. Both physical input and control-channel input use this.
 pub(crate) fn consume_focus_keys(app: &mut SoundApp, events: &mut Vec<egui::Event>) {
-    if app.dialogs.open.is_some() {
-        return;
-    }
+    let modal = app.dialogs.open.is_some();
     events.retain(|event| {
         if let egui::Event::Key { key: egui::Key::Equals, pressed, repeat, modifiers, .. } = event
             && modifiers.command
         {
-            if *pressed && !*repeat {
+            if *pressed && !*repeat && !modal {
                 let _ = app.run("window.toggle_mix_edit", json!({}));
             }
             false
@@ -345,7 +342,7 @@ fn restore_and_focus(app: &mut SoundApp, ctx: &egui::Context, id: ViewportId, re
 }
 
 pub(crate) fn animating(app: &SoundApp) -> bool {
-    app.is_playing() || app.meters.values().any(|m| m.level.iter().any(|v| *v > 0.0001)) || app.main_meter.level.iter().any(|v| *v > 0.0001)
+    app.meters_live() || app.meters.values().any(|m| m.level.iter().any(|v| *v > 0.0001)) || app.main_meter.level.iter().any(|v| *v > 0.0001)
 }
 
 pub(crate) fn request_views_repaint(ctx: &egui::Context) {
@@ -392,6 +389,7 @@ pub(crate) fn show_secondary(app: &mut SoundApp, ui: &mut Ui) {
         app.ui.window = secondary;
     }
     let revision = app.engine.revision;
+    let dialog = app.dialogs.open_name();
     let interaction = ctx.input(|i| {
         i.pointer.any_down()
             || i.events.iter().any(|e| {
@@ -411,7 +409,7 @@ pub(crate) fn show_secondary(app: &mut SoundApp, ui: &mut Ui) {
         app.floating_ui(&ctx);
     }
     // Focus/hover/keyup alone does not invalidate the parent's document view.
-    if app.engine.revision != revision || before.as_ref().is_some_and(|state| *state != app.ui) {
+    if app.engine.revision != revision || app.dialogs.open_name() != dialog || before.as_ref().is_some_and(|state| *state != app.ui) {
         ctx.request_repaint_of(ViewportId::ROOT);
         ctx.request_repaint();
     }
@@ -420,6 +418,15 @@ pub(crate) fn show_secondary(app: &mut SoundApp, ui: &mut Ui) {
     }
     if animating(app) {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        if app.main_windows.deferred
+            && (app.main_windows.primary_hidden || ctx.input(|i| i.raw.viewports.get(&ViewportId::ROOT).is_some_and(|v| v.visible() == Some(false))))
+        {
+            // The visible Mixer needs current shared transport/meters even
+            // while the root only runs logic. Add predicted_dt back so this
+            // remains a paced tick without VSync on the hidden root.
+            let delay = 1.0 / 60.0 + ctx.input(|i| i.predicted_dt);
+            ctx.request_repaint_after_for(std::time::Duration::from_secs_f32(delay), ViewportId::ROOT);
+        }
     }
 }
 
@@ -466,9 +473,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     app.main_windows.primary_rect = Some(area);
     let root_title = title(app, primary);
-    if root_title != app.main_windows.root_title {
-        ctx.send_viewport_cmd(ViewportCommand::Title(root_title.clone()));
-        app.main_windows.root_title = root_title;
+    let title_id = egui::Id::new("window_title");
+    if ctx.data(|data| data.get_temp::<String>(title_id)).as_deref() != Some(root_title.as_str()) {
+        ctx.data_mut(|data| data.insert_temp(title_id, root_title.clone()));
+        ctx.send_viewport_cmd(ViewportCommand::Title(root_title));
     }
     if !app.main_windows.primary_hidden {
         surface(app, ui, primary);

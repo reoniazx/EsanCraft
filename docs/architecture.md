@@ -1,11 +1,21 @@
 # Architecture
 
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (crate diagram brought up to date: video, vst3-host, au-host; device I/O limits) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+
 SoundCraft is a Cargo workspace of small crates with enforced layering (`cargo xtask layers`).
 Nothing below the UI knows about egui, so the interface can be replaced.
 
+The UI package pins `craft-ui` for common icon-button and track record-enable interactions.
+SoundCraft supplies each state's colors, border, radius and icon painter; selection and command
+dispatch remain in the toolbar and track controls. The single-shape frame option preserves the
+existing fill/border blending when controls are disabled. Specialized transport Play/Stop/Record styling,
+nonlinear meters, faders, pan gestures, fonts and the live theme resolver remain local. Shared adapters read the current palette. The UI
+requires Rust 1.95 or later without raising the core workspace's Rust 1.90 declaration.
+
 ```
-L0  time        audio-io        midi            (standalone: no workspace deps)
-L1  dsp         clap-host                       (plugins; clap-host is the only unsafe crate)
+L0  time        audio-io        midi        video   (standalone: no workspace deps)
+L1  dsp         clap-host   vst3-host   au-host     (plugins; the three hosts are the only crates
+                                                     allowed `unsafe`, confined to their FFI modules)
 L2  model                                       (the session document)
 L3  mix                                         (the mix engine)
 L4  engine      playback                        (commands, undo, I/O · audio devices)
@@ -41,6 +51,16 @@ process in parallel; plugin delay compensation aligns every path. The same engin
 bounces offline (`render_range`) and realtime playback (`soundcraft_playback::Player`, which owns
 it on the audio thread and receives new session snapshots through a channel).
 
+Device I/O today is the system's *default* output and *default* input device, opened as two
+separate cpal streams; the mix renders 512-sample blocks and resamples to the device rate when
+they differ. There is no device or buffer-size selection, no ASIO, and no MIDI device layer yet
+(see [`hardware-parity.md`](hardware-parity.md)). Sources are decoded whole into the `SourcePool`
+and recordings are captured in memory until stop.
+
+`soundcraft-video` holds our own H.264, ProRes and Motion JPEG decoders and the ISO-BMFF demuxer
+for the video track. Hosted plugins (`clap-host`, `vst3-host`, `au-host`) are scanned, created and
+destroyed off the audio thread; only `process` runs on it.
+
 The cpal callbacks mark their thread (`soundcraft_playback::mark_audio_thread`). Code that may run
 there can ask `on_audio_thread()` before doing anything that blocks; the desktop app's logger does,
 so a `log::` record from the audio thread (a stream error, a full synth event queue, a hosted
@@ -52,3 +72,10 @@ by the UI thread (see README › Logs).
 The desktop app's control channel (JSON lines over TCP) exposes engine commands, inspection,
 synthetic input and screenshots; `soundcraft-cli mcp` wraps either a headless engine or a running
 app as an MCP server. See `control-protocol.md` and `mcp.md`.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-10 | minor | Added video, vst3-host and au-host to the layer diagram; documented device I/O limits and in-memory media |
+| 2026-10-05 | major | First architecture overview |

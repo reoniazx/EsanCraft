@@ -6,6 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Whether the Light palette is active. Dark is the default (the incumbent is dark-only).
 static LIGHT_THEME: AtomicBool = AtomicBool::new(false);
 
+/// Unit tests that change the process-wide palette must own it until their assertions finish.
+#[cfg(test)]
+pub(crate) fn lock_test_palette() -> std::sync::MutexGuard<'static, ()> {
+    static PALETTE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    PALETTE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The Appearance setting (`ui.theme {mode}`). Dark by default; System and Light are opt-in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -443,7 +450,8 @@ mod tests {
 
     #[test]
     fn application_frames_follow_system_appearance_and_preserve_manual_palettes() {
-        // Keep all frame assertions in one test: custom-painted tokens share LIGHT_THEME.
+        // Mixer rendering tests also change the process-wide custom-painted palette.
+        let _palette = lock_test_palette();
         fn frame(app: &mut SoundApp, ctx: &egui::Context, system_theme: Option<egui::Theme>, light: bool) {
             let mode = app.ui.theme;
             let colors = |app: &SoundApp| {

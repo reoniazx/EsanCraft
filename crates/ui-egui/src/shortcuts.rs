@@ -75,23 +75,24 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
         if fixed(app, key, mods, mac) {
             continue;
         }
-        if let Some((id, _, _, _)) = crate::menus::UI_COMMANDS
-            .iter()
-            .find(|(_, _, _, shortcut)| shortcut.and_then(parse).is_some_and(|(m, k)| k == key && mods_match(m, mods, mac)))
-        {
-            let _ = app.run(id, json!({}));
-            continue;
-        }
-        let hit =
-            soundcraft_engine::command_specs().iter().find(|c| c.shortcut.and_then(parse).is_some_and(|(m, k)| k == key && mods_match(m, mods, mac)));
-        if let Some(c) = hit {
-            let id = c.id;
+        if let Some(id) = command_for(key, mods, mac) {
             if crate::menus::invoke_shortcut_dialog(app, id) {
                 continue;
             }
             let _ = app.run(id, json!({}));
+        } else if let Some(c) =
+            crate::menus::UI_COMMANDS.iter().find(|c| c.3.and_then(parse).is_some_and(|(m, k)| k == key && mods_match(m, mods, mac)))
+        {
+            let _ = app.run(c.0, json!({}));
         }
     }
+}
+
+fn command_for(key: Key, mods: Modifiers, mac: bool) -> Option<&'static str> {
+    soundcraft_engine::command_specs()
+        .iter()
+        .find(|c| c.shortcut.and_then(parse).is_some_and(|(m, k)| k == key && mods_match(m, mods, mac)))
+        .map(|c| c.id)
 }
 
 /// Keys with context-dependent meaning. Returns true when handled.
@@ -111,7 +112,7 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers, mac: bool) -> bool {
             let _ = app.run("window.search", json!({}));
             true
         }
-        Key::Equals if m.command => {
+        Key::Equals if m.command && !(mac && m.ctrl) => {
             let _ = app.run("window.toggle_mix_edit", json!({}));
             true
         }
@@ -291,8 +292,8 @@ mod label_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{mods_match, parse, search_chord};
-    use egui::Modifiers;
+    use super::{command_for, mods_match, parse, search_chord};
+    use egui::{Key, Modifiers};
 
     /// Ctrl held on Windows or Linux, as egui reports it.
     const PC_CTRL: Modifiers = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
@@ -321,5 +322,12 @@ mod tests {
         assert!(!mods_match(want("Cmd+X"), Modifiers { ctrl: true, ..MAC_CMD }, true), "Cmd+Ctrl+X is not Cut");
         assert!(!search_chord(MAC_CMD, true));
         assert!(search_chord(Modifiers { ctrl: true, ..MAC_CMD }, true));
+    }
+
+    #[test]
+    fn shift_cmd_k_prompts_for_a_folder_to_export_clips() {
+        assert_eq!(command_for(Key::K, Modifiers { shift: true, ..MAC_CMD }, true), Some("file.export_clips"));
+        assert_eq!(command_for(Key::K, Modifiers { shift: true, ..PC_CTRL }, false), Some("file.export_clips"));
+        assert!(crate::dialogs::takes_path("file.export_clips"));
     }
 }

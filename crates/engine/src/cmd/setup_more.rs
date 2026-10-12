@@ -436,6 +436,8 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let mut needed: Vec<SourceId> =
         picked.iter().flat_map(|t| t.playlists.iter().flat_map(|pl| pl.clips.iter().filter_map(|c| c.source()))).collect();
+    // A Sampler's sample is session audio too.
+    needed.extend(picked.iter().filter_map(|t| t.instrument.as_ref().and_then(|i| i.sample)));
     needed.sort_by_key(|x| x.0);
     needed.dedup();
     let sr = e.session().sample_rate.hz();
@@ -480,6 +482,10 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
                     *source = *n;
                 }
             }
+        }
+        // The donor's source ids mean nothing here: remap the sample, or drop it when it didn't come along.
+        if let Some(ins) = tr.instrument.as_mut() {
+            ins.sample = ins.sample.and_then(|sid| map.get(&sid.0).copied());
         }
         // Busses are matched by name (created when missing).
         let remap = |s: &mut Session, r: &Route| -> Route {
@@ -601,6 +607,28 @@ mod tests {
         assert!(e.session().pool.get(src).is_some());
         assert_eq!(e.session().track_by_name("Keys").unwrap().clips().len(), 1);
         assert!(e.execute("file.import_session_data", &json!({"path": path, "tracks": ["Nope"]})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_session_data_brings_a_samplers_sample() {
+        let dir = std::env::temp_dir().join(format!("sc-import-sampler-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("hit.wav");
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 4_800]] };
+        std::fs::write(&wav, soundcraft_audio_io::encode(&buf, &soundcraft_audio_io::EncodeOptions::default()).unwrap()).unwrap();
+        let mut donor = Engine::default();
+        donor.execute("track.new", &json!({"count": 1, "name": "Pads", "kind": "instrument"})).unwrap();
+        donor.execute("mix.sampler_load", &json!({"track": "Pads", "path": wav.to_string_lossy()})).unwrap();
+        let path = dir.join("donor.scraft").to_string_lossy().into_owned();
+        crate::io::save_session(&mut donor, &path).unwrap();
+        let mut e = crate::demo::demo_engine();
+        e.execute("file.import_session_data", &json!({"path": path, "tracks": ["Pads"]})).unwrap();
+        let sample = e.session().track_by_name("Pads").and_then(|t| t.instrument.as_ref()).and_then(|i| i.sample).unwrap();
+        let src = e.session().source(sample).unwrap();
+        assert_eq!(src.name, "hit");
+        assert!(e.session().pool.get(sample).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

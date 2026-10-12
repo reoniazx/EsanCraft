@@ -16,7 +16,7 @@ static NEXT_HOST: AtomicU64 = AtomicU64::new(1);
 pub struct NativeUiHost {
     pub state: Rc<RefCell<SoundApp>>,
     id: u64,
-    view_state: RefCell<Option<(u64, crate::UiState)>>,
+    view_state: RefCell<Option<(u64, crate::UiState, Option<&'static str>)>>,
 }
 
 impl NativeUiHost {
@@ -43,17 +43,18 @@ impl NativeUiHost {
             // Compare across frames, including commands drained by logic before
             // drawing. Clone preferences only when their visible state changes.
             let changed = if let Ok(mut cache) = self.view_state.try_borrow_mut() {
-                if let Some((revision, previous)) = cache.as_mut() {
+                if let Some((revision, previous, dialog)) = cache.as_mut() {
                     previous.window = app.ui.window;
                     let ui_changed = *previous != app.ui;
-                    let changed = *revision != app.engine.revision || ui_changed;
+                    let changed = *revision != app.engine.revision || ui_changed || *dialog != app.dialogs.open_name();
+                    *dialog = app.dialogs.open_name();
                     *revision = app.engine.revision;
                     if ui_changed {
                         *previous = app.ui.clone();
                     }
                     changed
                 } else {
-                    *cache = Some((app.engine.revision, app.ui.clone()));
+                    *cache = Some((app.engine.revision, app.ui.clone(), app.dialogs.open_name()));
                     true
                 }
             } else {

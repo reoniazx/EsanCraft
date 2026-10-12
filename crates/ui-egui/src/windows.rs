@@ -350,7 +350,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                     if is_dir {
                         app.ui.workspace_dir = path;
                     } else if name.ends_with(".scraft") {
-                        let _ = app.run("session.open", json!({"path": path}));
+                        let _ = crate::dialogs::run_or_ask(app, "session.open", json!({"path": path}));
                     } else if name.ends_with(".mid") || name.ends_with(".midi") {
                         let _ = app.run("file.import_midi", json!({"path": path}));
                     } else {
@@ -383,10 +383,15 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button(format!("{}  {name}", i + 1)).clicked()
                     && let Ok(mut st) = serde_json::from_value::<crate::UiState>(v.clone())
                 {
-                    st.configurations = app.ui.configurations.clone();
-                    st.theme = app.ui.theme;
-                    st.show_configurations = true;
-                    app.ui = st;
+                    if let Err(error) = st.docking.validate().and_then(|()| st.mix_docking.validate_mix()) {
+                        app.ui.status = format!("Window configuration could not be restored: {error}");
+                    } else {
+                        st.configurations = app.ui.configurations.clone();
+                        st.theme = app.ui.theme;
+                        st.show_configurations = true;
+                        crate::docking::cancel_replaced_state(app, &st);
+                        app.ui = st;
+                    }
                 }
                 if ui.small_button("✕").clicked() {
                     app.ui.configurations.remove(i);
@@ -488,10 +493,13 @@ pub fn shortcuts_window(app: &mut SoundApp, ctx: &egui::Context) {
     win(ctx, &mut open, "Keyboard Shortcuts", vec2(520.0, 480.0), |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("sc").num_columns(3).striped(true).show(ui, |ui| {
-                for c in soundcraft_engine::command_specs().iter().filter(|c| c.shortcut.is_some()) {
-                    ui.label(egui::RichText::new(crate::shortcuts::shortcut_label(c.shortcut.unwrap_or(""), mac)).font(mono(11.0)));
-                    ui.label(c.label);
-                    ui.label(egui::RichText::new(c.menu.join(" › ")).small());
+                let engine = soundcraft_engine::command_specs().iter().map(|c| (c.shortcut, c.label, c.menu.join(" › ")));
+                let windows = crate::menus::UI_COMMANDS.iter().map(|c| (c.3, c.1, c.2.replace(" > ", " › ")));
+                for (shortcut, label, menu) in engine.chain(windows) {
+                    let Some(shortcut) = shortcut else { continue };
+                    ui.label(egui::RichText::new(crate::shortcuts::shortcut_label(shortcut, mac)).font(mono(11.0)));
+                    ui.label(label);
+                    ui.label(egui::RichText::new(menu).small());
                     ui.end_row();
                 }
             });

@@ -6,7 +6,7 @@ Standards and learnings shared across the crafting apps live in `../../craftrule
 
 ## Start every session here
 1. Read `plan/STATUS.md` (current milestone, next task) and `plan/execution-plan.md`. `plan/` is gitignored (local only). Behaviour reference: `plan/protools/` (observed menu tree `menus-clean.txt` and screenshots; never committed).
-2. Read `ROADMAP.md` (committed) for status, milestones and the parity estimate.
+2. Read `ROADMAP.md` (committed) for stage, status and the parity numbers; pick work from `docs/gaps.md`. The progress docs follow craftrules `standards/progress-docs.md`: `docs/target-app-parity.md` (assessment), `docs/gaps.md`, `docs/roadmap.md`, `docs/ui-parity.md`, `docs/file-format-parity.md`, `docs/hardware-parity.md`, `docs/plugin-parity.md`, `docs/localization-parity.md`; `docs/parity-checklist.md` is generated. Update their timestamps and revision history when you change them.
 3. Work autonomously; don't stop to ask unless a decision is genuinely the user's.
 
 ## ⚠️ Assets: the absolute rule
@@ -51,7 +51,7 @@ Nothing below L6 depends on egui/eframe/winit/rfd. The UI is thin: panels read e
 ## Everything is a command
 User-visible behaviour = a command in `crates/engine/src/cmd/*` (id, label, menu path, shortcut, params doc, `enabled`, `run`) + tests. UI-only commands (windows, dialogs) live in `crates/ui-egui/src/menus.rs` (`UI_COMMANDS`). Menus, shortcuts, the CLI, the control channel and MCP all dispatch the same ids. Programmatic calls never open dialogs; only menu-style invocation (`ui.menu.invoke`) does. New commands go in a new module with its own `specs()`, registered by one line in `cmd/mod.rs`.
 
-Parity is measured, not guessed: `crates/engine/catalog/menus.txt` lists the incumbent's menu leaves (names only). `cargo xtask parity` writes `docs/parity.md`; a test enforces a floor that only rises.
+Parity is measured, not guessed: `crates/engine/catalog/menus.txt` lists the incumbent's menu leaves (names only). `cargo xtask parity` writes `docs/parity-checklist.md` (generated; the hand-written assessment is `docs/target-app-parity.md`); a test enforces a floor that only rises.
 
 ## Running and looking at the app
 - `cargo run --release -p soundcraft -- --demo --control 0` (demo session + control channel on a free port; the port is printed).
@@ -66,10 +66,10 @@ Parity is measured, not guessed: `crates/engine/catalog/menus.txt` lists the inc
 `cargo xtask ci` = fmt check, `clippy --workspace --all-targets -D warnings`, tests, assets, layers, wasm check. Commit after each arc of work that builds; one topic per commit.
 
 ## Release
-Push to the `release` branch to build signed installers for macOS (universal DMG), Windows (x64/x86 MSI + zip), Linux (AppImage, deb, rpm, tar.gz, Flatpak manifest), FreeBSD and Web (wasm zip). Version: `cargo xtask version [set X.Y.Z]`. See `docs/release-playbook.md` and craftrules `release/playbook.md`.
+Push to the `release` branch to build signed installers for macOS (universal DMG), Windows (x64/x86 MSI + zip), Linux (AppImage, deb, rpm, tar.gz, Flatpak; riscv64 tar.gz), FreeBSD and Web (wasm zip). Version: `cargo xtask version [set X.Y.Z]`. See `docs/release-playbook.md` and craftrules `release/playbook.md`.
 
 ## Roadmap
-`ROADMAP.md` (committed) tracks status, milestones and estimates. Update it whenever a milestone lands.
+`ROADMAP.md` (committed) is the one-page summary (stage, numbers, dimensions, languages, progress log); milestones live in `docs/roadmap.md`. Update both whenever a milestone lands, and close or shrink the matching `docs/gaps.md` entry.
 
 ## Contributor credits (About window)
 

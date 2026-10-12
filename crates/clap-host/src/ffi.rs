@@ -71,8 +71,9 @@ unsafe fn read_cstr(p: *const c_char) -> Option<String> {
 }
 
 /// Reads a fixed-size `char[N]` name buffer, stopping at the first NUL or the end of the array.
+/// `c_char` is `i8` on x86 and `u8` on ARM/RISC-V Linux; the byte reinterpretation is the same for both.
 fn read_name(buf: &[c_char]) -> String {
-    let bytes: Vec<u8> = buf.iter().take_while(|c| **c != 0).map(|c| *c as u8).collect();
+    let bytes: Vec<u8> = buf.iter().take_while(|c| **c != 0).map(|c| u8::from_ne_bytes(c.to_ne_bytes())).collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 

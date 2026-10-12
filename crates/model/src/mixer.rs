@@ -1,6 +1,6 @@
 //! Per-track mixer state: inserts, sends, routing, fader, pan, mute/solo.
 
-use crate::{AutomationMode, BusId};
+use crate::{AutomationMode, BusId, SourceId};
 use std::collections::BTreeMap;
 
 pub const INSERT_SLOTS: usize = 10;
@@ -425,7 +425,7 @@ pub enum Route {
 pub struct Insert {
     /// Registry id from `soundcraft-dsp` (e.g. `eq7`, `comp`).
     pub plugin: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "finite_params")]
     pub params: BTreeMap<String, f32>,
     #[serde(default)]
     pub bypass: bool,
@@ -438,6 +438,9 @@ pub struct Insert {
     /// state), standard base64. Restored into a new instance before it first processes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    /// The session audio source a sample-playing instrument (the built-in Sampler) plays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<SourceId>,
 }
 
 fn yes() -> bool {
@@ -446,7 +449,15 @@ fn yes() -> bool {
 
 impl Insert {
     pub fn new(plugin: impl Into<String>) -> Self {
-        Insert { plugin: plugin.into(), params: BTreeMap::new(), bypass: false, active: true, preset: String::from("<factory default>"), state: None }
+        Insert {
+            plugin: plugin.into(),
+            params: BTreeMap::new(),
+            bypass: false,
+            active: true,
+            preset: String::from("<factory default>"),
+            state: None,
+            sample: None,
+        }
     }
 
     /// The decoded plugin state (`None` when absent or malformed).
@@ -577,6 +588,13 @@ pub(crate) fn finite_or(v: f32, d: f32) -> f32 {
     if v.is_finite() { v } else { d }
 }
 
+/// Parameters saved as `null` (how JSON writes NaN and infinity) or beyond `f32` are dropped, so
+/// they keep their defaults instead of failing the whole session.
+fn finite_params<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<String, f32>, D::Error> {
+    let params: BTreeMap<String, Option<f64>> = serde::Deserialize::deserialize(d)?;
+    Ok(params.into_iter().filter_map(|(k, v)| Some((k, v.map(|v| v as f32).filter(|v| v.is_finite())?))).collect())
+}
+
 /// Fader taper used by Pro Tools-style faders: position 0..1 ↔ dB (-inf..+12).
 pub fn fader_pos_to_db(pos: f32) -> f32 {
     let p = finite_or(pos, 0.0).clamp(0.0, 1.0);
@@ -622,6 +640,16 @@ mod tests {
         // A hostile state string decodes to nothing rather than failing the load.
         let bad: Insert = serde_json::from_str(r#"{"plugin":"x","state":"!!!"}"#).unwrap();
         assert_eq!(bad.state_bytes(), None);
+    }
+
+    #[test]
+    fn params_saved_as_null_or_out_of_range_are_dropped() {
+        let mut i = Insert::new("eq_7band");
+        i.params.extend([("gain".to_string(), f32::NAN), ("q".to_string(), 0.7)]);
+        let back: Insert = serde_json::from_str(&serde_json::to_string(&i).unwrap()).unwrap();
+        assert_eq!(back.params, BTreeMap::from([("q".to_string(), 0.7)]));
+        let big: Insert = serde_json::from_str(r#"{"plugin":"x","params":{"gain":1e39,"q":0.5}}"#).unwrap();
+        assert_eq!(big.params, BTreeMap::from([("q".to_string(), 0.5)]));
     }
 
     #[test]

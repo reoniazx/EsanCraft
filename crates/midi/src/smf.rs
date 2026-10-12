@@ -267,10 +267,8 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
                 let data = cur.bytes(usize::try_from(len).unwrap_or(usize::MAX))?;
                 match kind {
                     0x2F => break, // End of Track
-                    0x03 => {
-                        if name.is_none() {
-                            name = Some(String::from_utf8_lossy(data).into_owned());
-                        }
+                    0x03 if name.is_none() => {
+                        name = Some(String::from_utf8_lossy(data).into_owned());
                     }
                     0x06 => g.markers.push((tick, String::from_utf8_lossy(data).into_owned())),
                     0x51 => {

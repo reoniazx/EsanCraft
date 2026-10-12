@@ -7,6 +7,7 @@
 //! - `engine.commands {filter?}`, `engine.parity`, `session.inspect {detail?}`, `ui.inspect`
 //! - `ui.menu.list`, `ui.menu.invoke {path: "Track > New..." | id}` (menu-style: may open dialogs)
 //! - `ui.click {x,y,button?,count?,mods?}`, `ui.move {x,y}`, `ui.drag {x,y,to_x,to_y,steps?}`
+//! - `ui.scroll {x,y,dx?,dy?,unit?,steps?,mods?}` (trackpad swipe or wheel), `ui.zoom {x,y,factor,steps?}` (pinch)
 //! - `ui.key {key, cmd?, shift?, alt?, ctrl?}`, `ui.text {text}`
 //! - `ui.scroll {x,y,dx?,dy?,phase?,cmd?,shift?}`, `ui.zoom {x,y,factor}` (trackpad input)
 //! - `ui.screenshot {path?}` (PNG; base64 when no path), `ui.set {...UiState fields}`
@@ -92,6 +93,8 @@ fn mods(p: &Value) -> egui::Modifiers {
 fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Option<Value> {
     let p = &req.params;
     let f = |k: &str| p.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    let pos = egui::pos2(f("x"), f("y"));
+    let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200);
     Some(match req.method.as_str() {
         "engine.execute" | "command" => {
             let id = p.get("command").or_else(|| p.get("id")).and_then(Value::as_str).unwrap_or("");
@@ -157,7 +160,7 @@ fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Opti
             Err(e) => err(e),
         },
         "ui.move" => {
-            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(f("x"), f("y"))));
+            app.synthetic.push(egui::Event::PointerMoved(pos));
             ok(json!({}))
         }
         "ui.scroll" | "ui.zoom" => {
@@ -172,18 +175,22 @@ fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Opti
                 let Some(factor) = number("factor", 1.0).filter(|f| (0.01..=100.0).contains(f)) else {
                     return Some(err("zoom factor must be between 0.01 and 100"));
                 };
-                events.push(egui::Event::Zoom(factor));
+                let each = factor.powf(1.0 / steps as f32);
+                events.extend((0..steps).map(|_| egui::Event::Zoom(each)));
             } else {
                 let (Some(dx), Some(dy)) = (number("dx", 0.0), number("dy", 0.0)) else {
                     return Some(err("scroll deltas must be finite numbers within ±1000000"));
                 };
                 let m = mods(p);
-                let wheel = |phase, delta| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase, modifiers: m };
+                let line = p.get("unit").and_then(Value::as_str) == Some("line");
+                let unit = if line { egui::MouseWheelUnit::Line } else { egui::MouseWheelUnit::Point };
+                let wheel = |phase, delta| egui::Event::MouseWheel { unit, delta, phase, modifiers: m };
                 match p.get("phase").and_then(Value::as_str) {
                     None => {
-                        events.push(wheel(egui::TouchPhase::Start, egui::Vec2::ZERO));
-                        events.push(wheel(egui::TouchPhase::Move, egui::vec2(dx, dy)));
-                        events.push(wheel(egui::TouchPhase::End, egui::Vec2::ZERO));
+                        events.extend((!line).then(|| wheel(egui::TouchPhase::Start, egui::Vec2::ZERO)));
+                        let delta = egui::vec2(dx, dy) / steps as f32;
+                        events.extend((0..steps).map(|_| wheel(egui::TouchPhase::Move, delta)));
+                        events.extend((!line).then(|| wheel(egui::TouchPhase::End, egui::Vec2::ZERO)));
                     }
                     Some(phase) => {
                         let phase = match phase {
@@ -201,7 +208,6 @@ fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Opti
             ok(json!({}))
         }
         "ui.click" => {
-            let pos = egui::pos2(f("x"), f("y"));
             let button = match p.get("button").and_then(Value::as_str) {
                 Some("right") | Some("secondary") => egui::PointerButton::Secondary,
                 _ => egui::PointerButton::Primary,
@@ -216,9 +222,7 @@ fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Opti
             ok(json!({}))
         }
         "ui.drag" => {
-            let a = egui::pos2(f("x"), f("y"));
-            let b = egui::pos2(f("to_x"), f("to_y"));
-            let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200);
+            let (a, b) = (pos, egui::pos2(f("to_x"), f("to_y")));
             let m = mods(p);
             app.synthetic.push(egui::Event::PointerMoved(a));
             app.synthetic.push(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m });

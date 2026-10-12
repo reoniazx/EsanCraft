@@ -54,7 +54,12 @@ pub fn tool_definitions() -> Vec<Value> {
             &[],
         ),
         tool("open_session", "Open a .scraft session file.", json!({"path": {"type": "string"}}), &["path"]),
-        tool("save_session", "Save the session (path required the first time).", json!({"path": {"type": "string"}}), &[]),
+        tool(
+            "save_session",
+            "Save the session (path required the first time; replace: true to save over another existing file).",
+            json!({"path": {"type": "string"}, "replace": {"type": "boolean"}}),
+            &[],
+        ),
         tool(
             "import_audio",
             "Import an audio file (WAV, AIFF, FLAC, MP3, OGG, AAC/M4A, ALAC, CAF) onto a new or existing track.",
@@ -127,11 +132,20 @@ impl<B: Backend> Server<B> {
             }
             "batch" => {
                 let keep = args.get("keep_going").and_then(Value::as_bool).unwrap_or(false);
-                let calls = args.get("calls").and_then(Value::as_array).cloned().unwrap_or_default();
+                let Some(calls) = args.get("calls").and_then(Value::as_array) else {
+                    return error_result("`calls` must be an array");
+                };
                 let mut out = Vec::new();
                 let mut failed = false;
                 for c in calls.iter().take(1000) {
-                    let cmd = c.get("command").and_then(Value::as_str).unwrap_or("");
+                    let Some(cmd) = c.get("command").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else {
+                        out.push(json!({"command": "", "ok": false, "error": "`command` required"}));
+                        failed = true;
+                        if !keep {
+                            break;
+                        }
+                        continue;
+                    };
                     let r = self.exec(cmd, c.get("params").cloned().unwrap_or(json!({})));
                     match r {
                         Ok(v) => out.push(json!({"command": cmd, "ok": true, "result": v})),
@@ -144,7 +158,9 @@ impl<B: Backend> Server<B> {
                         }
                     }
                 }
-                if failed && !keep { Err(serde_json::to_string(&out).unwrap_or_default()) } else { Ok(json!(out)) }
+                // Any failure sets isError so agents that only check that flag notice;
+                // keep_going still runs the rest and the payload lists every call.
+                if failed { Err(serde_json::to_string(&out).unwrap_or_default()) } else { Ok(json!(out)) }
             }
             "inspect_session" => self.backend.call("session.inspect", json!({"detail": a("detail")})),
             "new_session" => self.exec("session.new", args.clone()),

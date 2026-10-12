@@ -5,7 +5,7 @@ use crate::cmd;
 use serde_json::json;
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![cmd!(noundo "view.zoom_at", "Zoom at Cursor", [], None,
+    vec![cmd!(view "view.zoom_at", "Zoom at Cursor", [], None,
         "{factor?: 1, anchor_px?: 0} — continuous horizontal zoom, keeping the sample under the anchor fixed",
         always, zoom_at)]
 }
@@ -26,9 +26,9 @@ fn zoom_at(e: &mut Engine, p: &Value) -> Result<Value> {
     let old = if zoom.samples_per_px.is_finite() { zoom.samples_per_px.clamp(0.25, 1_000_000.0) } else { 1024.0 };
     let new = (old / factor).clamp(0.25, 1_000_000.0);
     let anchor = zoom.scroll.max(0) as f64 + anchor_px * old;
-    let scroll = soundcraft_time::to_samples(anchor - anchor_px * new).max(0);
+    let scroll = soundcraft_time::to_samples(anchor - anchor_px * new).clamp(0, MAX_POSITION);
     if new != zoom.samples_per_px || scroll != zoom.scroll {
-        let zoom = &mut e.session_mut().edit.zoom;
+        let zoom = e.zoom_mut();
         zoom.samples_per_px = new;
         zoom.scroll = scroll;
     }
@@ -67,6 +67,6 @@ mod tests {
         }
         e.execute("view.scroll", &json!({"to": i64::MAX})).unwrap();
         e.execute("view.scroll", &json!({"by_px": f64::MAX})).unwrap();
-        assert_eq!(e.session().edit.zoom.scroll, i64::MAX);
+        assert_eq!(e.session().edit.zoom.scroll, MAX_POSITION);
     }
 }

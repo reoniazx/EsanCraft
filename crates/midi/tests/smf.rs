@@ -92,6 +92,24 @@ fn round_trip() {
 }
 
 #[test]
+fn first_track_name_wins_and_ignored_meta_preserves_following_notes() {
+    let meta = |kind, data: &[u8]| [vec![0, 0xFF, kind], vlq(data.len() as u32), data.to_vec()].concat();
+    for first in [&b"First"[..], &b""[..], &[0xFF][..]] {
+        let body = [
+            meta(0x03, first),
+            meta(0x03, b"Second"),
+            meta(0x7F, &[0x03, 0xFF, 0x2F]), // Unhandled metadata must remain ignored.
+            vec![0, 0x90, 60, 100, 16, 0x80, 60, 64, 0, 0xFF, 0x2F, 0],
+        ]
+        .concat();
+        let smf = read_smf(&file(0, 960, &[body])).unwrap();
+        assert_eq!(smf.tracks.len(), 1);
+        assert_eq!(smf.tracks[0].name, String::from_utf8_lossy(first));
+        assert_eq!(smf.tracks[0].sequence.notes, vec![note(60, 0, 16)]);
+    }
+}
+
+#[test]
 fn write_rejects_bad_values() {
     let bad_tempo = Smf { tempos: vec![(0, 0.0)], ..Default::default() };
     assert!(write_smf(&bad_tempo).is_err());
