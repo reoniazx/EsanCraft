@@ -348,12 +348,12 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
             let ext_b = before.min(b_handle).max(0);
             if let Some(ca) = pl.clips.get_mut(i) {
                 ca.length += ext_a;
-                ca.fade_out = Fade { len: (ext_a + before).min(ca.length), shape };
+                ca.fade_out = Fade { len: (ext_a + before).min(ca.length), shape, curvature: 0.0 };
             }
             if let Some(cb) = pl.clips.get_mut(i + 1) {
                 let old = cb.start;
                 cb.trim_start_to(old - ext_b);
-                cb.fade_in = Fade { len: (ext_b + after).min(cb.length), shape };
+                cb.fade_in = Fade { len: (ext_b + after).min(cb.length), shape, curvature: 0.0 };
             }
             made += 1;
             xfaded.push(a.id);
@@ -362,10 +362,10 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
     }
     for c in pl.clips.iter_mut().filter(|c| !xfaded.contains(&c.id)) {
         if range.start <= c.start && range.end > c.start && range.end < c.end() {
-            c.fade_in = Fade { len: range.end - c.start, shape };
+            c.fade_in = Fade { len: range.end - c.start, shape, curvature: 0.0 };
             made += 1;
         } else if range.end >= c.end() && range.start > c.start && range.start < c.end() {
-            c.fade_out = Fade { len: c.end() - range.start, shape };
+            c.fade_out = Fade { len: c.end() - range.start, shape, curvature: 0.0 };
             made += 1;
         }
     }

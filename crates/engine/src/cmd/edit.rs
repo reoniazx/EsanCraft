@@ -118,7 +118,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create...",
             ["Edit", "Fades"],
             Some("Cmd+F"),
-            "{shape?: linear|equal power|s-curve|exponential|logarithmic, tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?}",
+            "{shape?: linear|equal power|s-curve|exponential|logarithmic, tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1}",
             has_range,
             fades_create
         ),
@@ -675,6 +675,13 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
         .map_or(Some(FadeShape::EqualPower), FadeShape::from_id)
         .ok_or_else(|| bad("edit.fades_create", "unknown fade shape"))?;
     if p.get("clip").is_some() || p.get("side").is_some() {
+        let curvature = match p.get("curvature") {
+            None => 0.0,
+            Some(value) => value
+                .as_f64()
+                .filter(|v| v.is_finite() && (-1.0..=1.0).contains(v))
+                .ok_or_else(|| bad("edit.fades_create", "curvature must be a finite number from -1 to 1"))? as f32,
+        };
         if ["track", "tracks", "clips", "start", "end"].iter().any(|key| p.get(key).is_some()) {
             return Err(bad("edit.fades_create", "clip fades cannot also specify tracks or an edit range"));
         }
@@ -697,7 +704,7 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
         if p.get("shape").is_some_and(|v| !v.is_string()) {
             return Err(bad("edit.fades_create", "shape must be a fade shape name"));
         }
-        let fade = Fade { len: length.min(available), shape };
+        let fade = Fade { len: length.min(available), shape, curvature };
         let clip = e.session_mut().find_clip_mut(id).ok_or_else(|| bad("edit.fades_create", "clip not found"))?;
         if fade_in {
             clip.fade_in = fade;
@@ -705,6 +712,9 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
             clip.fade_out = fade;
         }
         return Ok(json!({"fades": 1}));
+    }
+    if p.get("curvature").is_some() {
+        return Err(bad("edit.fades_create", "curvature requires a clip and side"));
     }
     let tracks = tracks_required(e, "edit.fades_create", p)?;
     let r = range_param(e, "edit.fades_create", p)?;
@@ -803,6 +813,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn targeted_fade_curvature_saves_reopens_and_undoes_without_changing_lengths() {
+        for side in ["in", "out"] {
+            let mut e = crate::demo::demo_engine();
+            let clip = e.session().track_by_name("Kick").unwrap().clips()[0].clone();
+            e.execute("edit.fades_create", &json!({"clip": clip.id.0, "side": side, "length": clip.length / 2, "shape": "s-curve"})).unwrap();
+            let before = e.session().clone();
+            let undo_len = e.undo_history().len();
+            e.execute(
+                "edit.fades_create",
+                &json!({"clip": clip.id.0, "side": side, "length": clip.length / 2, "shape": "s-curve", "curvature": -0.65}),
+            )
+            .unwrap();
+            let mut expected = before.clone();
+            let c = expected.find_clip_mut(clip.id).unwrap();
+            if side == "in" {
+                c.fade_in.curvature = -0.65;
+            } else {
+                c.fade_out.curvature = -0.65;
+            }
+            assert_eq!(e.session(), &expected);
+            let reopened = Session::from_json(&e.session().to_json().unwrap()).unwrap();
+            let reopened = reopened.find_clip(clip.id).unwrap().1;
+            let stored = expected.find_clip(clip.id).unwrap().1;
+            assert_eq!(reopened.fade_in, stored.fade_in);
+            assert_eq!(reopened.fade_out, stored.fade_out);
+            assert_eq!(e.undo_history().len(), undo_len + 1);
+            assert!(e.undo());
+            assert_eq!(e.session(), &before);
+            assert!(e.redo());
+            assert_eq!(e.session(), &expected);
+        }
+    }
+
+    #[test]
     fn targeted_fades_fill_only_the_requested_side_and_undo_once() {
         for side in ["in", "out"] {
             let mut e = crate::demo::demo_engine();
@@ -816,7 +860,7 @@ mod tests {
             );
             let mut expected = before.clone();
             let c = expected.find_clip_mut(clip.id).unwrap();
-            let fade = Fade { len: clip.length, shape: FadeShape::SCurve };
+            let fade = Fade { len: clip.length, shape: FadeShape::SCurve, curvature: 0.0 };
             if side == "in" {
                 c.fade_in = fade;
             } else {
@@ -852,6 +896,12 @@ mod tests {
             json!({"clip": id, "side": "in", "length": 10, "start": 0}),
             json!({"clip": id, "side": "in", "length": 10, "end": 100}),
             json!({"clip": id, "side": "in", "length": 10, "tracks": []}),
+            json!({"clip": id, "side": "in", "length": 10, "curvature": 2}),
+            json!({"clip": id, "side": "in", "length": 10, "curvature": -2}),
+            json!({"clip": id, "side": "in", "length": 10, "curvature": 1e100}),
+            json!({"clip": id, "side": "in", "length": 10, "curvature": null}),
+            json!({"clip": id, "side": "in", "length": 10, "curvature": "0.5"}),
+            json!({"start": 0, "end": 100, "curvature": 0.5}),
         ] {
             let before = e.session().clone();
             let history = e.undo_history();

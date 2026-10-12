@@ -228,7 +228,7 @@ pub fn demo_session() -> Session {
         let len = total as i64 - start;
         let cid = s.new_clip_id();
         let mut clip = Clip::audio(cid, name, src, start, start, len - (srf * 1.5) as i64);
-        clip.fade_out = Fade { len: (srf * 0.5) as i64, shape: FadeShape::SCurve };
+        clip.fade_out = Fade { len: (srf * 0.5) as i64, shape: FadeShape::SCurve, curvature: 0.0 };
         crate::edit::place_clip(s, t, clip);
         t
     };

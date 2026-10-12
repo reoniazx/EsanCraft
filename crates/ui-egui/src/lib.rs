@@ -231,6 +231,7 @@ pub enum Gesture {
     TrimStart { clip: soundcraft_model::ClipId, track: TrackId, to: Samples },
     TrimEnd { clip: soundcraft_model::ClipId, track: TrackId, to: Samples },
     Fade { clip: soundcraft_model::ClipId, track: TrackId, fade_in: bool, to: Samples },
+    FadeCurve { clip: soundcraft_model::ClipId, fade_in: bool, curvature: f32, anchor: (f32, f32), height: f32 },
     Scrub { last: Samples },
     Fader { track: TrackId, start_db: f32 },
     ClipGain { clip: soundcraft_model::ClipId, track: TrackId, pos: f32, anchor: (f32, f32), fine: bool, fader_bottom: egui::Pos2 },

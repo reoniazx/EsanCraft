@@ -47,10 +47,37 @@ impl FadeShape {
 }
 
 /// A fade at a clip boundary, `len` samples long.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Fade {
     pub len: Samples,
     pub shape: FadeShape,
+    /// Continuous bend (-1..1); zero preserves the original shape exactly.
+    #[serde(default)]
+    pub curvature: f32,
+}
+
+impl Fade {
+    /// The envelope used by both rendering and audio, with fixed zero/unity endpoints.
+    pub fn gain(self, t: f32) -> f32 {
+        let base = self.shape.gain(t);
+        let curvature = if self.curvature.is_finite() { self.curvature.clamp(-1.0, 1.0) } else { 0.0 };
+        if curvature == 0.0 || base <= 0.0 || base >= 1.0 {
+            return base;
+        }
+        let weighted = base * (curvature * 4.0).exp2();
+        weighted / (weighted + 1.0 - base)
+    }
+
+    /// Invert the bend at the midpoint so a vertical drag follows the pointer.
+    pub fn curvature_for_midpoint_gain(self, gain: f32) -> f32 {
+        let gain = if gain.is_finite() { gain.clamp(0.001, 0.999) } else { self.gain(0.5) };
+        let base = self.shape.gain(0.5);
+        (((gain / (1.0 - gain)).log2() - (base / (1.0 - base)).log2()) / 4.0).clamp(-1.0, 1.0)
+    }
+
+    pub fn sanitize(&mut self) {
+        self.curvature = if self.curvature.is_finite() { self.curvature.clamp(-1.0, 1.0) } else { 0.0 };
+    }
 }
 
 /// What a clip plays.
@@ -195,11 +222,11 @@ impl Clip {
         }
         let mut g = db_to_gain(db);
         if self.fade_in.len > 0 && rel < self.fade_in.len {
-            g *= self.fade_in.shape.gain(rel as f32 / self.fade_in.len as f32);
+            g *= self.fade_in.gain(rel as f32 / self.fade_in.len as f32);
         }
         let from_end = self.length - rel;
         if self.fade_out.len > 0 && from_end <= self.fade_out.len {
-            g *= self.fade_out.shape.gain(from_end as f32 / self.fade_out.len as f32);
+            g *= self.fade_out.gain(from_end as f32 / self.fade_out.len as f32);
         }
         g
     }
@@ -265,10 +292,50 @@ mod tests {
     }
 
     #[test]
+    fn fade_curvature_is_bounded_monotonic_and_inverts_at_the_midpoint() {
+        for shape in FadeShape::ALL {
+            let original = Fade { len: 1000, shape, curvature: 0.0 };
+            for i in 0..=128 {
+                let t = i as f32 / 128.0;
+                assert_eq!(original.gain(t), shape.gain(t), "legacy curves must be unchanged");
+            }
+            for curvature in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+                let fade = Fade { curvature, ..original };
+                assert_eq!(fade.gain(0.0), 0.0);
+                assert_eq!(fade.gain(1.0), 1.0);
+                let mut previous = 0.0;
+                for i in 0..=128 {
+                    let gain = fade.gain(i as f32 / 128.0);
+                    assert!(gain.is_finite() && (0.0..=1.0).contains(&gain));
+                    assert!(gain >= previous, "{shape:?}, {curvature}");
+                    previous = gain;
+                }
+                assert!((fade.curvature_for_midpoint_gain(fade.gain(0.5)) - curvature).abs() < 1e-5);
+            }
+            assert!((Fade { curvature: 0.5, ..original }).gain(0.5) > original.gain(0.5));
+            assert!((Fade { curvature: -0.5, ..original }).gain(0.5) < original.gain(0.5));
+        }
+    }
+
+    #[test]
+    fn fade_curvature_loads_legacy_data_and_sanitizes_hostile_values() {
+        let fade: Fade = serde_json::from_str(r#"{"len":100,"shape":"SCurve"}"#).unwrap();
+        assert_eq!(fade.curvature, 0.0);
+        for curvature in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -10.0, 10.0] {
+            let mut fade = Fade { curvature, ..fade };
+            assert!(fade.gain(0.5).is_finite());
+            fade.sanitize();
+            assert!(fade.curvature.is_finite() && (-1.0..=1.0).contains(&fade.curvature));
+            let roundtrip: Fade = serde_json::from_str(&serde_json::to_string(&fade).unwrap()).unwrap();
+            assert_eq!(roundtrip, fade);
+        }
+    }
+
+    #[test]
     fn gain_with_fades() {
         let mut c = Clip::audio(ClipId(1), "a", SourceId(1), 0, 100, 1000);
-        c.fade_in = Fade { len: 100, shape: FadeShape::Linear };
-        c.fade_out = Fade { len: 100, shape: FadeShape::Linear };
+        c.fade_in = Fade { len: 100, shape: FadeShape::Linear, curvature: 0.0 };
+        c.fade_out = Fade { len: 100, shape: FadeShape::Linear, curvature: 0.0 };
         assert!(c.gain_at(0).abs() < 1e-6);
         assert!((c.gain_at(50) - 0.5).abs() < 1e-6);
         assert!((c.gain_at(500) - 1.0).abs() < 1e-6);
@@ -293,7 +360,7 @@ mod tests {
         assert_eq!(c.length, 1);
         // Regression: trimming the start must not leave a fade-out longer than the clip.
         let mut c = Clip::audio(ClipId(2), "b", SourceId(1), 0, 0, 1000);
-        c.fade_out = Fade { len: 800, shape: FadeShape::Linear };
+        c.fade_out = Fade { len: 800, shape: FadeShape::Linear, curvature: 0.0 };
         c.trim_start_to(900);
         assert!(c.fade_out.len <= c.length);
     }

@@ -2064,11 +2064,39 @@ mod tests {
     }
 
     #[test]
+    fn fade_curvature_reaches_the_rendered_audio() {
+        for fade_in in [true, false] {
+            for curvature in [-0.5, 0.0, 0.5] {
+                let (mut s, t) = session_with_dc(1.0, 8192);
+                s.track_mut(t).unwrap().mixer.pan = vec![-1.0];
+                let fade = soundcraft_model::Fade { len: 8192, shape: soundcraft_model::FadeShape::SCurve, curvature };
+                let c = &mut s.track_mut(t).unwrap().playlist_mut().unwrap().clips[0];
+                if fade_in {
+                    c.fade_in = fade;
+                } else {
+                    c.fade_out = fade;
+                }
+                let out = render_range(&s, Range::new(0, 8192), 512);
+                let expected = if curvature < 0.0 {
+                    0.2
+                } else if curvature > 0.0 {
+                    0.8
+                } else {
+                    0.5
+                };
+                assert!((out[0][4096] - expected).abs() < 1e-5, "{fade_in}, {curvature}: {} vs {expected}", out[0][4096]);
+                assert!(out[1][4096].abs() < 1e-6);
+                assert!(out[0][if fade_in { 0 } else { 8191 }].abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
     fn fades_and_clip_gain_apply() {
         let (mut s, t) = session_with_dc(1.0, 48_000);
         {
             let c = &mut s.track_mut(t).unwrap().playlist_mut().unwrap().clips[0];
-            c.fade_in = soundcraft_model::Fade { len: 1000, shape: soundcraft_model::FadeShape::Linear };
+            c.fade_in = soundcraft_model::Fade { len: 1000, shape: soundcraft_model::FadeShape::Linear, curvature: 0.0 };
             c.gain_db = -6.0;
         }
         let out = render_range(&s, Range::new(0, 2000), 512);

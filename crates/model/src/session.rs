@@ -541,6 +541,8 @@ impl Session {
                 for c in &mut p.clips {
                     c.fade_in.len = c.fade_in.len.clamp(0, c.length);
                     c.fade_out.len = c.fade_out.len.clamp(0, c.length);
+                    c.fade_in.sanitize();
+                    c.fade_out.sanitize();
                     if !c.gain_db.is_finite() {
                         c.gain_db = 0.0;
                     }
