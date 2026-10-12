@@ -50,7 +50,9 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
                 if tx.send(req).is_err() {
                     break;
                 }
-                ctx.request_repaint();
+                // Context's current viewport may be the deferred Mixer. Only
+                // root logic drains this queue, so wake it explicitly.
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
                 let mut r = rrx.recv_timeout(Duration::from_secs(90)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
                 if let Some(o) = r.as_object_mut() {
                     o.insert("id".into(), id);

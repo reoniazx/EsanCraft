@@ -15,6 +15,8 @@ pub mod main_windows;
 pub mod menus;
 pub mod midi_editor;
 pub mod mix_window;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native_host;
 pub mod ops_windows;
 pub mod palette;
 pub mod panels;
@@ -61,7 +63,7 @@ impl MainWindow {
 }
 
 /// UI state (serde, so agents can read and set it).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct UiState {
     pub window: MainWindow,
@@ -234,6 +236,7 @@ pub struct SoundApp {
     pub dialogs: dialogs::Dialogs,
     pub meters: HashMap<TrackId, MeterDisplay>,
     pub main_meter: MeterDisplay,
+    pub(crate) meter_snapshot: Option<std::sync::Arc<soundcraft_playback::MeterSnapshot>>,
     pub gesture: Option<Gesture>,
     pub edit_layout: edit_window::EditLayout,
     pub midi: midi_editor::MidiEditorState,
@@ -291,6 +294,7 @@ impl SoundApp {
             dialogs: dialogs::Dialogs::default(),
             meters: HashMap::new(),
             main_meter: MeterDisplay::default(),
+            meter_snapshot: None,
             gesture: None,
             edit_layout: edit_window::EditLayout::default(),
             midi: midi_editor::MidiEditorState::default(),
@@ -742,6 +746,7 @@ impl SoundApp {
             }
             let main = snap.main.peak;
             feed_meter(&mut self.main_meter, main, 0.0, dt);
+            self.meter_snapshot = Some(std::sync::Arc::new(snap));
             if ended {
                 self.stop_play();
             }
@@ -784,12 +789,32 @@ impl SoundApp {
         if self.theme_applied != Some(light) || theme::is_light() != light {
             theme::apply(ctx, light);
             self.theme_applied = Some(light);
+            main_windows::request_views_repaint(ctx);
         }
         let now = ctx.input(|i| i.time);
         let dt = self.last_frame.map_or(1.0 / 60.0, |t| (now - t) as f32).clamp(0.0, 0.25);
         self.last_frame = Some(now);
         self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
         control::drain(self, ctx);
+        // A parked root may not receive another raw-input pass promptly. Apply
+        // queued global focus keys now, using the same dispatch as native input.
+        // Preserve ordering with synthetic pointer/text gestures ahead of them.
+        if self.main_windows.deferred {
+            let count = self
+                .synthetic
+                .iter()
+                .take_while(|event| {
+                    matches!(event,
+                        egui::Event::Key { key: egui::Key::Equals, modifiers, .. } if modifiers.command
+                    )
+                })
+                .count();
+            if count > 0 {
+                let mut events = self.synthetic.drain(..count).collect();
+                main_windows::consume_focus_keys(self, &mut events);
+                self.synthetic.splice(..0, events);
+            }
+        }
         main_windows::process_requests(self, ctx);
         self.apply_editor_edits();
         if !ctx.input(|i| i.pointer.any_down()) {
@@ -819,6 +844,9 @@ impl SoundApp {
         }
         if self.is_playing() || self.meters.values().any(|m| m.level[0] > 0.0001) || !self.pending_shots.is_empty() || !self.synthetic.is_empty() {
             ctx.request_repaint();
+        }
+        if self.ui.both_windows && !self.main_windows.secondary_hidden && main_windows::animating(self) {
+            ctx.request_repaint_after_for(std::time::Duration::from_millis(16), main_windows::secondary_id());
         }
         control::collect_screenshots(self, ctx);
     }

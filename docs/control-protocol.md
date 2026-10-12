@@ -67,6 +67,22 @@ embedded rectangles use canvas coordinates. `ui.window` identifies the active vi
 `ui.both_windows` records whether both are open. Existing preferences and `ui.set` requests
 that select a single view remain supported.
 
+Native views repaint independently. Focus-only shortcuts retain their latest destination
+without rebuilding the windows, and control/menu requests wake root logic explicitly even
+after the Mixer rendered last. Fresh native focus keys are consumed before rendering so an
+occluded root cannot delay or replay them.
+
+On macOS, a view fully covered by the other main view is temporarily hidden to
+avoid Metal drawable waits during focus transitions. Its viewport and session stay
+alive; focusing it restores visibility before activation. Partially overlapping
+and tiled windows stay visible together. `main_windows.parked` reports this state.
+
+`main_windows.perf` in `ui.inspect` provides diagnostic focus-command and per-view render
+counts, the most recent `root_ui_ms` / `secondary_ui_ms`, and `visible_mix_strips`.
+The UI timings measure CPU layout work, excluding GPU presentation and event-loop waiting.
+The existing `frame_ms` remains an interval estimate and includes idle time; it is not an
+input-latency benchmark. The Mixer borrows session snapshots and paints only visible strips.
+
 In the Edit window, two-finger scrolling pans the timeline horizontally and the tracks vertically,
 including when the pointer is over a ruler or track header. Pinching zooms the timeline continuously
 around the pointer, preserving the sample underneath it within the zoom and timeline-start limits.

@@ -51,7 +51,7 @@ impl NativeMenu {
         let ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |event| {
             if tx.send(event).is_ok() {
-                ctx.request_repaint();
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
             }
         }));
         Ok(native)

@@ -1,6 +1,6 @@
 //! Edit and Mix are independent views of the same engine, not separate sessions.
-//! Native hosts use an immediate viewport so both views can borrow the app on the
-//! UI thread. Browsers and offscreen hosts use movable, resizable egui windows.
+//! Native hosts register independently repainted deferred viewports through the
+//! UI-thread host. Browsers and offscreen hosts use resizable egui windows.
 
 use crate::{MainWindow, SoundApp, edit_window, menus, mix_window, shortcuts};
 use egui::{Rect, Ui, Vec2, ViewportCommand, ViewportId, pos2, vec2};
@@ -28,6 +28,17 @@ pub struct WindowState {
     embedded_arrangement: Option<Arrangement>,
     close_request: Option<MainWindow>,
     root_title: String,
+    pub(crate) deferred: bool,
+    sent_focus: Option<(MainWindow, f64)>,
+    parent_woken: bool,
+    pub(crate) rendered_strips: usize,
+    pub(crate) root_frames: u64,
+    pub(crate) secondary_frames: u64,
+    pub(crate) root_ui_ms: f64,
+    pub(crate) secondary_ui_ms: f64,
+    focus_commands: u64,
+    pub(crate) primary_hidden: bool,
+    pub(crate) secondary_hidden: bool,
 }
 
 pub fn secondary_id() -> ViewportId {
@@ -55,6 +66,11 @@ impl WindowState {
         };
         json!({
             "primary": primary, "active": app.ui.window,
+            "rendering": if self.deferred { "deferred" } else { "embedded_or_immediate" },
+            "parked": {"primary": self.primary_hidden, "secondary": self.secondary_hidden},
+            "perf": {"focus_commands": self.focus_commands, "root_frames": self.root_frames,
+                "secondary_frames": self.secondary_frames, "root_ui_ms": self.root_ui_ms,
+                "secondary_ui_ms": self.secondary_ui_ms, "visible_mix_strips": self.rendered_strips},
             "edit": {"open": self.is_open(app, MainWindow::Edit), "rect": rect(MainWindow::Edit)},
             "mix": {"open": self.is_open(app, MainWindow::Mix), "rect": rect(MainWindow::Mix)},
         })
@@ -69,6 +85,27 @@ pub fn activate(app: &mut SoundApp, window: MainWindow) {
     }
     app.ui.window = window;
     app.main_windows.focus = Some(window);
+    app.main_windows.parent_woken = false;
+}
+
+/// Consume global native focus shortcuts before egui can retain them across
+/// logic-only passes. Both physical input and control-channel input use this.
+pub(crate) fn consume_focus_keys(app: &mut SoundApp, events: &mut Vec<egui::Event>) {
+    if app.dialogs.open.is_some() {
+        return;
+    }
+    events.retain(|event| {
+        if let egui::Event::Key { key: egui::Key::Equals, pressed, repeat, modifiers, .. } = event
+            && modifiers.command
+        {
+            if *pressed && !*repeat {
+                let _ = app.run("window.toggle_mix_edit", json!({}));
+            }
+            false
+        } else {
+            true
+        }
+    });
 }
 
 pub fn arrange(app: &mut SoundApp, arrangement: Arrangement) {
@@ -100,6 +137,11 @@ pub fn close(app: &mut SoundApp, window: MainWindow, ctx: &egui::Context) {
     app.ui.window = window.other();
     app.main_windows.focus = Some(app.ui.window);
     app.main_windows.secondary_rect = None;
+    app.main_windows.secondary_hidden = false;
+    if app.main_windows.primary_hidden {
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(true));
+        app.main_windows.primary_hidden = false;
+    }
     ctx.request_repaint_of(ViewportId::ROOT);
 }
 
@@ -128,14 +170,37 @@ pub fn process_requests(app: &mut SoundApp, ctx: &egui::Context) {
     });
     app.main_windows.primary_rect = root_rect;
     app.main_windows.secondary_rect = child_rect;
-    if let Some(window) = app.main_windows.focus {
-        let mut id = app.main_windows.viewport(app, window);
-        // Wake the parent first if the second window has not been created yet.
-        if id == secondary_id() && !child_exists {
-            id = ViewportId::ROOT;
+    reconcile_focus(app, ctx);
+    flush_focus(app, ctx, child_exists);
+    update_occlusion(app, ctx);
+}
+
+fn update_occlusion(app: &mut SoundApp, ctx: &egui::Context) {
+    if !cfg!(target_os = "macos") || !app.main_windows.deferred {
+        return;
+    }
+    let primary = app.main_windows.primary(app);
+    let (hide_root, hide_child) = if app.ui.both_windows {
+        match (app.main_windows.primary_rect, app.main_windows.secondary_rect) {
+            (Some(root), Some(child)) if root.is_positive() && child.is_positive() => {
+                (app.ui.window != primary && child.contains_rect(root), app.ui.window == primary && root.contains_rect(child))
+            }
+            _ => (false, false),
         }
-        ctx.send_viewport_cmd_to(id, ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd_to(id, ViewportCommand::Focus);
+    } else {
+        (false, false)
+    };
+    // AppKit can report the old occlusion state during focus transitions,
+    // letting Metal block in nextDrawable for a fully covered window. Park
+    // only windows with no visible pixels, retaining their viewport/surface.
+    // Tile/Cascade layouts with visible portions keep both windows displayed.
+    for (id, hidden, old) in
+        [(ViewportId::ROOT, hide_root, &mut app.main_windows.primary_hidden), (secondary_id(), hide_child, &mut app.main_windows.secondary_hidden)]
+    {
+        if *old != hidden {
+            ctx.send_viewport_cmd_to(id, ViewportCommand::Visible(!hidden));
+            *old = hidden;
+        }
     }
 }
 
@@ -184,6 +249,11 @@ pub fn title(app: &SoundApp, window: MainWindow) -> String {
 }
 
 fn surface(app: &mut SoundApp, ui: &mut Ui, window: MainWindow) {
+    if window == app.main_windows.primary(app) {
+        app.main_windows.root_frames = app.main_windows.root_frames.saturating_add(1);
+    } else {
+        app.main_windows.secondary_frames = app.main_windows.secondary_frames.saturating_add(1);
+    }
     // Independent panel/scroll IDs also matter when both views are embedded in
     // one browser canvas: scrolling a track list must not scroll the other one.
     ui.push_id(window.label(), |ui| match window {
@@ -204,6 +274,155 @@ fn received_input(ctx: &egui::Context) -> bool {
     })
 }
 
+fn focus_pending(app: &SoundApp) -> bool {
+    app.main_windows.focus.is_some() || app.main_windows.sent_focus.is_some()
+}
+
+fn reconcile_focus(app: &mut SoundApp, ctx: &egui::Context) {
+    if let Some((window, sent_at)) = app.main_windows.sent_focus {
+        let id = app.main_windows.viewport(app, window);
+        let acknowledged = ctx.input(|i| i.raw.viewports.get(&id).is_some_and(|v| v.focused == Some(true)));
+        // Some window managers reject activation. Do not let a missing ack
+        // prevent later physical input from identifying the focused view.
+        if acknowledged || ctx.input(|i| i.time) - sent_at >= 0.25 {
+            app.main_windows.sent_focus = None;
+        }
+    }
+}
+
+/// The only place that emits focus commands. Input bursts retain their final
+/// destination; logic and drawing can both flush without sending twice.
+pub(crate) fn flush_focus(app: &mut SoundApp, ctx: &egui::Context, child_registered: bool) {
+    if ctx.embed_viewports() {
+        return;
+    }
+    let Some(window) = app.main_windows.focus else { return };
+    let id = app.main_windows.viewport(app, window);
+    if id == secondary_id() && !child_registered {
+        if !app.main_windows.parent_woken {
+            restore_and_focus(app, ctx, ViewportId::ROOT, false);
+            app.main_windows.parent_woken = true;
+        }
+        return;
+    }
+    app.main_windows.focus = None;
+    app.main_windows.parent_woken = false;
+    let focused = ctx.input(|i| i.raw.viewports.get(&id).is_some_and(|v| v.focused == Some(true)));
+    let reversing_pending = app.main_windows.sent_focus.is_some_and(|(target, _)| target != window);
+    if focused && !reversing_pending {
+        app.main_windows.sent_focus = None;
+    } else if app.main_windows.sent_focus.map(|(target, _)| target) != Some(window) {
+        restore_and_focus(app, ctx, id, reversing_pending);
+        app.main_windows.sent_focus = Some((window, ctx.input(|i| i.time)));
+    }
+}
+
+fn restore_and_focus(app: &mut SoundApp, ctx: &egui::Context, id: ViewportId, reversing_pending: bool) {
+    let restored = if id == ViewportId::ROOT && app.main_windows.primary_hidden {
+        ctx.send_viewport_cmd_to(id, ViewportCommand::Visible(true));
+        app.main_windows.primary_hidden = false;
+        true
+    } else if id == secondary_id() && app.main_windows.secondary_hidden {
+        ctx.send_viewport_cmd_to(id, ViewportCommand::Visible(true));
+        app.main_windows.secondary_hidden = false;
+        true
+    } else {
+        false
+    };
+    let (minimized, focused) =
+        ctx.input(|i| i.raw.viewports.get(&id).map_or((false, false), |v| (v.minimized == Some(true), v.focused == Some(true))));
+    if minimized {
+        ctx.send_viewport_cmd_to(id, ViewportCommand::Minimized(false));
+    }
+    // winit's macOS Visible(true) already makes the window key and frontmost.
+    // Avoid ordering it a second time while our app has keyboard focus. When
+    // another application is active, Focus is still needed to activate ours.
+    let restored_in_active_app = restored && cfg!(target_os = "macos") && ctx.input(|i| i.raw.viewports.values().any(|v| v.focused == Some(true)));
+    if (!focused || reversing_pending) && !restored_in_active_app {
+        ctx.send_viewport_cmd_to(id, ViewportCommand::Focus);
+        app.main_windows.focus_commands = app.main_windows.focus_commands.saturating_add(1);
+    }
+}
+
+pub(crate) fn animating(app: &SoundApp) -> bool {
+    app.is_playing() || app.meters.values().any(|m| m.level.iter().any(|v| *v > 0.0001)) || app.main_meter.level.iter().any(|v| *v > 0.0001)
+}
+
+pub(crate) fn request_views_repaint(ctx: &egui::Context) {
+    ctx.request_repaint_of(ViewportId::ROOT);
+    if ctx.viewport_for(secondary_id(), |v| v.used) {
+        ctx.request_repaint_of(secondary_id());
+    }
+}
+
+pub(crate) fn secondary_builder(app: &SoundApp, ctx: &egui::Context) -> Option<egui::ViewportBuilder> {
+    if !app.ui.both_windows || !app.fonts_ready {
+        return None;
+    }
+    let secondary = app.main_windows.primary(app).other();
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(title(app, secondary))
+        .with_inner_size([1100.0, 780.0])
+        .with_min_inner_size([320.0, 220.0])
+        .with_drag_and_drop(true);
+    if let Some(rect) = app.main_windows.secondary_initial_rect {
+        let rect = scaled_rect(rect, ctx.zoom_factor().recip());
+        builder = builder.with_position(rect.min).with_inner_size((rect.size() - decoration(ctx, secondary_id())).max(vec2(1.0, 1.0)));
+    }
+    Some(builder)
+}
+
+pub(crate) fn show_secondary(app: &mut SoundApp, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    if !app.ui.both_windows {
+        ctx.request_repaint_of(ViewportId::ROOT);
+        return;
+    }
+    ui.set_style(ctx.global_style());
+    let secondary = app.main_windows.primary(app).other();
+    if ctx.input(|i| i.viewport().close_requested()) {
+        close(app, secondary, &ctx);
+        return;
+    }
+    reconcile_focus(app, &ctx);
+    app.main_windows.secondary_rect = ctx.input(|i| i.viewport().outer_rect);
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        activate(app, secondary);
+    } else if !focus_pending(app) && received_input(&ctx) {
+        app.ui.window = secondary;
+    }
+    let revision = app.engine.revision;
+    let interaction = ctx.input(|i| {
+        i.pointer.any_down()
+            || i.events.iter().any(|e| {
+                matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: true, .. } | egui::Event::Text(_))
+            })
+    });
+    let before = interaction.then(|| app.ui.clone());
+    shortcuts::handle(app, &ctx);
+    if let Some(window) = app.main_windows.close_request.take() {
+        close(app, window, &ctx);
+    }
+    if !app.native_menu_bar {
+        menus::menu_bar(app, ui);
+    }
+    surface(app, ui, secondary);
+    if app.ui.window == secondary {
+        app.floating_ui(&ctx);
+    }
+    // Focus/hover/keyup alone does not invalidate the parent's document view.
+    if app.engine.revision != revision || before.as_ref().is_some_and(|state| *state != app.ui) {
+        ctx.request_repaint_of(ViewportId::ROOT);
+        ctx.request_repaint();
+    }
+    if app.main_windows.deferred {
+        flush_focus(app, &ctx, true);
+    }
+    if animating(app) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+}
+
 pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     if !app.ui.both_windows {
@@ -216,10 +435,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if !app.ui.both_windows || app.main_windows.workspace.is_none() {
         app.main_windows.workspace = Some(if embedded { area } else { scaled_rect(area, ctx.zoom_factor()) });
     }
-    if !embedded && app.main_windows.focus.is_none() && received_input(&ctx) {
+    if !embedded && !focus_pending(app) && received_input(&ctx) {
         app.ui.window = primary;
     }
-    // Embedded windows share an input stream; dispatch shortcuts exactly once.
+    // The native input hook consumes focus shortcuts before deferred drawing.
+    // Other shortcuts and embedded hosts keep their normal UI dispatch.
     shortcuts::handle(app, &ctx);
     if !app.native_menu_bar {
         menus::menu_bar(app, ui);
@@ -250,53 +470,17 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         ctx.send_viewport_cmd(ViewportCommand::Title(root_title.clone()));
         app.main_windows.root_title = root_title;
     }
-    surface(app, ui, primary);
+    if !app.main_windows.primary_hidden {
+        surface(app, ui, primary);
+    }
     if app.ui.window == primary || !app.ui.both_windows {
         app.floating_ui(&ctx);
     }
-    if app.ui.both_windows {
-        let secondary = primary.other();
-        let mut builder = egui::ViewportBuilder::default()
-            .with_title(title(app, secondary))
-            .with_inner_size([1100.0, 780.0])
-            .with_min_inner_size([320.0, 220.0])
-            .with_drag_and_drop(true);
-        if let Some(rect) = app.main_windows.secondary_initial_rect {
-            let rect = scaled_rect(rect, ctx.zoom_factor().recip());
-            builder = builder.with_position(rect.min).with_inner_size((rect.size() - decoration(&ctx, secondary_id())).max(vec2(1.0, 1.0)));
+    if !app.main_windows.deferred {
+        if let Some(builder) = secondary_builder(app, &ctx) {
+            ctx.show_viewport_immediate(secondary_id(), builder, |ui, _class| show_secondary(app, ui));
         }
-        ctx.show_viewport_immediate(secondary_id(), builder, |ui, _class| {
-            let child_ctx = ui.ctx().clone();
-            let revision = app.engine.revision;
-            if child_ctx.input(|i| i.viewport().close_requested()) {
-                close(app, secondary, &child_ctx);
-                return;
-            }
-            app.main_windows.secondary_rect = child_ctx.input(|i| i.viewport().outer_rect);
-            if app.main_windows.focus.is_none() && received_input(&child_ctx) {
-                app.ui.window = secondary;
-            }
-            shortcuts::handle(app, &child_ctx);
-            if let Some(window) = app.main_windows.close_request.take() {
-                close(app, window, &child_ctx);
-            }
-            if !app.native_menu_bar {
-                menus::menu_bar(app, ui);
-            }
-            surface(app, ui, secondary);
-            if app.ui.window == secondary {
-                app.floating_ui(&child_ctx);
-            }
-            // Child edits need the root logic pass to sync audio, undo/status,
-            // and the native menu. No transport or automation runs twice.
-            if app.engine.revision != revision || app.is_playing() || child_ctx.input(|i| !i.events.is_empty()) {
-                child_ctx.request_repaint_of(ViewportId::ROOT);
-            }
-        });
-    }
-    if let Some(window) = app.main_windows.focus.take() {
-        ctx.send_viewport_cmd_to(app.main_windows.viewport(app, window), ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd_to(app.main_windows.viewport(app, window), ViewportCommand::Focus);
+        flush_focus(app, &ctx, app.ui.both_windows);
     }
 }
 

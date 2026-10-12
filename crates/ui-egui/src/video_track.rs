@@ -209,7 +209,7 @@ mod backend {
                 }
                 Err(_) => worker = Worker::default(),
             }
-            ctx.request_repaint();
+            crate::main_windows::request_views_repaint(ctx);
         }
     }
 }
@@ -253,7 +253,7 @@ mod backend {
                 out.extend(self.worker.run(j));
             }
             if !self.thumbs.is_empty() {
-                self.ctx.request_repaint();
+                crate::main_windows::request_views_repaint(&self.ctx);
             }
             out
         }

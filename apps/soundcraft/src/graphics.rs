@@ -1,9 +1,12 @@
-//! Windows graphics instance configuration, applied before wgpu can initialize any driver.
+//! Native graphics configuration applied before wgpu initializes surfaces.
 
-use eframe::{NativeOptions, egui_wgpu::WgpuSetup, wgpu::Backends};
+use eframe::NativeOptions;
+#[cfg(any(target_os = "windows", test))]
+use eframe::{egui_wgpu::WgpuSetup, wgpu::Backends};
 
 /// Restrict the wgpu instance to DirectX 12 unless `backend_override` (normally
 /// `Backends::from_env()`, i.e. `WGPU_BACKEND`) names other backends.
+#[cfg(any(target_os = "windows", test))]
 pub fn configure(options: &mut NativeOptions, backend_override: Option<Backends>) {
     if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
         // eframe's default includes GL. Creating that backend can crash inside AMD's
@@ -13,6 +16,13 @@ pub fn configure(options: &mut NativeOptions, backend_override: Option<Backends>
         // workaround without mutating process environment variables.
         create.instance_descriptor.backends = backend_override.unwrap_or(Backends::DX12);
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub fn configure_macos(options: &mut NativeOptions) {
+    // Allow a third Metal drawable while pending presents settle during
+    // focus/occlusion transitions. Keep the existing VSync mode.
+    options.wgpu_options.surface.desired_maximum_frame_latency = Some(2);
 }
 
 #[cfg(test)]
@@ -43,5 +53,14 @@ mod tests {
         for backends in [Backends::VULKAN, Backends::GL, Backends::DX12, Backends::VULKAN | Backends::DX12, Backends::empty()] {
             assert_eq!(configured_backends(Some(backends)), backends);
         }
+    }
+
+    #[test]
+    fn macos_focus_buffer_keeps_vsync_and_backend_selection() {
+        let mut options = NativeOptions::default();
+        let present = options.wgpu_options.surface.present_mode;
+        configure_macos(&mut options);
+        assert_eq!(options.wgpu_options.surface.present_mode, present);
+        assert_eq!(options.wgpu_options.surface.desired_maximum_frame_latency, Some(2));
     }
 }
