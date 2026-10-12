@@ -1203,6 +1203,30 @@ fn fade_control_position(fade: soundcraft_model::Fade, a: f32, b: f32, body: Rec
     pos2((a + b) * 0.5, y.max(body.min.y + padding).min(body.max.y - padding))
 }
 
+fn clip_preview_fades(clip: &Clip, gesture: Option<&Gesture>) -> (soundcraft_model::Fade, soundcraft_model::Fade) {
+    let (mut fade_in, mut fade_out) = (clip.fade_in, clip.fade_out);
+    match gesture {
+        Some(Gesture::Fade { clip: id, fade_in: side, to, .. }) if *id == clip.id => {
+            if let Some(fade) = fade_drag_preview(clip, *side, *to) {
+                if *side {
+                    fade_in = fade;
+                } else {
+                    fade_out = fade;
+                }
+            }
+        }
+        Some(Gesture::FadeCurve { clip: id, fade_in: side, curvature, .. }) if *id == clip.id => {
+            if *side {
+                fade_in.curvature = *curvature;
+            } else {
+                fade_out.curvature = *curvature;
+            }
+        }
+        _ => {}
+    }
+    (fade_in, fade_out)
+}
+
 fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track, clip: &Clip, tl: Rect, lane: Rect, dim: bool) {
     let x0 = x_of(s, tl, clip.start);
     let x1 = x_of(s, tl, clip.end()).max(x0 + 1.0);
@@ -1235,6 +1259,8 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
     }
     let body_r = Rect::from_min_max(pos2(r.min.x, r.min.y + name_h), r.max);
     let vis = body_r.intersect(lane);
+    // The waveform and fade curve share the same temporary envelope every frame.
+    let (fade_in, fade_out) = clip_preview_fades(clip, app.gesture.as_ref().filter(|_| !dim));
     match &clip.content {
         ClipContent::Audio { source, offset } => {
             if let Some(audio) = s.pool.get(*source) {
@@ -1257,7 +1283,7 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
                         for (i, (mn, mx)) in colsv.iter().enumerate() {
                             let x = vis.min.x + i as f32;
                             let rel = sample_at(s, tl, x) - clip.start;
-                            let g = clip.gain_at(rel.clamp(0, clip.length));
+                            let g = clip.gain_at_with_fades(rel.clamp(0, clip.length), fade_in, fade_out);
                             let (mut top, mut bot) = if rectified {
                                 let a = (mx.abs().max(mn.abs()) * g * zoom).clamp(0.0, 1.0);
                                 let b = cy + half;
@@ -1343,29 +1369,6 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
         painter.line_segment([pos2(icon.center().x, icon.min.y), pos2(icon.center().x, icon.max.y)], Stroke::new(1.0, col));
         painter.rect_filled(Rect::from_center_size(pos2(icon.center().x, icon.center().y + 2.0), vec2(icon.width(), 3.0)), 1.0, col);
         painter.text(pos2(icon.max.x + 3.0, icon.center().y), Align2::LEFT_CENTER, format!("{:+.1} dB", clip.gain_db), regular(9.5), col);
-    }
-    // Preview replaces the dragged fade in the same renderer used after release.
-    let (mut fade_in, mut fade_out) = (clip.fade_in, clip.fade_out);
-    if !dim
-        && let Some(Gesture::Fade { clip: id, fade_in: side, to, .. }) = &app.gesture
-        && *id == clip.id
-        && let Some(fade) = fade_drag_preview(clip, *side, *to)
-    {
-        if *side {
-            fade_in = fade;
-        } else {
-            fade_out = fade;
-        }
-    }
-    if !dim
-        && let Some(Gesture::FadeCurve { clip: id, fade_in: side, curvature, .. }) = &app.gesture
-        && *id == clip.id
-    {
-        if *side {
-            fade_in.curvature = *curvature;
-        } else {
-            fade_out.curvature = *curvature;
-        }
     }
     let fade_col = Color32::from_rgba_unmultiplied(255, 255, 255, 90);
     for (side, fade) in [(true, fade_in), (false, fade_out)] {
@@ -1738,6 +1741,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             fade_in,
             to: if fade_in { range.end } else { range.start },
         });
+        ui.ctx().request_repaint();
     } else if resp.drag_started() {
         app.gesture = match eff {
             Tool::Selector | Tool::Smart => Some(Gesture::Select { track: track.id, anchor: snap(&s, at_origin), tracks: vec![track.id] }),
@@ -2617,6 +2621,147 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn waveform_geometry(h: &Harness<SoundApp>, clip_rect: Rect) -> Vec<Vec<Pos2>> {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Mesh(mesh) if !mesh.vertices.is_empty() && mesh.vertices.iter().all(|vertex| clip_rect.contains(vertex.pos)) => {
+                    Some(mesh.vertices.iter().map(|vertex| vertex.pos).collect())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn waveforms_follow_fade_drags_before_release_and_match_the_committed_waveform() {
+        for channels in [1, 2] {
+            for fade_in in [true, false] {
+                for bend in [false, true] {
+                    for mode in ["peak", "power", "rectified", "outlines"] {
+                        let mut h = smart_demo();
+                        let tl = timeline(&h);
+                        let (clip, lane) = clip_on_screen(&h, |xs, xe| xs > tl.min.x + 30.0 && xe < tl.max.x - 100.0 && xe - xs > 100.0);
+                        let (tid, _) = h.state().engine.session().find_clip(clip.id).unwrap();
+                        let neighbour = h
+                            .state()
+                            .engine
+                            .session()
+                            .track(tid)
+                            .unwrap()
+                            .clips()
+                            .iter()
+                            .find(|c| c.id != clip.id && c.start >= clip.end())
+                            .unwrap()
+                            .clone();
+                        let source = clip.source().unwrap();
+                        if channels == 2 {
+                            let audio = h.state().engine.session().pool.get(source).unwrap().clone();
+                            let left = audio.buffer.channels[0].clone();
+                            let right = left.iter().map(|sample| sample * 0.5).collect();
+                            let audio = soundcraft_model::SourceAudio::new(soundcraft_audio_io::AudioBuffer {
+                                sample_rate: audio.buffer.sample_rate,
+                                channels: vec![left, right],
+                            });
+                            let s = h.state_mut().engine.session_mut();
+                            s.pool.insert(source, std::sync::Arc::new(audio));
+                            s.track_mut(tid).unwrap().format = soundcraft_model::ChannelFormat::Stereo;
+                        }
+                        if mode == "power" {
+                            h.state_mut().engine.execute("view.waveform_power", &json!({})).unwrap();
+                        }
+                        h.state_mut().engine.execute("view.waveform_rectified", &json!({"value": mode == "rectified"})).unwrap();
+                        h.state_mut().engine.execute("view.waveform_outlines", &json!({"value": mode == "outlines"})).unwrap();
+                        h.state_mut().engine.execute("view.waveform_zoom", &json!({"value": 1.4})).unwrap();
+                        let c = h.state_mut().engine.session_mut().find_clip_mut(clip.id).unwrap();
+                        c.gain_db = -3.0;
+                        c.gain_env = vec![(0, -3.0), (c.length, 3.0)];
+                        let target = soundcraft_model::Fade {
+                            len: if bend { c.length * 2 / 3 } else { c.length / 4 },
+                            shape: soundcraft_model::FadeShape::SCurve,
+                            curvature: 0.0,
+                        };
+                        let other = soundcraft_model::Fade { len: c.length / 8, shape: soundcraft_model::FadeShape::Linear, curvature: 0.2 };
+                        (c.fade_in, c.fade_out) = if fade_in { (target, other) } else { (other, target) };
+                        h.step();
+                        let before = h.state().engine.session().clone();
+                        let undo_len = h.state().engine.undo_history().len();
+                        let audio = before.pool.get(source).unwrap().clone();
+                        let (xs, xe) = (x_of(&before, tl, clip.start), x_of(&before, tl, clip.end()));
+                        let clip_rect = Rect::from_min_max(pos2(xs, lane.min.y), pos2(xe, lane.max.y)).intersect(tl);
+                        let neighbour_rect = Rect::from_min_max(
+                            pos2(x_of(&before, tl, neighbour.start), lane.min.y),
+                            pos2(x_of(&before, tl, neighbour.end()), lane.max.y),
+                        )
+                        .intersect(tl);
+                        let original = waveform_geometry(&h, clip_rect);
+                        let neighbour_wave = waveform_geometry(&h, neighbour_rect);
+                        assert_eq!(original.len(), channels);
+                        let side = if fade_in { "in" } else { "out" };
+                        let operation = if bend { "bend" } else { "length" };
+                        let screenshot = channels == 1 && mode == "peak";
+                        if screenshot {
+                            fade_shot(&mut h, &format!("waveform-{side}-{operation}-before"));
+                        }
+                        let (press, to) = if bend {
+                            let c = before.find_clip(clip.id).unwrap().1;
+                            let midpoint = fade_midpoint(&before, tl, lane, c, fade_in).unwrap();
+                            (midpoint, midpoint - vec2(0.0, 16.0))
+                        } else {
+                            (
+                                pos2(if fade_in { xs + 6.0 } else { xe - 6.0 }, lane.min.y + 4.0),
+                                pos2(xs + (xe - xs) * if fade_in { 0.7 } else { 0.3 }, lane.min.y + 4.0),
+                            )
+                        };
+                        h.hover_at(press);
+                        h.drag_at(press);
+                        h.hover_at(to);
+                        h.step();
+                        h.step();
+                        assert!(if bend {
+                            matches!(h.state().gesture, Some(Gesture::FadeCurve { .. }))
+                        } else {
+                            matches!(h.state().gesture, Some(Gesture::Fade { .. }))
+                        });
+                        let preview = waveform_geometry(&h, clip_rect);
+                        assert_eq!(preview.len(), channels);
+                        for channel in 0..channels {
+                            assert_ne!(
+                                preview[channel], original[channel],
+                                "the waveform must respond while the button is held: {side}, {operation}, {mode}, channel={channel}"
+                            );
+                        }
+                        assert_eq!(waveform_geometry(&h, neighbour_rect), neighbour_wave);
+                        assert_eq!(h.state().engine.session(), &before);
+                        assert_eq!(h.state().engine.undo_history().len(), undo_len);
+                        assert!(
+                            std::sync::Arc::ptr_eq(h.state().engine.session().pool.get(source).unwrap(), &audio),
+                            "preview must retain cached media and peaks"
+                        );
+                        if screenshot {
+                            fade_shot(&mut h, &format!("waveform-{side}-{operation}-preview"));
+                        }
+                        h.drop_at(to);
+                        h.step();
+                        assert!(h.state().gesture.is_none());
+                        assert_eq!(waveform_geometry(&h, clip_rect), preview, "release must not cause a waveform jump");
+                        assert_eq!(waveform_geometry(&h, neighbour_rect), neighbour_wave);
+                        assert_eq!(h.state().engine.undo_history().len(), undo_len + 1);
+                        assert!(std::sync::Arc::ptr_eq(h.state().engine.session().pool.get(source).unwrap(), &audio));
+                        if screenshot {
+                            fade_shot(&mut h, &format!("waveform-{side}-{operation}-released"));
+                        }
+                        assert!(h.state_mut().engine.undo());
+                        assert_eq!(h.state().engine.session(), &before);
+                        h.step();
+                        assert_eq!(waveform_geometry(&h, clip_rect), original);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

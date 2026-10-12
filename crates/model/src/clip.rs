@@ -216,17 +216,23 @@ impl Clip {
 
     /// Gain (linear) at `rel` samples from the clip start: clip gain × envelope × fades.
     pub fn gain_at(&self, rel: Samples) -> f32 {
+        self.gain_at_with_fades(rel, self.fade_in, self.fade_out)
+    }
+
+    /// Evaluate temporary fades while retaining clip gain and its envelope.
+    /// UI previews can use this without modifying the clip or rebuilding media.
+    pub fn gain_at_with_fades(&self, rel: Samples, fade_in: Fade, fade_out: Fade) -> f32 {
         let mut db = self.gain_db;
         if !self.gain_env.is_empty() {
             db += env_value(&self.gain_env, rel);
         }
         let mut g = db_to_gain(db);
-        if self.fade_in.len > 0 && rel < self.fade_in.len {
-            g *= self.fade_in.gain(rel as f32 / self.fade_in.len as f32);
+        if fade_in.len > 0 && rel < fade_in.len {
+            g *= fade_in.gain(rel as f32 / fade_in.len as f32);
         }
-        let from_end = self.length - rel;
-        if self.fade_out.len > 0 && from_end <= self.fade_out.len {
-            g *= self.fade_out.gain(from_end as f32 / self.fade_out.len as f32);
+        let from_end = self.length.saturating_sub(rel);
+        if fade_out.len > 0 && from_end <= fade_out.len {
+            g *= fade_out.gain(from_end as f32 / fade_out.len as f32);
         }
         g
     }
@@ -264,7 +270,11 @@ fn env_value(env: &[(Samples, f32)], at: Samples) -> f32 {
     for &(t, v) in env {
         if t >= at {
             return match prev {
-                Some((pt, pv)) if t > pt => pv + (v - pv) * ((at - pt) as f32 / (t - pt) as f32),
+                Some((pt, pv)) if t > pt => {
+                    let elapsed = i128::from(at).saturating_sub(i128::from(pt));
+                    let span = i128::from(t).saturating_sub(i128::from(pt));
+                    pv + (v - pv) * (elapsed as f32 / span as f32)
+                }
                 _ => v,
             };
         }
@@ -329,6 +339,33 @@ mod tests {
             let roundtrip: Fade = serde_json::from_str(&serde_json::to_string(&fade).unwrap()).unwrap();
             assert_eq!(roundtrip, fade);
         }
+    }
+
+    #[test]
+    fn temporary_fades_keep_clip_gain_and_envelope_without_mutating_the_clip() {
+        let mut clip = Clip::audio(ClipId(1), "preview", SourceId(1), 0, 0, 1000);
+        clip.gain_db = -6.0;
+        clip.gain_env = vec![(0, 0.0), (1000, 6.0)];
+        clip.fade_in = Fade { len: 100, shape: FadeShape::SCurve, curvature: 0.25 };
+        clip.fade_out = Fade { len: 100, shape: FadeShape::Logarithmic, curvature: -0.1 };
+        let before = clip.clone();
+        let fade_in = Fade { len: 1000, shape: FadeShape::Linear, curvature: 0.5 };
+        let fade_out = Fade { len: 1000, shape: FadeShape::Linear, curvature: -0.5 };
+        assert!((clip.gain_at_with_fades(500, fade_in, fade_out) - db_to_gain(-3.0) * 0.16).abs() < 1e-6);
+        let mut committed = clip.clone();
+        committed.fade_in = fade_in;
+        committed.fade_out = fade_out;
+        for rel in [0, 50, 500, 999, 1000] {
+            assert_eq!(clip.gain_at_with_fades(rel, fade_in, fade_out), committed.gain_at(rel));
+        }
+        for rel in [i64::MIN, i64::MAX] {
+            assert!(clip.gain_at(rel).is_finite());
+            assert!(clip.gain_at_with_fades(rel, fade_in, fade_out).is_finite());
+        }
+        assert_eq!(clip, before);
+        clip.gain_env = vec![(i64::MIN, 0.0), (i64::MAX, 6.0)];
+        assert!((clip.gain_at(500) - db_to_gain(-3.0)).abs() < 1e-6);
+        assert!((clip.gain_at_with_fades(500, fade_in, fade_out) - db_to_gain(-3.0) * 0.16).abs() < 1e-6);
     }
 
     #[test]
