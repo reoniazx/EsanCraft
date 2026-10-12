@@ -1318,28 +1318,34 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
         painter.rect_filled(Rect::from_center_size(pos2(icon.center().x, icon.center().y + 2.0), vec2(icon.width(), 3.0)), 1.0, col);
         painter.text(pos2(icon.max.x + 3.0, icon.center().y), Align2::LEFT_CENTER, format!("{:+.1} dB", clip.gain_db), regular(9.5), col);
     }
-    // Fades.
-    let fade_col = Color32::from_rgba_unmultiplied(255, 255, 255, 90);
-    if clip.fade_in.len > 0 {
-        let fx = x_of(s, tl, clip.start + clip.fade_in.len);
-        let pts: Vec<Pos2> = (0..=16)
-            .map(|i| {
-                let k = i as f32 / 16.0;
-                pos2(x0 + (fx - x0) * k, body_r.max.y - body_r.height() * clip.fade_in.shape.gain(k))
-            })
-            .collect();
-        painter.add(Shape::line(pts, Stroke::new(1.2, fade_col)));
-        painter.line_segment([pos2(x0, body_r.min.y), pos2(fx, body_r.min.y)], Stroke::new(1.0, fade_col));
+    // Preview replaces the dragged fade in the same renderer used after release.
+    let (mut fade_in, mut fade_out) = (clip.fade_in, clip.fade_out);
+    if !dim
+        && let Some(Gesture::Fade { clip: id, fade_in: side, to, .. }) = &app.gesture
+        && *id == clip.id
+        && let Some(range) = fade_drag_range(clip, *side, *to)
+    {
+        let fade = soundcraft_model::Fade { len: range.end.saturating_sub(range.start), shape: soundcraft_model::FadeShape::SCurve };
+        if *side {
+            fade_in = fade;
+        } else {
+            fade_out = fade;
+        }
     }
-    if clip.fade_out.len > 0 {
-        let fx = x_of(s, tl, clip.end() - clip.fade_out.len);
+    let fade_col = Color32::from_rgba_unmultiplied(255, 255, 255, 90);
+    for (side, fade) in [(true, fade_in), (false, fade_out)] {
+        if fade.len <= 0 {
+            continue;
+        }
+        let (a, b) =
+            if side { (x0, x_of(s, tl, clip.start.saturating_add(fade.len))) } else { (x_of(s, tl, clip.end().saturating_sub(fade.len)), x1) };
         let pts: Vec<Pos2> = (0..=16)
             .map(|i| {
                 let k = i as f32 / 16.0;
-                pos2(fx + (x1 - fx) * k, body_r.max.y - body_r.height() * clip.fade_out.shape.gain(1.0 - k))
+                pos2(a + (b - a) * k, body_r.max.y - body_r.height() * fade.shape.gain(if side { k } else { 1.0 - k }))
             })
             .collect();
-        painter.add(Shape::line(pts, Stroke::new(1.2, fade_col)));
+        painter.with_clip_rect(vis).add(Shape::line(pts, Stroke::new(1.2, fade_col)));
     }
     // Optional clip overlays (View › Clip).
     let ov = Color32::from_rgb(16, 16, 16);
@@ -2050,19 +2056,6 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
         let x = x_of(s, tl, *to);
         painter.line_segment([pos2(x, r[1]), pos2(x, r[3])], Stroke::new(2.0, Color32::WHITE));
     }
-    if let Some(Gesture::Fade { clip, fade_in, to, .. }) = &app.gesture
-        && let Some((tid, c)) = s.find_clip(*clip)
-        && let Some(track) = s.track(tid)
-        && let Some((_, r)) = app.edit_layout.rows.iter().find(|(i, _)| *i == tid.0)
-        && let Some(range) = fade_drag_range(c, *fade_in, *to)
-    {
-        let lane = lane_rect(track, rect(*r), tl);
-        let clip_rect = Rect::from_min_max(pos2(x_of(s, tl, c.start), lane.min.y + 1.0), pos2(x_of(s, tl, c.end()), lane.max.y - 1.0));
-        let (x0, x1) = (x_of(s, tl, range.start), x_of(s, tl, range.end));
-        let (y0, y1) = (clip_rect.min.y + 1.0, clip_rect.max.y - 1.0);
-        let line = if *fade_in { [pos2(x0, y1), pos2(x1, y0)] } else { [pos2(x0, y0), pos2(x1, y1)] };
-        painter.with_clip_rect(clip_rect.intersect(tl)).line_segment(line, Stroke::new(2.0, Color32::WHITE));
-    }
     if let Some(at) = scroll_to {
         let _ = app.engine.execute("view.scroll", &json!({"to": at}));
     }
@@ -2453,6 +2446,22 @@ mod tests {
         }
     }
 
+    fn fade_curves(h: &Harness<SoundApp>, clip_rect: Rect) -> Vec<(egui::epaint::PathShape, Rect)> {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Path(path)
+                    if path.stroke == egui::epaint::PathStroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 90))
+                        && path.points.iter().all(|point| clip_rect.contains(*point)) =>
+                {
+                    Some((path.clone(), shape.clip_rect))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn fade_drag_previews_and_commits_stay_inside_the_clip() {
         for fade_in in [true, false] {
@@ -2473,19 +2482,12 @@ mod tests {
                     h.step();
                     let s = h.state().engine.session();
                     let range = fade_drag_range(&clip, fade_in, sample_at(s, tl, x)).unwrap();
-                    let (points, clip_rect) = h
-                        .output()
-                        .shapes
-                        .iter()
-                        .find_map(|shape| match &shape.shape {
-                            Shape::LineSegment { points, stroke } if stroke.width == 2.0 && stroke.color == Color32::WHITE => {
-                                Some((*points, shape.clip_rect))
-                            }
-                            _ => None,
-                        })
-                        .expect("fade preview missing");
-                    assert_eq!(points[0].x, x_of(s, tl, range.start));
-                    assert_eq!(points[1].x, x_of(s, tl, range.end));
+                    let curves = fade_curves(&h, Rect::from_min_max(pos2(xs, lane.min.y), pos2(xe, lane.max.y)));
+                    assert_eq!(curves.len(), 1, "only one fade curve should be painted");
+                    let (curve, clip_rect) = &curves[0];
+                    let points = &curve.points;
+                    assert_eq!(points.first().unwrap().x, x_of(s, tl, range.start));
+                    assert_eq!(points.last().unwrap().x, x_of(s, tl, range.end));
                     assert!(points.iter().all(|p| p.x >= xs && p.x <= xe && lane.contains(*p)));
                     assert!(clip_rect.min.x >= xs && clip_rect.max.x <= xe);
                     assert_eq!(h.state().engine.session(), &before, "drag must only preview");
@@ -2517,6 +2519,53 @@ mod tests {
                 assert_eq!(h.state().engine.session(), &before);
                 assert!(h.state_mut().engine.redo());
                 assert_eq!(h.state().engine.session(), &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn a_fade_drag_replaces_the_old_curve_and_matches_the_released_curve() {
+        for fade_in in [true, false] {
+            for show_name in [true, false] {
+                let mut h = smart_demo();
+                h.state_mut().engine.execute("view.clip_name", &json!({"value": show_name})).unwrap();
+                h.step();
+                let tl = timeline(&h);
+                let (clip, lane) = clip_on_screen(&h, |xs, xe| xs > tl.min.x + 30.0 && xe < tl.max.x - 100.0 && xe - xs > 100.0);
+                let c = h.state_mut().engine.session_mut().find_clip_mut(clip.id).unwrap();
+                c.fade_in = soundcraft_model::Fade { len: c.length / 8, shape: soundcraft_model::FadeShape::Linear };
+                c.fade_out = soundcraft_model::Fade { len: c.length / 8, shape: soundcraft_model::FadeShape::EqualPower };
+                h.step();
+                let s = h.state().engine.session();
+                let (xs, xe) = (x_of(s, tl, clip.start), x_of(s, tl, clip.end()));
+                let clip_rect = Rect::from_min_max(pos2(xs, lane.min.y), pos2(xe, lane.max.y));
+                let original = fade_curves(&h, clip_rect);
+                assert_eq!(original.len(), 2);
+                let (edited, opposite) = if fade_in { (0, 1) } else { (1, 0) };
+                let before = s.clone();
+                let corner = pos2(if fade_in { xs + 6.0 } else { xe - 6.0 }, lane.min.y + 4.0);
+                start_drag(&mut h, corner);
+                let to = pos2(if fade_in { xs + (xe - xs) * 0.65 } else { xs + (xe - xs) * 0.35 }, corner.y);
+                h.hover_at(to);
+                h.step();
+                let preview = fade_curves(&h, clip_rect);
+                assert_eq!(preview.len(), 2, "one curve per side, without the old curve underneath");
+                assert_ne!(preview[edited], original[edited]);
+                assert_eq!(preview[opposite], original[opposite]);
+                assert_eq!(h.state().engine.session(), &before);
+                assert!(!h.output().shapes.iter().any(|shape| {
+                    matches!(&shape.shape, Shape::LineSegment { points, stroke } if stroke.width == 2.0 && stroke.color == Color32::WHITE && points.iter().all(|p| clip_rect.contains(*p)))
+                }), "the straight preview must be gone");
+                let side = if fade_in { "in" } else { "out" };
+                if show_name {
+                    fade_shot(&mut h, &format!("fade-{side}-curve-dragging"));
+                }
+                h.drop_at(to);
+                h.step();
+                assert_eq!(fade_curves(&h, clip_rect), preview, "curve geometry, thickness and colour must be identical after release");
+                if show_name {
+                    fade_shot(&mut h, &format!("fade-{side}-curve-released"));
+                }
             }
         }
     }
