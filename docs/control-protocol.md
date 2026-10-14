@@ -113,7 +113,9 @@ pans time; vertical scrolling pans pitch with subpixel precision. Notes, hit tes
 velocity stems share the same horizontal viewport. The editor opens with the whole clip visible;
 zoom in to pan through it, and use **Fit** to restore the whole-clip view. Zoom stays between 1×
 and 1024×, time panning stays within the clip, and pitch panning stays within MIDI notes 0–127.
-Gestures in this editor leave the Edit timeline and the session document unchanged.
+Playback follow and centered modes can show blank time before or after the clip. Gestures leave
+the Edit timeline, notes, undo history and session dirty status unchanged; stopped Center Playhead
+panning intentionally changes the separate play-start cue.
 
 With a selected MIDI clip and an open, rendered MIDI editor, agents can also call
 `ui.midi_zoom_at {"factor": 1.25, "anchor_px": 200}`,
@@ -122,6 +124,39 @@ The anchor is measured from the piano roll's left edge; positive pan values move
 toward later ticks and lower pitches. The returned view contains `zoom`, `scroll_ticks` and
 `top_pitch`. MIDI view state persists when the dock is closed/reopened; selecting another clip
 starts with that clip fitted and its notes centred vertically.
+
+### MIDI Editor playback and scrolling
+
+The playback cursor spans the piano roll and Velocity lane and uses the shared transport position,
+converted through the session tempo map into the clip's tick coordinates. `ui.midi_scrolling {}`
+inspects the current choice and effective mode; pass `{"mode":"page"}` to change it. The same
+command backs the MIDI Editor's **Scrolling** menu. It is UI preference state, independent of
+`options.scrolling`, and defaults to `page` for old preferences.
+
+| Mode | Behavior |
+|---|---|
+| `none` | Cursor moves; viewport stays in place. |
+| `after_playback` | Viewport moves to the final playback location after Stop, Pause or natural completion, if offscreen. |
+| `page` | Cursor moves; reaching the right edge advances the viewport by a page. Loop wraps and seeks can return to earlier pages. |
+| `continuous` | Viewport moves past the centered playback cursor. Playback uses the Timeline selection. |
+| `center` | Centered blue cursor (red when recording). While stopped, horizontal panning selects a separate playback cue. |
+| `follow_edit` | Resolves the current `options.scrolling` mode, including changes made during playback. |
+
+Manual horizontal pan/zoom during playback holds automatic follow. Reselecting the scrolling mode,
+starting playback again, or bringing an offscreen cursor back into view resumes follow. Stopped
+Center Playhead pans claim the MIDI Editor's play start; selecting time in the Edit window releases
+that ownership. Transport toolbar buttons preserve it. Normal Play/Space and Half-Speed use the
+cue; explicit `transport.play {"from":...}` and Play Edit take precedence. Loop playback, loop
+recording and punch selections retain their ranges. Recording without a punch selection uses the
+cue. Closing the editor, switching its target clip, or replacing the session releases its ownership.
+
+`transport.set_play_start {"at":...}` sets the session's stopped playhead without replacing its
+Edit or Timeline selection, creating an undo step or adding to the replay journal. Positions use
+the standard formats below and clamp to the supported session-time range. The command alone
+does not seek running playback; use `transport.locate` for that. `ui.inspect.midi_layout` includes
+`scrolling`, `effective_scrolling`, `follow_hold`, `owns_transport`, `play_start` and `playhead_sample`.
+
+**2026-10-14:** Added MIDI playback cursor, six independent scrolling modes and Center Playhead cue control.
 
 - Tracks: id (number) or name (`"Kick"`).
 - Clips: id (from `session.inspect`).

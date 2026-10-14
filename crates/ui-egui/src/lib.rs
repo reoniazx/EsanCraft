@@ -16,6 +16,7 @@ pub mod icons;
 pub mod main_windows;
 pub mod menus;
 pub mod midi_editor;
+pub mod midi_playback;
 pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_host;
@@ -92,6 +93,8 @@ pub struct UiState {
     pub show_audio_health: bool,
     pub show_about: bool,
     pub show_midi_editor: bool,
+    /// Independent scrolling for the MIDI Editor; restored from UI preferences.
+    pub midi_scrolling: midi_playback::MidiScrollingMode,
     pub show_universe: bool,
     pub narrow_mix: bool,
     /// Mix window sections: inserts_ae, inserts_fj, sends_ae, sends_fj, io, comments, eq_curve, color.
@@ -166,6 +169,7 @@ impl Default for UiState {
             show_audio_health: false,
             show_about: false,
             show_midi_editor: false,
+            midi_scrolling: midi_playback::MidiScrollingMode::default(),
             show_universe: false,
             narrow_mix: false,
             mix_views: vec!["inserts_ae".into(), "sends_ae".into(), "io".into(), "color".into()],
@@ -446,8 +450,13 @@ impl SoundApp {
             self.capture_plugin_states();
         }
         let replacing = matches!(id, "session.new" | "session.open" | "session.close" | "session.revert");
+        let selection = (self.engine.session().edit.selection, self.engine.session().edit.timeline_selection);
         match self.engine.execute(id, &params) {
             Ok(v) => {
+                let new_selection = (self.engine.session().edit.selection, self.engine.session().edit.timeline_selection);
+                if selection != new_selection {
+                    midi_playback::release_transport(self);
+                }
                 if replacing || (id.starts_with("session.save") && !self.engine.is_dirty()) {
                     self.release_autosave(false);
                 }
@@ -457,6 +466,13 @@ impl SoundApp {
                 if id == "options.scrolling" {
                     // Re-selecting a scrolling mode resumes the playhead follow.
                     self.edit_layout.follow_hold = false;
+                    if self.ui.midi_scrolling == midi_playback::MidiScrollingMode::FollowEdit {
+                        self.midi.follow.hold = false;
+                        self.midi.follow.effective = Some(midi_playback::effective(self));
+                        if self.midi.follow.effective == Some(midi_playback::MidiScrollingMode::Center) && !self.midi.follow.cue_ready {
+                            midi_playback::initialize_cue(self);
+                        }
+                    }
                 }
                 if id == "track.clear_clip_indicators" {
                     self.meters.values_mut().chain([&mut self.main_meter]).for_each(|m| m.clip = false);
@@ -496,6 +512,7 @@ impl SoundApp {
         }
         self.engine.transport.playing = true;
         self.engine.transport.position = from;
+        midi_playback::playback_started(self);
         self.last_write_at = i64::MIN;
         // A fresh start resumes the playhead follow: clear a manual hold and
         // re-sync the follow tracker so the current view is not mistaken for
@@ -518,6 +535,7 @@ impl SoundApp {
         self.engine.transport.playing = false;
         self.engine.transport.recording = false;
         let stop_at = self.engine.transport.position;
+        midi_playback::playback_stopped(self, stop_at);
         // Snapshot the session flags first: `session_mut` below needs a
         // mutable borrow, so no session borrow may span it.
         let (follow_insertion, after_playback) = {
@@ -590,7 +608,8 @@ impl SoundApp {
             // Record into the selection when there is one (punch), with pre/post-roll if enabled;
             // the take is trimmed back to the punch range afterwards.
             let (pre, post) = if e.pre_post_roll { (e.pre_roll, e.post_roll) } else { (0, 0) };
-            let from = (sel.start - pre).max(0);
+            let start = if sel.is_empty() { midi_playback::play_start(self).unwrap_or(sel.start) } else { sel.start };
+            let from = start.saturating_sub(pre).max(0);
             self.record_start = from;
             self.punch = (!sel.is_empty()).then_some(sel);
             let end = (!sel.is_empty()).then_some(sel.end + post);
@@ -995,13 +1014,16 @@ impl SoundApp {
     /// Play from the selection, honouring loop playback and selection end.
     pub fn play_from_selection(&mut self) {
         let s = self.engine.session();
-        let sel = s.edit.selection;
+        let sel = if s.edit.link_timeline_edit { s.edit.selection } else { s.edit.timeline_selection };
+        let cue = midi_playback::play_start(self);
         let preroll = if s.edit.pre_post_roll { s.edit.pre_roll } else { 0 };
         let postroll = if s.edit.pre_post_roll { s.edit.post_roll } else { 0 };
         if s.edit.loop_playback && !sel.is_empty() {
             self.start_play(sel.start, None, Some(sel));
+        } else if let Some(at) = cue {
+            self.start_play(at.saturating_sub(preroll).max(0), None, None);
         } else if !sel.is_empty() {
-            self.start_play((sel.start - preroll).max(0), Some(sel.end + postroll), None);
+            self.start_play(sel.start.saturating_sub(preroll).max(0), Some(sel.end.saturating_add(postroll)), None);
         } else {
             self.start_play((sel.start - preroll).max(0), None, None);
         }
@@ -1027,6 +1049,7 @@ impl SoundApp {
                     self.touched.clear();
                     self.last_write_at = i64::MIN;
                     self.edit_layout.follow_hold = false;
+                    self.midi = midi_editor::MidiEditorState::default();
                     self.meters.clear();
                     self.main_meter = MeterDisplay::default();
                 }
@@ -1035,6 +1058,7 @@ impl SoundApp {
                         self.play_from_selection();
                     }
                 }
+                TransportRequest::PlayFrom(at) => self.start_play(at, None, None),
                 TransportRequest::Stop | TransportRequest::Pause => self.stop_play(),
                 TransportRequest::TogglePlay => {
                     if self.is_playing() {
@@ -1117,6 +1141,9 @@ impl SoundApp {
                 *pos = l.start;
             }
             let stop = end.is_some_and(|e| *pos >= e);
+            if stop && let Some(end) = end {
+                *pos = *end;
+            }
             self.engine.transport.position = *pos;
             if stop {
                 self.stop_play();
@@ -1156,6 +1183,9 @@ impl SoundApp {
         let dt = self.last_frame.replace(now).map_or(1.0 / 60.0, |t| (now - t) as f32).clamp(0.0, 0.25);
         self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
         control::drain(self, ctx);
+        if !self.ui.show_midi_editor {
+            midi_playback::release_transport(self);
+        }
         // A parked root may not receive another raw-input pass promptly. Apply
         // queued global focus keys now, using the same dispatch as native input.
         // Preserve ordering with synthetic pointer/text gestures ahead of them.

@@ -1,6 +1,7 @@
 //! The MIDI Editor: a piano roll with a velocity lane, docked under the Edit window.
 
 use crate::SoundApp;
+use crate::midi_playback::{self, FollowState, MidiScrollingMode};
 use crate::theme::{Tokens, bold, regular};
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
@@ -25,6 +26,8 @@ pub struct MidiEditorState {
     pub clip: Option<ClipId>,
     /// Rubber-band selection start (screen position).
     pub band: Option<egui::Pos2>,
+    /// Runtime follow/transport ownership is never serialized into a session.
+    pub follow: FollowState,
 }
 
 #[derive(Debug, Clone)]
@@ -71,13 +74,30 @@ pub fn view_command(app: &mut SoundApp, id: &str, p: &serde_json::Value) -> Resu
         return Err("Open the MIDI editor first".into());
     }
     let cid = target_clip(app).ok_or("Select a MIDI clip first")?;
+    let mode = midi_playback::effective(app);
+    let base = app
+        .engine
+        .session()
+        .find_clip(cid)
+        .map(|(_, c)| app.engine.session().tempo.samples_to_ticks(c.start, app.engine.session().sample_rate) as f64)
+        .ok_or("Select a MIDI clip first")?;
+    let max_tick = app.engine.session().tempo.samples_to_ticks_f(soundcraft_time::MAX_POSITION, app.engine.session().sample_rate);
     let m = &mut app.midi;
     let width = f64::from(m.roll[2] - m.roll[0]);
     let height = f64::from(m.roll[3] - m.roll[1]);
-    if m.clip != Some(cid) || width <= 0.0 || height <= 0.0 || m.len_ticks <= 0.0 {
+    if m.clip != Some(cid)
+        || !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || !m.len_ticks.is_finite()
+        || m.len_ticks <= 0.0
+        || !m.zoom.is_finite()
+        || m.zoom < 1.0
+    {
         return Err("Open the MIDI editor first".into());
     }
-    match id {
+    let horizontal = match id {
         "ui.midi_zoom_at" => {
             let factor = finite_param(p, "factor", 1.0)?;
             let anchor = finite_param(p, "anchor_px", width * 0.5)?.clamp(0.0, width);
@@ -87,6 +107,7 @@ pub fn view_command(app: &mut SoundApp, id: &str, p: &serde_json::Value) -> Resu
             let tick = m.scroll_ticks + anchor * m.len_ticks / (width * m.zoom);
             m.zoom = (m.zoom * factor).clamp(1.0, 1024.0);
             m.scroll_ticks = tick - anchor * m.len_ticks / (width * m.zoom);
+            true
         }
         "ui.midi_scroll" => {
             // Validate both axes before changing either one.
@@ -94,15 +115,24 @@ pub fn view_command(app: &mut SoundApp, id: &str, p: &serde_json::Value) -> Resu
             let dy = finite_param(p, "by_y_px", 0.0)?;
             m.scroll_ticks += dx * m.len_ticks / (width * m.zoom);
             m.top_pitch = (m.top_pitch - dy / f64::from(ROW_H)).clamp((height / f64::from(ROW_H) - 1.0).clamp(0.0, 127.0), 127.0);
+            dx != 0.0
         }
         "ui.midi_fit" => {
             m.zoom = 1.0;
             m.scroll_ticks = 0.0;
+            true
         }
         _ => return Err(format!("Unknown MIDI view command `{id}`")),
-    }
-    m.scroll_ticks = m.scroll_ticks.clamp(0.0, (m.len_ticks - m.len_ticks / m.zoom).max(0.0));
-    Ok(json!({"zoom": m.zoom, "scroll_ticks": m.scroll_ticks, "top_pitch": m.top_pitch}))
+    };
+    let span = m.len_ticks / m.zoom;
+    m.scroll_ticks = if mode.centered() {
+        let lower = -base - span * 0.5;
+        m.scroll_ticks.clamp(lower, (max_tick - base - span * 0.5).max(lower))
+    } else {
+        m.scroll_ticks.clamp(0.0, (m.len_ticks - span).max(0.0))
+    };
+    midi_playback::manual_view_changed(app, horizontal);
+    Ok(json!({"zoom": app.midi.zoom, "scroll_ticks": app.midi.scroll_ticks, "top_pitch": app.midi.top_pitch}))
 }
 
 fn trackpad(app: &mut SoundApp, ui: &mut Ui, area: Rect, roll: Rect) {
@@ -129,6 +159,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     ui.take_available_space();
     let t = Tokens::current();
     let full = ui.max_rect();
+    if ui.input(|i| i.pointer.any_pressed()) && ui.rect_contains_pointer(full) {
+        app.midi.follow.owns_transport = true;
+        if midi_playback::effective(app) == MidiScrollingMode::Center && !app.midi.follow.cue_ready {
+            midi_playback::initialize_cue(app);
+        }
+    }
     ui.painter().rect_filled(full, 0.0, t.panel_bg);
     let header = Rect::from_min_size(full.min, vec2(full.width(), 22.0));
     ui.painter().rect_filled(header, 0.0, t.panel_bg2);
@@ -138,6 +174,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let Some(cid) = target_clip(app) else {
         app.midi.roll = [0.0; 4];
         app.midi.velocity = [0.0; 4];
+        midi_playback::release_transport(app);
         let track = {
             let s = app.engine.session();
             s.tracks.iter().find(|t| t.kind.is_midi() && s.edit.selected_tracks.contains(&t.id)).map(|t| (t.id, t.name.clone()))
@@ -161,18 +198,26 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let Some((track, clip)) = app.engine.session().find_clip(cid).map(|(t, c)| (t, c.clone())) else { return };
     let ClipContent::Midi { sequence } = &clip.content else { return };
     let track_color = app.engine.session().track(track).map_or([120, 120, 200], |t| t.color);
-    ui.painter().text(
-        pos2(header.min.x + 110.0, header.center().y),
-        Align2::LEFT_CENTER,
-        format!(
-            "{} · {} notes · {} selected · Pencil: add · drag: move/select · arrows: move · Delete: remove",
-            clip.name,
-            sequence.notes.len(),
-            app.midi.selected.len()
-        ),
-        regular(11.0),
-        t.text_dim,
-    );
+    let controls_w = 545.0_f32.min((header.width() - 110.0).max(0.0));
+    let bar = Rect::from_min_max(pos2(header.max.x - controls_w, header.min.y + 1.0), pos2(header.max.x - 6.0, header.max.y - 1.0));
+    let caption = Rect::from_min_max(pos2(header.min.x + 110.0, header.min.y), pos2(bar.min.x - 6.0, header.max.y));
+    if caption.width() > 8.0 {
+        let mut caption_ui = ui.new_child(egui::UiBuilder::new().max_rect(caption));
+        caption_ui.set_clip_rect(caption.intersect(ui.clip_rect()));
+        caption_ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!(
+                    "{} · {} notes · {} selected · Pencil: add · drag: move/select · arrows: move · Delete: remove",
+                    clip.name,
+                    sequence.notes.len(),
+                    app.midi.selected.len()
+                ))
+                .size(11.0)
+                .color(t.text_dim),
+            )
+            .truncate(),
+        );
+    }
     let grid_ticks = match app.engine.session().edit.grid {
         soundcraft_time::GridValue::Note { value, dotted, triplet } => {
             let mut g = value.ticks();
@@ -187,25 +232,38 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         _ => TICKS_PER_QUARTER / 4,
     };
     // Header toolbar: whole-clip MIDI operations.
-    let bar = Rect::from_min_max(pos2(header.max.x - 370.0, header.min.y + 1.0), pos2(header.max.x - 6.0, header.max.y - 1.0));
-    let mut tb = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    tb.spacing_mut().item_spacing.x = 4.0;
-    if tb.small_button("Fit").on_hover_text("Show the whole MIDI clip").clicked() {
-        let _ = app.run("ui.midi_fit", json!({}));
-    }
+    let mut toolbar = ui.new_child(egui::UiBuilder::new().max_rect(bar));
+    toolbar.set_clip_rect(bar.intersect(ui.clip_rect()));
     let mut op: Option<(&str, serde_json::Value)> = None;
-    if tb.small_button("Legato").clicked() {
-        op = Some(("event.change_duration", json!({"legato": 0})));
-    }
-    if tb.small_button("Vel −10").clicked() {
-        op = Some(("event.change_velocity", json!({"add": -10})));
-    }
-    if tb.small_button("Vel +10").clicked() {
-        op = Some(("event.change_velocity", json!({"add": 10})));
-    }
-    if tb.small_button("Quantize").on_hover_text("Quantize to the grid").clicked() {
-        op = Some(("event.quantize", json!({"grid": grid_ticks, "strength": 100})));
-    }
+    egui::ScrollArea::horizontal().id_salt("midi_toolbar").auto_shrink([false, false]).show(&mut toolbar, |ui| {
+        let mut tb = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        tb.spacing_mut().item_spacing.x = 4.0;
+        if tb.small_button("Fit").on_hover_text("Show the whole MIDI clip").clicked() {
+            let _ = app.run("ui.midi_fit", json!({}));
+        }
+        if tb.small_button("Legato").clicked() {
+            op = Some(("event.change_duration", json!({"legato": 0})));
+        }
+        if tb.small_button("Vel −10").clicked() {
+            op = Some(("event.change_velocity", json!({"add": -10})));
+        }
+        if tb.small_button("Vel +10").clicked() {
+            op = Some(("event.change_velocity", json!({"add": 10})));
+        }
+        if tb.small_button("Quantize").on_hover_text("Quantize to the grid").clicked() {
+            op = Some(("event.quantize", json!({"grid": grid_ticks, "strength": 100})));
+        }
+        tb.menu_button(format!("Scrolling: {}", app.ui.midi_scrolling.label()), |ui| {
+            for mode in MidiScrollingMode::ALL {
+                if ui.selectable_label(app.ui.midi_scrolling == mode, mode.label()).clicked() {
+                    let _ = app.run("ui.midi_scrolling", json!({"mode": mode.id()}));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("MIDI Editor scrolling is independent of the Edit window. Select the current mode again to resume following playback.");
+    });
     if let Some((id, mut p)) = op {
         p["clips"] = json!([cid.0]);
         let _ = app.run(id, p);
@@ -220,6 +278,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     // Vertical range: centre on the notes the first time.
     let rows = (roll.height() / ROW_H).floor() as i32;
     if app.midi.clip != Some(cid) {
+        if app.midi.clip.is_some() {
+            midi_playback::release_transport(app);
+            app.midi.follow.pending_stop = None;
+        }
         let hi = sequence.notes.iter().map(|n| i32::from(n.pitch)).max().unwrap_or(72);
         let lo = sequence.notes.iter().map(|n| i32::from(n.pitch)).min().unwrap_or(48);
         let mid = (hi + lo) / 2;
@@ -234,12 +296,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     app.midi.roll = [roll.min.x, roll.min.y, roll.max.x, roll.max.y];
     app.midi.velocity = [vel.min.x, vel.min.y, vel.max.x, vel.max.y];
     app.midi.len_ticks = len_ticks as f64;
-    app.midi.scroll_ticks = app.midi.scroll_ticks.clamp(0.0, (app.midi.len_ticks - app.midi.len_ticks / app.midi.zoom).max(0.0));
     app.midi.top_pitch = app.midi.top_pitch.clamp((f64::from(roll.height() / ROW_H) - 1.0).clamp(0.0, 127.0), 127.0);
     if roll.width() <= 0.0 || roll.height() <= 0.0 {
         return;
     }
     trackpad(app, ui, full, roll);
+    midi_playback::update_view(app, base_tick as f64);
     let top = app.midi.top_pitch;
     let scroll = app.midi.scroll_ticks;
     let px_per_tick = f64::from(roll.width()) * app.midi.zoom / len_ticks as f64;
@@ -471,5 +533,14 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     {
         let v = (((vel.max.y - 2.0 - p.y) / (vel.height() - 4.0)) * 127.0).round().clamp(1.0, 127.0) as i64;
         let _ = app.engine.execute_merged("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}), &format!("vel:{}", cid.0));
+    }
+    // Paint last, over notes and controllers, without claiming pointer or keyboard input.
+    let at = s.tempo.samples_to_ticks_f(midi_playback::display_position(app), sr) - base_tick as f64;
+    let x = roll.min.x + ((at - scroll) * px_per_tick) as f32;
+    if x.is_finite() && x >= roll.min.x && x <= roll.max.x {
+        let color = if midi_playback::effective(app) == MidiScrollingMode::Center && !app.engine.transport.recording { t.accent } else { t.playhead };
+        ui.painter()
+            .with_clip_rect(roll.union(vel).intersect(ui.clip_rect()))
+            .line_segment([pos2(x, roll.min.y), pos2(x, vel.max.y)], Stroke::new(1.5, color));
     }
 }
