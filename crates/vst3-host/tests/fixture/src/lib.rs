@@ -9,7 +9,8 @@
 //!   320×240, no real drawing) supporting NSView/HWND/X11.
 //! - "Fixture Synth" (`Instrument|Synth`): a single-component instrument (the component is also
 //!   its edit controller). No audio input, one stereo output, one event input; every output
-//!   sample is the velocity of the held note (sample-accurate), 0 when none.
+//!   sample is the velocity of the held note (sample-accurate), 0 when none. Poly pressure, and
+//!   MIDI CC 7 through `IMidiMapping` (hidden parameter 1), set it to their value too.
 //!
 //! The module checks the host's module lifecycle the way real plugins depend on it (see "module
 //! lifecycle" below) and aborts the process when it is broken.
@@ -52,7 +53,7 @@ fn audio_bus(bus: *mut BusInfo, dir: BusDirection, name: &str) {
     b.channelCount = 2;
     copy_c16(name, &mut b.name);
     b.busType = BusTypes_::kMain as BusType;
-    b.flags = BusInfo_::BusFlags_::kDefaultActive;
+    b.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
 }
 
 unsafe fn channels<'a>(bus: &AudioBusBuffers, frames: usize) -> Vec<&'a mut [f32]> {
@@ -417,7 +418,21 @@ struct Synth {
 }
 
 impl Class for Synth {
-    type Interfaces = (IComponent, IAudioProcessor, IEditController);
+    type Interfaces = (IComponent, IAudioProcessor, IEditController, IMidiMapping);
+}
+
+/// The synth's hidden parameter that MIDI CC 7 drives.
+const VOLUME_PARAM: ParamID = 1;
+
+impl IMidiMappingTrait for Synth {
+    unsafe fn getMidiControllerAssignment(&self, bus: i32, channel: i16, ctrl: CtrlNumber, id: *mut ParamID) -> tresult {
+        if bus == 0 && channel == 0 && ctrl == 7 {
+            unsafe { *id = VOLUME_PARAM };
+            kResultOk
+        } else {
+            kResultFalse
+        }
+    }
 }
 
 impl IPluginBaseTrait for Synth {
@@ -461,7 +476,7 @@ impl IComponentTrait for Synth {
             b.channelCount = 16;
             copy_c16("Notes", &mut b.name);
             b.busType = BusTypes_::kMain as BusType;
-            b.flags = BusInfo_::BusFlags_::kDefaultActive;
+            b.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
             return kResultOk;
         }
         kInvalidArgument
@@ -521,6 +536,16 @@ impl IAudioProcessorTrait for Synth {
                 }
             }
         }
+        let mut volume = None;
+        if let Some(changes) = unsafe { ComRef::from_raw(d.inputParameterChanges) } {
+            for i in 0..unsafe { changes.getParameterCount() } {
+                let Some(q) = (unsafe { ComRef::from_raw(changes.getParameterData(i)) }) else { continue };
+                let (mut at, mut v) = (0i32, 0f64);
+                if unsafe { q.getParameterId() } == VOLUME_PARAM && unsafe { q.getPoint(0, &mut at, &mut v) } == kResultOk {
+                    volume = Some((at.max(0) as usize, v as f32));
+                }
+            }
+        }
         let outs = unsafe { channels(&*d.outputs, frames) };
         let mut level = f32::from_bits(self.level.load(Ordering::Relaxed));
         let mut out = vec![0.0f32; frames];
@@ -530,7 +555,14 @@ impl IAudioProcessorTrait for Synth {
                     level = unsafe { e.__field0.noteOn.velocity };
                 } else if e.r#type == Event_::EventTypes_::kNoteOffEvent as u16 {
                     level = 0.0;
+                } else if e.r#type == Event_::EventTypes_::kPolyPressureEvent as u16 {
+                    level = unsafe { e.__field0.polyPressure.pressure };
                 }
+            }
+            if let Some((at, v)) = volume
+                && at == i
+            {
+                level = v;
             }
             *o = level;
         }

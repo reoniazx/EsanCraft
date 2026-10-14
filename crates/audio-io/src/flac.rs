@@ -1,9 +1,10 @@
 //! A small pure-Rust FLAC encoder (RFC 9639): fixed blocksize, independent channels, and per
 //! subframe the cheapest of CONSTANT, VERBATIM or FIXED (orders 0–4) prediction with
-//! partitioned Rice-coded residuals.
+//! partitioned Rice-coded residuals. Decoding is symphonia's, after [`check_metadata`].
 
-use crate::pcm::{Quantizer, validate_buffer};
+use crate::pcm::{Quantizer, be_u32, le_u32, validate_buffer};
 use crate::{AudioBuffer, AudioError, BitDepth, Result};
+use std::io::{Cursor, Seek, SeekFrom, Write};
 
 const BLOCK_SIZE: usize = 4096;
 const MAX_PARTITION_ORDER: u32 = 6;
@@ -269,31 +270,24 @@ fn write_subframe(w: &mut BitWriter, x: &[i64], bps: u32) {
     }
 }
 
-pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result<Vec<u8>> {
-    validate_buffer(buf)?;
-    let channels = buf.channels.len();
+/// Checks that FLAC can hold the layout; returns the bits per sample.
+fn check(channels: usize, sample_rate: u32, depth: BitDepth) -> Result<u32> {
+    crate::pcm::validate_layout(channels, sample_rate)?;
     if channels > 8 {
         return Err(AudioError::Unsupported(format!("FLAC supports at most 8 channels, got {channels}")));
     }
-    if buf.sample_rate > 655_350 {
-        return Err(AudioError::Unsupported(format!("FLAC sample rate {} exceeds 655350 Hz", buf.sample_rate)));
+    if sample_rate > 655_350 {
+        return Err(AudioError::Unsupported(format!("FLAC sample rate {sample_rate} exceeds 655350 Hz")));
     }
-    let bps: u32 = match depth {
-        BitDepth::Int16 => 16,
-        BitDepth::Int24 => 24,
-        BitDepth::Int32 => 32,
-        BitDepth::Float32 => return Err(AudioError::Unsupported("FLAC cannot store 32-bit float samples".into())),
-    };
-    let frames = buf.frames();
-    let total = frames as u64;
-    if total >= 1u64 << 36 {
-        return Err(AudioError::TooLarge("too many frames for FLAC".into()));
+    match depth {
+        BitDepth::Int16 => Ok(16),
+        BitDepth::Int24 => Ok(24),
+        BitDepth::Int32 => Ok(32),
+        BitDepth::Float32 => Err(AudioError::Unsupported("FLAC cannot store 32-bit float samples".into())),
     }
+}
 
-    let mut out = Vec::new();
-    out.try_reserve(frames.saturating_mul(channels).saturating_mul(bps as usize / 8) / 2)
-        .map_err(|_| AudioError::TooLarge("cannot allocate FLAC output".into()))?;
-    out.extend_from_slice(b"fLaC");
+fn stream_info(channels: usize, sample_rate: u32, bps: u32, total: u64) -> Vec<u8> {
     let mut si = BitWriter::new();
     si.write(1, 1); // last metadata block
     si.write(0, 7); // STREAMINFO
@@ -302,7 +296,7 @@ pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result
     si.write(BLOCK_SIZE as u64, 16);
     si.write(0, 24);
     si.write(0, 24);
-    si.write(u64::from(buf.sample_rate), 20);
+    si.write(u64::from(sample_rate), 20);
     si.write(channels as u64 - 1, 3);
     si.write(u64::from(bps - 1), 5);
     si.write(total >> 32, 4);
@@ -310,25 +304,87 @@ pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result
     for _ in 0..4 {
         si.write(0, 32); // MD5 unknown
     }
-    out.extend_from_slice(&si.into_bytes());
+    si.into_bytes()
+}
 
-    let (sr_code, sr_extra) = sample_rate_code(buf.sample_rate);
-    let mut quantizers = Quantizer::per_channel(bps, dither, channels);
-    let mut block: Vec<i64> = Vec::with_capacity(BLOCK_SIZE);
-    let mut frame_no: u64 = 0;
-    let mut start = 0usize;
-    while start < frames {
-        let len = (frames - start).min(BLOCK_SIZE);
+/// A FLAC stream written block by block; [`Writer::finish`] fills in the total sample count.
+pub(crate) struct Writer<W> {
+    out: W,
+    start: u64,
+    channels: usize,
+    sample_rate: u32,
+    bps: u32,
+    quantizers: Vec<Quantizer>,
+    pending: Vec<Vec<i64>>,
+    frames: u64,
+    frame_no: u64,
+}
+
+impl<W: Write + Seek> Writer<W> {
+    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, depth: BitDepth, dither: bool) -> Result<Self> {
+        let bps = check(channels, sample_rate, depth)?;
+        let start = out.stream_position()?;
+        out.write_all(b"fLaC")?;
+        out.write_all(&stream_info(channels, sample_rate, bps, 0))?;
+        Ok(Writer {
+            out,
+            start,
+            channels,
+            sample_rate,
+            bps,
+            quantizers: Quantizer::per_channel(bps, dither, channels),
+            pending: (0..channels).map(|_| Vec::with_capacity(BLOCK_SIZE)).collect(),
+            frames: 0,
+            frame_no: 0,
+        })
+    }
+
+    /// The frame count after `frames` more, or an error past what FLAC can count (2^36 frames).
+    pub(crate) fn check_room(&self, frames: u64) -> Result<u64> {
+        let total = self.frames.saturating_add(frames);
+        if total >= 1u64 << 36 {
+            return Err(AudioError::TooLarge("too many frames for FLAC".into()));
+        }
+        Ok(total)
+    }
+
+    /// Appends `frames` frames of planar audio (missing samples are silence), unless they don't
+    /// fit (see [`Writer::check_room`]).
+    pub(crate) fn write(&mut self, block: &[Vec<f32>], frames: usize) -> Result<()> {
+        let total = self.check_room(frames as u64)?;
+        let mut done = 0;
+        while done < frames {
+            let held = self.pending.first().map_or(0, Vec::len);
+            let n = (BLOCK_SIZE - held).min(frames - done);
+            for (c, (p, q)) in self.pending.iter_mut().zip(self.quantizers.iter_mut()).enumerate() {
+                let src = block.get(c).and_then(|ch| ch.get(done..)).unwrap_or_default();
+                p.extend((0..n).map(|i| i64::from(q.quantize(src.get(i).copied().unwrap_or(0.0)))));
+            }
+            done += n;
+            if held + n == BLOCK_SIZE {
+                self.write_frame()?;
+            }
+        }
+        self.frames = total;
+        Ok(())
+    }
+
+    fn write_frame(&mut self) -> Result<()> {
+        let len = self.pending.first().map_or(0, Vec::len);
+        if len == 0 {
+            return Ok(());
+        }
+        let (sr_code, sr_extra) = sample_rate_code(self.sample_rate);
         let mut w = BitWriter::new();
         w.write(0x3FFE, 14);
         w.write(0, 1);
         w.write(0, 1); // fixed blocksize stream
         w.write(7, 4); // 16-bit (blocksize-1) follows
         w.write(sr_code, 4);
-        w.write(channels as u64 - 1, 4);
-        w.write(bps_code(bps), 3);
+        w.write(self.channels as u64 - 1, 4);
+        w.write(bps_code(self.bps), 3);
         w.write(0, 1);
-        write_utf8_number(&mut w, frame_no);
+        write_utf8_number(&mut w, self.frame_no);
         w.write(len as u64 - 1, 16);
         if let Some((v, n)) = sr_extra {
             w.write(v, n);
@@ -339,19 +395,87 @@ pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result
             w.write(u64::from(b), 8);
         }
         w.write(u64::from(crc8(&header)), 8);
-        for (ch, q) in buf.channels.iter().zip(quantizers.iter_mut()) {
-            block.clear();
-            block.extend(ch.get(start..start + len).unwrap_or_default().iter().map(|&s| i64::from(q.quantize(s))));
-            write_subframe(&mut w, &block, bps);
+        for p in &mut self.pending {
+            write_subframe(&mut w, p, self.bps);
+            p.clear();
         }
         let mut frame = w.into_bytes();
         let crc = crc16(&frame);
         frame.extend_from_slice(&crc.to_be_bytes());
-        out.extend_from_slice(&frame);
-        start += len;
-        frame_no += 1;
+        self.out.write_all(&frame)?;
+        self.frame_no += 1;
+        Ok(())
     }
-    Ok(out)
+
+    pub(crate) fn finish(mut self) -> Result<W> {
+        self.write_frame()?;
+        let info = stream_info(self.channels, self.sample_rate, self.bps, self.frames);
+        self.out.seek(SeekFrom::Start(self.start.saturating_add(4)))?;
+        self.out.write_all(&info)?;
+        self.out.seek(SeekFrom::End(0))?;
+        self.out.flush()?;
+        Ok(self.out)
+    }
+}
+
+pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result<Vec<u8>> {
+    validate_buffer(buf)?;
+    let bps = check(buf.channels.len(), buf.sample_rate, depth)?;
+    let frames = buf.frames();
+    let mut out = Vec::new();
+    out.try_reserve(frames.saturating_mul(buf.channels.len()).saturating_mul(bps as usize / 8) / 2)
+        .map_err(|_| AudioError::TooLarge("cannot allocate FLAC output".into()))?;
+    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither)?;
+    w.write(&buf.channels, frames)?;
+    Ok(w.finish()?.into_inner())
+}
+
+/// Refuse the FLAC stream at `at` if a comment or picture field claims more bytes than its
+/// metadata block holds: symphonia allocates each field's length before reading it.
+pub(crate) fn check_metadata(b: &[u8], at: usize) -> Result<()> {
+    let mut pos = at + 4;
+    while let Some(head) = be_u32(b, pos) {
+        let (body, len) = (pos + 4, (head & 0x00ff_ffff) as usize);
+        let end = (body + len).min(b.len());
+        let overruns = match (head >> 24) & 0x7f {
+            4 => comments_overrun(b, body, end),
+            // Picture: type, MIME type, description, four size fields, data.
+            6 => overruns(b, body + 4, end, be_u32, [0, 0, 16]),
+            _ => false,
+        };
+        if overruns {
+            return Err(AudioError::Malformed("a FLAC metadata field is larger than its block".into()));
+        }
+        if head >> 31 == 1 {
+            break;
+        }
+        pos = body + len;
+    }
+    Ok(())
+}
+
+/// Whether a comment in a (little-endian) Vorbis comment block claims more than the block holds.
+/// The vendor string is skipped unread.
+fn comments_overrun(b: &[u8], body: usize, end: usize) -> bool {
+    let Some(vendor) = le_u32(b, body) else { return false };
+    let at = (body + 4).saturating_add(vendor as usize);
+    let Some(count) = le_u32(b, at).filter(|_| at.saturating_add(4) <= end) else { return false };
+    overruns(b, at + 4, end, le_u32, std::iter::repeat_n(0, count as usize))
+}
+
+/// Whether one of the length-prefixed fields from `at` claims more than `end` leaves; `gaps` are
+/// the bytes skipped before each length, which `read` reads.
+fn overruns(b: &[u8], mut at: usize, end: usize, read: fn(&[u8], usize) -> Option<u32>, gaps: impl IntoIterator<Item = usize>) -> bool {
+    for gap in gaps {
+        at = at.saturating_add(gap);
+        let Some(n) = read(b, at).filter(|_| at.saturating_add(4) <= end) else { return false };
+        at += 4;
+        if n as usize > end - at {
+            return true;
+        }
+        at += n as usize;
+    }
+    false
 }
 
 #[cfg(test)]

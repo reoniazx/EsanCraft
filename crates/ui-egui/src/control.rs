@@ -109,8 +109,13 @@ fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Opti
                 Ok(v) => v,
                 Err(e) => return Some(err(e)),
             };
+            // Same predicate as the engine's `engine.commands`: id or label substring, ASCII case-insensitive.
+            let filter = p.get("filter").and_then(Value::as_str).map(str::to_ascii_lowercase);
+            let matches = |id: &str, label: &str| {
+                filter.as_deref().is_none_or(|f| id.to_ascii_lowercase().contains(f) || label.to_ascii_lowercase().contains(f))
+            };
             if let Some(arr) = list.as_array_mut() {
-                for (id, label, path, sc) in crate::menus::UI_COMMANDS {
+                for (id, label, path, sc) in crate::menus::UI_COMMANDS.iter().filter(|c| matches(c.0, c.1)) {
                     let params = match *id {
                         "ui.midi_scroll" => "{by_px?: 0, by_y_px?: 0} — pan time/pitch in window points",
                         "ui.midi_zoom_at" => "{factor?: 1, anchor_px?: centre} — zoom around the anchor measured from the piano roll's left edge",

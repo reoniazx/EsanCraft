@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "midi.new_clip",
             "New MIDI Clip",
-            [],
+            ["Clip"],
             None,
             "{track, start?, end?|length?} (default: the edit selection, or 1 bar)",
             has_tracks,
@@ -24,10 +24,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("midi.note_delete", "Delete Notes", [], None, "{clip, indices: [n]}", always, note_delete),
         cmd!("midi.notes_move", "Move Notes", [], None, "{clip, indices: [n], ticks?: 0, semitones?: 0}", always, notes_move),
     ]
-}
-
-fn clip_id(p: &Value, cmd: &str) -> Result<ClipId> {
-    p.get("clip").and_then(Value::as_u64).map(ClipId).ok_or_else(|| bad(cmd, "`clip` id required"))
 }
 
 fn seq_mut<'a>(e: &'a mut Engine, id: ClipId, cmd: &str) -> Result<&'a mut Sequence> {

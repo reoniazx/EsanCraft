@@ -3,6 +3,7 @@
 use serde_json::json;
 use soundcraft_engine::{Engine, io};
 use soundcraft_ui_egui::dialogs::Dialog;
+use soundcraft_ui_egui::sampler_window::SampleRead;
 use soundcraft_ui_egui::{Services, SoundApp};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -41,7 +42,7 @@ pub fn start() {
                     let engine = if query().contains("empty") { Engine::default() } else { soundcraft_engine::demo::demo_engine() };
                     let player = soundcraft_playback::Player::new(Arc::new(engine.session().clone()));
                     let app = SoundApp::new(engine, Some(player), Services::default());
-                    Ok(Box::new(WebShell { app, inbox: Rc::default() }))
+                    Ok(Box::new(WebShell { app, inbox: Rc::default(), samples: Rc::default() }))
                 }),
             )
             .await;
@@ -67,7 +68,8 @@ enum Purpose {
 }
 
 const SESSION_EXTS: &[&str] = &[io::BUNDLE_EXTENSION, soundcraft_model::SESSION_EXTENSION];
-const AUDIO_EXTS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf", "mkv", "webm"];
+const AUDIO_EXTS: &[&str] =
+    &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "m4b", "aac", "mp4", "caf", "mkv", "webm"];
 const MIDI_EXTS: &[&str] = &["mid", "midi", "smf"];
 
 impl Purpose {
@@ -106,9 +108,14 @@ impl Purpose {
 /// handled on the next frame. The browser has no paths: files travel as bytes.
 type Inbox = Rc<RefCell<Vec<(Purpose, String, Vec<u8>)>>>;
 
+/// Audio dropped on an instrument track or a Sampler window, its bytes read, waiting for the
+/// next frame to load into that track's sampler.
+type SampleInbox = Rc<RefCell<Vec<(SampleRead, Result<Vec<u8>, String>)>>>;
+
 struct WebShell {
     app: SoundApp,
     inbox: Inbox,
+    samples: SampleInbox,
 }
 
 impl WebShell {
@@ -133,7 +140,17 @@ impl WebShell {
 
     fn take_drops(&mut self, ctx: &egui::Context) {
         // In the browser a dropped file's `path()` is only its name: read its bytes instead.
-        let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+        // Audio dropped on an instrument track or a Sampler window goes to its sampler instead.
+        let dropped = self.app.take_dropped_files(ctx);
+        ctx.input_mut(|i| i.raw.dropped_files.clear());
+        for read in self.app.take_sample_reads() {
+            let (samples, ctx) = (self.samples.clone(), ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                let bytes = read.file.bytes_async().await;
+                samples.borrow_mut().push((read, bytes));
+                ctx.request_repaint();
+            });
+        }
         for f in dropped {
             let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Audio.wav".into());
             let (inbox, ctx) = (self.inbox.clone(), ctx.clone());
@@ -150,6 +167,9 @@ impl WebShell {
     }
 
     fn handle(&mut self, purpose: Purpose, name: &str, bytes: &[u8]) {
+        if matches!(purpose, Purpose::Session) && soundcraft_ui_egui::bounce::refuses_session_switch(&mut self.app) {
+            return;
+        }
         let e = &mut self.app.engine;
         let at = e.session().edit.selection.start.max(0);
         let result = match purpose {
@@ -186,6 +206,10 @@ impl eframe::App for WebShell {
         let pending = std::mem::take(&mut *self.inbox.borrow_mut());
         for (purpose, name, bytes) in pending {
             self.handle(purpose, &name, &bytes);
+        }
+        let samples = std::mem::take(&mut *self.samples.borrow_mut());
+        for (read, bytes) in samples {
+            self.app.load_sample_bytes(&read, bytes);
         }
         self.app.logic(ctx);
         // A prompt opened during this frame becomes a picker on the next one.

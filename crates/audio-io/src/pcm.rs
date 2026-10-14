@@ -1,7 +1,8 @@
 //! Byte-level PCM helpers shared by the WAV, AIFF and FLAC code: bounded readers, sample
 //! decoding to `f32`, and quantization (with optional TPDF dither) for encoding.
 
-use crate::{AudioError, Result};
+use crate::{AudioError, BitDepth, Result};
+use std::io::Write;
 
 /// Maximum number of decoded `f32` samples (all channels) we will produce: 4 GiB of output.
 pub(crate) const MAX_DECODE_SAMPLES: u64 = (4u64 << 30) / 4;
@@ -34,6 +35,12 @@ pub(crate) fn be_u16(b: &[u8], pos: usize) -> Option<u16> {
 pub(crate) fn be_u32(b: &[u8], pos: usize) -> Option<u32> {
     let s: [u8; 4] = b.get(pos..pos.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_be_bytes(s))
+}
+
+/// Big-endian `u64` at `pos`.
+pub(crate) fn be_u64(b: &[u8], pos: usize) -> Option<u64> {
+    let s: [u8; 8] = b.get(pos..pos.checked_add(8)?)?.try_into().ok()?;
+    Some(u64::from_be_bytes(s))
 }
 
 /// Four-byte tag at `pos`.
@@ -156,6 +163,49 @@ impl Quantizer {
     }
 }
 
+/// Bits per sample at `depth`, and whether they are float.
+pub(crate) fn sample_format(depth: BitDepth) -> (u16, bool) {
+    match depth {
+        BitDepth::Int16 => (16, false),
+        BitDepth::Int24 => (24, false),
+        BitDepth::Int32 => (32, false),
+        BitDepth::Float32 => (32, true),
+    }
+}
+
+/// Interleaves `frames` frames of planar audio (missing samples are silence) as `bits`-bit
+/// samples and writes them to `out`, a few thousand frames at a time through `scratch`.
+pub(crate) fn write_interleaved(
+    out: &mut impl Write,
+    scratch: &mut Vec<u8>,
+    block: &[Vec<f32>],
+    frames: usize,
+    quantizers: &mut [Quantizer],
+    (bits, is_float): (u16, bool),
+    big_endian: bool,
+) -> std::io::Result<()> {
+    let size = usize::from(bits / 8);
+    let mut start = 0;
+    while start < frames {
+        let end = frames.min(start + 4096);
+        scratch.clear();
+        for f in start..end {
+            for (c, q) in quantizers.iter_mut().enumerate() {
+                let s = block.get(c).and_then(|ch| ch.get(f)).copied().unwrap_or(0.0);
+                match (is_float, big_endian) {
+                    (true, false) => scratch.extend_from_slice(&clamp_float(s).to_le_bytes()),
+                    (true, true) => scratch.extend_from_slice(&clamp_float(s).to_be_bytes()),
+                    (false, false) => scratch.extend_from_slice(q.quantize(s).to_le_bytes().get(..size).unwrap_or_default()),
+                    (false, true) => scratch.extend_from_slice(q.quantize(s).to_be_bytes().get(4 - size..).unwrap_or_default()),
+                }
+            }
+        }
+        out.write_all(scratch)?;
+        start = end;
+    }
+    Ok(())
+}
+
 /// Clamp a float sample to [-1, 1], mapping NaN to 0.
 pub(crate) fn clamp_float(x: f32) -> f32 {
     if x.is_nan() { 0.0 } else { x.clamp(-1.0, 1.0) }
@@ -163,13 +213,18 @@ pub(crate) fn clamp_float(x: f32) -> f32 {
 
 /// Check that a buffer is encodable: at least one channel and a non-zero sample rate.
 pub(crate) fn validate_buffer(buf: &crate::AudioBuffer) -> Result<()> {
-    if buf.channels.is_empty() {
+    validate_layout(buf.channels.len(), buf.sample_rate)
+}
+
+/// Check that a stream is encodable: at least one channel and a non-zero sample rate.
+pub(crate) fn validate_layout(channels: usize, sample_rate: u32) -> Result<()> {
+    if channels == 0 {
         return Err(AudioError::Encode("buffer has no channels".into()));
     }
-    if buf.channels.len() > usize::from(u16::MAX) {
+    if channels > usize::from(u16::MAX) {
         return Err(AudioError::Encode("too many channels".into()));
     }
-    if buf.sample_rate == 0 {
+    if sample_rate == 0 {
         return Err(AudioError::Encode("sample rate is 0".into()));
     }
     Ok(())

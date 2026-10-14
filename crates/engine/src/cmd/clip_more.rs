@@ -101,12 +101,13 @@ fn regroup(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn same_material(a: &Clip, b: &Clip) -> bool {
     a.length == b.length
-        && match (&a.content, &b.content) {
-            (ClipContent::Audio { source: s1, offset: o1 }, ClipContent::Audio { source: s2, offset: o2 }) => s1 == s2 && o1 == o2,
-            (ClipContent::Midi { sequence: q1 }, ClipContent::Midi { sequence: q2 }) => q1 == q2,
-            (ClipContent::Video { source: s1, offset: o1 }, ClipContent::Video { source: s2, offset: o2 }) => s1 == s2 && o1 == o2,
-            _ => false,
-        }
+        && (a.loop_id.is_some() && a.loop_id == b.loop_id
+            || match (&a.content, &b.content) {
+                (ClipContent::Audio { source: s1, offset: o1 }, ClipContent::Audio { source: s2, offset: o2 }) => s1 == s2 && o1 == o2,
+                (ClipContent::Midi { sequence: q1 }, ClipContent::Midi { sequence: q2 }) => q1 == q2,
+                (ClipContent::Video { source: s1, offset: o1 }, ClipContent::Video { source: s2, offset: o2 }) => s1 == s2 && o1 == o2,
+                _ => false,
+            })
 }
 
 /// The loop a clip belongs to: back-to-back copies of the same material. Origin first.
@@ -160,6 +161,7 @@ fn unloop(e: &mut Engine, p: &Value) -> Result<Value> {
             } else {
                 for c in pl.clips.iter_mut().filter(|c| chain.contains(&c.id)) {
                     c.group = None;
+                    c.loop_id = None;
                 }
             }
         }
@@ -204,7 +206,7 @@ fn effects_render(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let mut n = 0;
     for id in &ids {
-        if crate::io::render_clip_gain(e, *id)? {
+        if crate::io::render_clip_gain(e, "clip.effects_render", *id)? {
             n += 1;
         }
         let s = e.session_mut();
@@ -302,6 +304,42 @@ mod tests {
         let left: Vec<ClipId> = e.session().track(t).unwrap().clips().iter().map(|c| c.id).collect();
         assert_eq!(left, vec![ids[0], ids[3]]);
         assert!(e.execute("clip.unloop", &json!({"clip": ids[3].0})).is_err());
+    }
+
+    /// A 100-sample MIDI clip with one note, on a fresh instrument-less MIDI track.
+    fn midi_engine() -> (Engine, TrackId, ClipId) {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Midi, ChannelFormat::Mono, None);
+        let id = s.new_clip_id();
+        let mut seq = soundcraft_midi::Sequence::default();
+        seq.notes.push(soundcraft_midi::Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start: 0, length: 240 });
+        crate::edit::place_clip(&mut s, t, Clip::midi(id, "m", 0, 100, seq));
+        s.edit.selected_tracks = vec![t];
+        (Engine::new(s), t, id)
+    }
+
+    #[test]
+    fn unloop_recognises_loops_after_source_edit() {
+        let (mut e, t, id) = midi_engine();
+        assert_eq!(e.execute("clip.loop", &json!({"clip": id.0, "count": 4})).unwrap()["loops"], 3);
+        // Editing the source note makes the copies' content differ from it.
+        if let Some(c) = e.session_mut().find_clip_mut(id)
+            && let ClipContent::Midi { sequence } = &mut c.content
+        {
+            sequence.notes[0].length = 1100;
+        }
+        e.execute("clip.unloop", &json!({"clip": id.0})).unwrap();
+        let left: Vec<ClipId> = e.session().track(t).unwrap().clips().iter().map(|c| c.id).collect();
+        assert_eq!(left, vec![id]);
+    }
+
+    #[test]
+    fn unloop_flatten_turns_loop_into_independent_clips() {
+        let (mut e, t, id) = midi_engine();
+        e.execute("clip.loop", &json!({"clip": id.0, "count": 3})).unwrap();
+        e.execute("clip.unloop", &json!({"clip": id.0, "mode": "flatten"})).unwrap();
+        assert_eq!(e.session().track(t).unwrap().clips().len(), 3);
+        assert!(e.session().track(t).unwrap().clips().iter().all(|c| c.loop_id.is_none() && c.group.is_none()));
     }
 
     #[test]

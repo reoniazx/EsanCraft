@@ -70,6 +70,17 @@ fn clap_insert_renders_through_the_mix() {
 }
 
 #[test]
+fn a_refused_state_is_reported() {
+    install_fixture();
+    let gain = "clap:org.soundcraft.test.gain";
+    let make = |state: Option<&[u8]>| soundcraft_mix::create_instance(gain, state, 48_000.0, 512, 2).unwrap();
+    let saved = make(None).plugin.save_state().unwrap();
+    assert!(!make(None).refused_state);
+    assert!(!make(Some(&saved)).refused_state);
+    assert!(make(Some(&[0xff; 16])).refused_state, "NaN gain");
+}
+
+#[test]
 fn clap_state_is_captured_stored_and_restored_before_the_first_block() {
     install_fixture();
     let gain = "clap:org.soundcraft.test.gain";
@@ -88,17 +99,15 @@ fn clap_state_is_captured_stored_and_restored_before_the_first_block() {
     eng.set_external_instances(true);
     let specs = soundcraft_mix::instance_specs(e.session());
     assert_eq!(specs.len(), 1);
-    let mut p = soundcraft_mix::create_instance(&specs[0].id, None, 48_000.0, 512, specs[0].ch).unwrap();
+    let mut p = soundcraft_mix::create_instance(&specs[0].id, None, 48_000.0, 512, specs[0].ch).unwrap().plugin;
     p.set_param("7", 1.5);
     let mut io = vec![vec![0.0f32; 64]];
     p.process(&mut io, 64);
+    let mut reader = p.state_reader().unwrap();
     eng.adopt(vec![soundcraft_mix::PreparedInstance { track: t, slot: 0, id: gain.into(), ch: 1, plugin: p }]);
     eng.ensure_synced(e.session());
-    let states = eng.capture_states();
-    assert_eq!(states.len(), 1);
-    let (tt, slot, blob) = &states[0];
-    assert_eq!((*tt, *slot), (t, 0));
-    e.execute("mix.insert_state", &json!({"track": t.0, "slot": slot, "state": soundcraft_model::b64::encode(blob)})).unwrap();
+    let blob = reader.save_state().unwrap();
+    e.execute("mix.insert_state", &json!({"track": t.0, "slot": 0, "state": soundcraft_model::b64::encode(&blob)})).unwrap();
     assert_eq!(eng.take_retired().len(), 0);
 
     // Offline render (synchronous creation): the state is restored before the first block.

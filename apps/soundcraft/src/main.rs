@@ -49,14 +49,15 @@ impl eframe::App for App {
             menu.process(&mut app);
         }
         let closing_view = app.ui.both_windows && ctx.input(|i| i.viewport().close_requested());
-        app.logic(ctx);
+        app.guarded(|app| app.logic(ctx));
         #[cfg(target_os = "macos")]
         if let Some(menu) = &mut self.2 {
             menu.sync(&app);
         }
-        // Files dropped on the window: sessions open, audio/MIDI import.
+        // Files dropped on the window: audio on an instrument track or a Sampler window loads
+        // the sampler; otherwise sessions open and audio/MIDI import.
         let dropped: Vec<String> =
-            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().into_owned()).filter(|s| !s.is_empty()).collect());
+            app.take_dropped_files(ctx).iter().map(|f| f.path().to_string_lossy().into_owned()).filter(|s| !s.is_empty()).collect();
         for p in dropped {
             open_path(&mut app, &p);
         }
@@ -73,7 +74,11 @@ impl eframe::App for App {
             app.ui.window_size = (r.size() * ctx.zoom_factor()).round().into();
         }
         app.ui.ui_scale = app.extra.ui_scale;
-        let title = soundcraft_ui_egui::main_windows::title(&app, app.main_windows.primary(&app));
+        if app.take_recent_changed() {
+            save_prefs(&app.ui);
+        }
+        let primary = if app.ui.mix_separate { soundcraft_ui_egui::MainWindow::Edit } else { app.main_windows.primary(&app) };
+        let title = soundcraft_ui_egui::main_windows::title(&app, primary);
         set_title(ctx, title);
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -84,6 +89,7 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         if let Ok(mut app) = self.0.state.try_borrow_mut() {
+            app.close_autosave();
             save_prefs(&app.ui);
             app.player = None;
         }
@@ -159,14 +165,20 @@ fn services() -> Services {
                 "file.import_midi" => d.add_filter("MIDI", &["mid", "midi", "smf"]),
                 _ => d.add_filter(
                     "Audio",
-                    &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "aac", "mp4", "caf", "mkv", "webm"],
+                    &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "m4a", "m4b", "aac", "mp4", "caf", "mkv", "webm"],
                 ),
             };
             d.pick_file().map(|p| p.to_string_lossy().into_owned())
         })),
-        pick_save: Some(Box::new(|_purpose: &str, default: &str| {
+        pick_save: Some(Box::new(|purpose: &str, default: &str| {
             let path = std::path::Path::new(default);
-            let mut d = rfd::FileDialog::new().add_filter("SoundCraft Session", &["scraft"]);
+            let mut d = match purpose {
+                "file.bounce_mix" => rfd::FileDialog::new().add_filter("Audio", &["wav", "aif", "aiff", "flac"]),
+                _ => rfd::FileDialog::new().add_filter("SoundCraft Session", &["scraft"]),
+            };
+            if let Some(dir) = path.parent().filter(|dir| dir.is_dir()) {
+                d = d.set_directory(dir);
+            }
             if let Some(n) = path.file_name().and_then(|n| n.to_str()) {
                 d = d.set_file_name(n);
             }
@@ -254,9 +266,11 @@ fn main() -> eframe::Result {
         "SoundCraft",
         options,
         Box::new(move |cc| {
-            let player = if no_audio { None } else { Some(soundcraft_playback::Player::new(Arc::new(engine.session().clone()))) };
+            let player =
+                if no_audio { None } else { Some(soundcraft_playback::Player::with_config(Arc::new(engine.session().clone()), &prefs.audio)) };
             let mut app = SoundApp::new(engine, player, services());
             app.autosave_dir = prefs_path().and_then(|p| p.parent().map(|d| d.join("Autosave")));
+            app.leftovers = app.autosave_dir.as_deref().map(soundcraft_engine::autosave::leftovers).unwrap_or_default();
             app.preset_dir = prefs_path().and_then(|p| p.parent().map(|d| d.join("Presets")));
             app.extra.ui_scale = prefs.ui_scale;
             app.ui = prefs;

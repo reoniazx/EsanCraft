@@ -54,6 +54,8 @@ const CMDS: &[&str] = &[
     "event.beat_detective",
     "automation.thin",
     "clip.remove_warp",
+    "clip.time_lock",
+    "clip.edit_lock",
 ];
 
 fn params(i: usize, a: i64, b: i64, track: &str) -> Value {
@@ -119,7 +121,7 @@ fn check_invariants(e: &Engine) -> Result<(), String> {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 48, .. ProptestConfig::default() })]
     #[test]
-    fn random_edits_keep_the_session_sane(ops in proptest::collection::vec((0usize..48, -100_000i64..3_000_000, -100_000i64..3_000_000, 0usize..5), 1..25)) {
+    fn random_edits_keep_the_session_sane(ops in proptest::collection::vec((0usize..CMDS.len(), -100_000i64..3_000_000, -100_000i64..3_000_000, 0usize..5), 1..25)) {
         let mut e = soundcraft_engine::demo::demo_engine();
         let original = serde_json::to_value(e.session()).unwrap();
         let names = ["Kick", "Snare", "Bass", "Pad", "Keys"];

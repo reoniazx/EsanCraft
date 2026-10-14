@@ -3,11 +3,11 @@
 use crate::Engine;
 use serde_json::{Value, json};
 use soundcraft_model::{Clip, ClipContent, ClipId, Track, TrackId};
-use soundcraft_time::{TimeFormat, format_position};
+use soundcraft_time::TimeFormat;
 
 fn clip_json(e: &Engine, c: &Clip) -> Value {
     let s = e.session();
-    let fmt = |x| format_position(x, TimeFormat::MinSecs, s.sample_rate, &s.tempo, s.frame_rate, s.timecode_start);
+    let fmt = |x| s.format_position(x, TimeFormat::MinSecs);
     let mut v = json!({
         "id": c.id, "name": c.name, "start": c.start, "end": c.end(), "length": c.length,
         "start_time": fmt(c.start), "gain_db": c.gain_db, "muted": c.muted,
@@ -110,7 +110,7 @@ pub fn clip(e: &Engine, id: ClipId) -> Option<Value> {
 /// Plain-text session report (File › Export › Session Info as Text).
 pub fn session_text(e: &Engine) -> String {
     let s = e.session();
-    let fmt = |x| format_position(x, TimeFormat::MinSecs, s.sample_rate, &s.tempo, s.frame_rate, s.timecode_start);
+    let fmt = |x| s.format_position(x, TimeFormat::MinSecs);
     let mut out = String::new();
     out.push_str(&format!("SESSION NAME:\t{}\nSAMPLE RATE:\t{}\nBIT DEPTH:\t{:?}\nTIMECODE FORMAT:\t{}\n# OF AUDIO TRACKS:\t{}\n# OF AUDIO CLIPS:\t{}\n# OF AUDIO FILES:\t{}\n\n",
         s.name, s.sample_rate.hz(), s.bit_depth, s.frame_rate.label(),

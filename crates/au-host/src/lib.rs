@@ -23,8 +23,10 @@
 //! (`kAudioUnitProperty_ClassInfo`) as a binary plist; [`Plugin::load_state`] parses it back and
 //! sets it, then re-reads the parameter values.
 //!
-//! Not hosted yet: Audio Unit editor views (Cocoa `AUCocoaUIBase`), sidechain/extra buses,
-//! parameters outside the global scope, and host callbacks (tempo, transport).
+//! Host callbacks report the session's tempo, meter, position and play state.
+//!
+//! Not hosted yet: Audio Unit editor views (Cocoa `AUCocoaUIBase`), sidechain/extra buses, and
+//! parameters outside the global scope.
 //!
 //! Off macOS (and on `wasm32`) the crate compiles to stubs: scans are empty and nothing can be
 //! created.

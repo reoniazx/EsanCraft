@@ -101,6 +101,35 @@ fn lowpass_attenuates_highs() {
 }
 
 #[test]
+fn state_reader_reads_while_another_thread_renders() {
+    if !available(LOWPASS) {
+        return;
+    }
+    let info = soundcraft_au_host::plugin_info(LOWPASS).unwrap();
+    let cutoff = info.params.iter().find(|q| q.unit == soundcraft_dsp::Unit::Hz).unwrap();
+    let mut p = soundcraft_au_host::create(LOWPASS).unwrap();
+    p.prepare(48_000.0, 512, 2);
+    assert!(p.set_param(cutoff.id, 500.0));
+    let mut reader = p.state_reader().expect("every unit has a ClassInfo");
+    let audio = std::thread::spawn(move || {
+        for _ in 0..4 {
+            run_tone(p.as_mut(), 100.0);
+        }
+        p
+    });
+    while !audio.is_finished() {
+        assert!(reader.save_state().is_some());
+    }
+    let p = audio.join().unwrap();
+    let state = reader.save_state().expect("ClassInfo");
+    drop(p);
+    let mut q = soundcraft_au_host::create(LOWPASS).unwrap();
+    assert_eq!(reader.save_state(), None);
+    assert!(q.load_state(&state));
+    assert!((q.param(cutoff.id).unwrap() - 500.0).abs() < 1.0, "{:?}", q.param(cutoff.id));
+}
+
+#[test]
 fn delay_runs_mono_stereo_and_odd_blocks() {
     if !available(DELAY) {
         return;
@@ -167,4 +196,23 @@ fn dls_synth_plays_a_note() {
     assert!(e > 1e-3, "{e}");
     p.note_off(0, 64);
     p.reset();
+    // Controllers reach the synth: MIDI volume 0 silences a note. (In this test because creating
+    // two DLS instances at once on two threads crashes inside the unit.)
+    p.prepare(48_000.0, 512, 2);
+    let loudest = |p: &mut Box<dyn Plugin>, volume: u8| {
+        p.midi(0, [0xB0, 7, volume]);
+        p.note_on(0, 60, 110);
+        let mut energy = 0.0f32;
+        for _ in 0..20 {
+            let mut io = vec![vec![0.0f32; 512]; 2];
+            p.process(&mut io, 512);
+            energy = energy.max(rms(&io[0]));
+        }
+        p.note_off(0, 60);
+        p.reset();
+        energy
+    };
+    let full = loudest(&mut p, 127);
+    let muted = loudest(&mut p, 0);
+    assert!(full > 1e-3 && muted < full * 0.01, "volume 127: {full}, volume 0: {muted}");
 }

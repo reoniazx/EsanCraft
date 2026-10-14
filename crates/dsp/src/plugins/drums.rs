@@ -387,7 +387,7 @@ impl DrumSynth {
     fn apply(&mut self, kind: EventKind) {
         match kind {
             EventKind::On(n, v) => self.trigger(n, v),
-            EventKind::Off(_) => {}
+            EventKind::Off(_) | EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::ResetControllers => {}
             EventKind::AllOff => {
                 let fast = decay60(30.0, self.sr);
                 for v in &mut self.voices {

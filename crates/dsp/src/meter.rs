@@ -164,10 +164,12 @@ fn lufs(energy: f64) -> f32 {
 /// K-weighting pre-filter (high shelf) and RLB high-pass designed for any sample rate.
 fn k_weighting(sr: f32) -> [Coeffs; 2] {
     let sr = f64::from(sr);
-    let pi = std::f64::consts::PI;
+    // Bilinear prewarp. A corner at or past Nyquist wraps tan() negative (poles outside the unit
+    // circle) or aliases it, so it is held just below Nyquist, as `Coeffs::design` does.
+    let prewarp = |f0: f64| (std::f64::consts::PI * f0.min(sr * 0.49) / sr).tan();
     // Stage 1: shelving.
     let (f0, g, q) = (1_681.974_450_955_533, 3.999_843_853_973_347, 0.707_175_236_955_419_6);
-    let k = (pi * f0 / sr).tan();
+    let k = prewarp(f0);
     let vh = 10f64.powf(g / 20.0);
     let vb = vh.powf(0.499_666_774_154_541_6);
     let a0 = 1.0 + k / q + k * k;
@@ -180,7 +182,7 @@ fn k_weighting(sr: f32) -> [Coeffs; 2] {
     };
     // Stage 2: high-pass.
     let (f0, q) = (38.135_470_876_024_44, 0.500_327_037_323_877_3);
-    let k = (pi * f0 / sr).tan();
+    let k = prewarp(f0);
     let a0 = 1.0 + k / q + k * k;
     let s2 = Coeffs { b0: 1.0, b1: -2.0, b2: 1.0, a1: (2.0 * (k * k - 1.0) / a0) as f32, a2: ((1.0 - k / q + k * k) / a0) as f32 };
     [s1, s2]

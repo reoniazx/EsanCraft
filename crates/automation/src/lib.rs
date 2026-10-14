@@ -11,8 +11,10 @@ pub mod mcp;
 
 use serde_json::{Value, json};
 use soundcraft_engine::Engine;
+use soundcraft_engine::file_access::{self, AutomationRoots};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Answers control-protocol methods.
@@ -26,16 +28,22 @@ pub trait Backend {
 /// An in-process engine (no UI).
 pub struct Headless {
     pub engine: Engine,
+    roots: Option<Arc<AutomationRoots>>,
 }
 
 impl Headless {
     pub fn new(engine: Engine) -> Self {
-        Headless { engine }
+        Headless { engine, roots: None }
     }
-}
 
-impl Backend for Headless {
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    /// Confine every file the session's commands read and write to `roots`
+    /// (`soundcraft-cli mcp --automation-read-root … --automation-write-root …`).
+    pub fn with_automation_roots(mut self, roots: Option<Arc<AutomationRoots>>) -> Self {
+        self.roots = roots;
+        self
+    }
+
+    fn answer(&mut self, method: &str, params: Value) -> Result<Value, String> {
         match method {
             "engine.execute" | "command" => {
                 let id = params.get("command").or_else(|| params.get("id")).and_then(Value::as_str).ok_or("`command` required")?;
@@ -55,6 +63,13 @@ impl Backend for Headless {
             }
             other => Err(format!("unknown method `{other}`")),
         }
+    }
+}
+
+impl Backend for Headless {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let roots = self.roots.clone();
+        file_access::confine(roots.as_ref(), || self.answer(method, params))
     }
     fn has_ui(&self) -> bool {
         false

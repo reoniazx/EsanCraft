@@ -52,7 +52,8 @@ fn max_len(ch: &[Vec<f32>]) -> usize {
     ch.iter().map(Vec::len).max().unwrap_or(0)
 }
 
-fn peak(ch: &[Vec<f32>]) -> f32 {
+/// The largest finite sample magnitude in any channel.
+pub fn peak(ch: &[Vec<f32>]) -> f32 {
     ch.iter().flatten().filter(|v| v.is_finite()).fold(0.0f32, |m, v| m.max(v.abs()))
 }
 
@@ -341,7 +342,14 @@ pub fn pitch_shift(ch: &[Vec<f32>], semitones: f32, sample_rate: f32) -> Vec<Vec
         return ch.to_vec();
     }
     let factor = 2f64.powf(f64::from(st) / 12.0);
-    let stretched = time_stretch(ch, factor, sample_rate);
+    // time_stretch clamps to 0.1..=10, short of the 16x (or 1/16) that ±48 needs: stretch twice by
+    // the square root instead.
+    let stretched = if (0.1..=10.0).contains(&factor) {
+        time_stretch(ch, factor, sample_rate)
+    } else {
+        let half = factor.sqrt();
+        time_stretch(&time_stretch(ch, half, sample_rate), half, sample_rate)
+    };
     let len = max_len(ch);
     let slen = max_len(&stretched);
     if slen == 0 || len == 0 {
@@ -371,71 +379,141 @@ pub fn signal_generator(kind: Waveform, freq: f32, level_db: f32, sample_rate: f
     (0..channels).map(|_| mono.clone()).collect()
 }
 
-/// Onset detection by half-wave-rectified spectral flux with an adaptive threshold.
-/// `sensitivity` 0..1 (higher finds more transients). Returns sample positions, ascending.
+/// Onset detection: how much a log-magnitude spectrum on 24 bands per octave rises against the frame
+/// before, each band against the loudest of its neighbours there so vibrato doesn't count
+/// (vibrato-suppressed spectral flux). A peak must stand out from the flux within 0.1 s by a fixed
+/// amount, not relative to the loudest hit, so quiet hits count and the result doesn't depend on where
+/// the analysed audio starts. Each is placed where its attack starts. `sensitivity` 0..1 (higher finds
+/// more). Returns sample positions, ascending.
 pub fn detect_transients(ch: &[Vec<f32>], sample_rate: f32, sensitivity: f32) -> Vec<usize> {
     let len = max_len(ch);
     let sr = sane_sr(sample_rate);
     let sens = if sensitivity.is_finite() { sensitivity.clamp(0.0, 1.0) } else { 0.5 };
-    let n = ((sr * 0.023) as usize).clamp(64, 8192).next_power_of_two();
+    let n = ((sr * 0.012) as usize).clamp(64, 8192).next_power_of_two();
     let hop = n / 4;
     if len < n || ch.is_empty() {
         return Vec::new();
     }
+    let ch: Vec<Vec<f32>> =
+        ch.iter().take(crate::util::MAX_CHANNELS).map(|c| c.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect()).collect();
     let nch = ch.len() as f32;
-    let mono: Vec<f32> = (0..len).map(|i| ch.iter().map(|c| c.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0)).sum::<f32>() / nch).collect();
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(n);
+    let bands = log_bands(n, sr);
+    let fft = FftPlanner::<f32>::new().plan_fft_forward(n);
     let window: Vec<f32> = (0..n).map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / n as f64).cos()) as f32).collect();
+    // Magnitudes relative to a full-scale sine; below about -80 dB a band's changes barely count.
+    let gain = 1.0e4 / (n as f32 / 4.0);
     let frames = (len - n) / hop + 1;
-    let mut prev = vec![0.0f32; n / 2 + 1];
     let mut buf = vec![Complex::new(0.0f32, 0.0); n];
+    let mut power = vec![0.0f32; n / 2 + 1];
+    let mut prev: Vec<f32> = Vec::new();
     let mut flux = Vec::with_capacity(frames);
+    let mut energy: Vec<f32> = Vec::with_capacity(frames);
     for m in 0..frames {
-        let start = m * hop;
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b = Complex::new(mono.get(start + i).copied().unwrap_or(0.0) * window.get(i).copied().unwrap_or(0.0), 0.0);
-        }
-        fft.process(&mut buf);
-        let mut f = 0.0;
-        for (b, p) in buf.iter().zip(prev.iter_mut()) {
-            let mag = (1.0 + 100.0 * b.norm()).ln();
-            f += (mag - *p).max(0.0);
-            *p = mag;
-        }
-        flux.push(if m == 0 { 0.0 } else { f });
-    }
-    let max_flux = flux.iter().copied().fold(0.0f32, f32::max);
-    if max_flux <= 1e-6 {
-        return Vec::new();
-    }
-    let w = ((0.1 * sr) as usize / hop).max(2);
-    let mult = 1.0 + 2.5 * (1.0 - sens);
-    let delta = max_flux * (0.02 + 0.25 * (1.0 - sens));
-    let min_gap = ((0.05 * sr) as usize / hop).max(1);
-    let mut out = Vec::new();
-    let mut last: Option<usize> = None;
-    for m in 1..flux.len() {
-        let cur = flux.get(m).copied().unwrap_or(0.0);
-        let lo = m.saturating_sub(w);
-        let hi = (m + w + 1).min(flux.len());
-        let local = flux.get(lo..hi).map(|s| s.iter().sum::<f32>() / s.len().max(1) as f32).unwrap_or(0.0);
-        let prev_v = flux.get(m - 1).copied().unwrap_or(0.0);
-        let next_v = flux.get(m + 1).copied().unwrap_or(0.0);
-        if cur > local * mult + delta && cur >= prev_v && cur > next_v && last.is_none_or(|l| m - l >= min_gap) {
-            last = Some(m);
-            // Refine: first sample in the analysis frame reaching a quarter of the frame's peak.
-            let start = m * hop;
-            let seg = mono.get(start..(start + n).min(len)).unwrap_or(&[]);
-            let pk = seg.iter().fold(0.0f32, |a, v| a.max(v.abs()));
-            let off = seg.iter().position(|v| v.abs() >= 0.25 * pk).unwrap_or(n / 2);
-            let pos = start + off;
-            if out.last().is_none_or(|&p: &usize| pos > p) {
-                out.push(pos);
+        power.iter_mut().for_each(|p| *p = 0.0);
+        for c in &ch {
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = Complex::new(c.get(m * hop + i).copied().unwrap_or(0.0) * window.get(i).copied().unwrap_or(0.0), 0.0);
             }
+            fft.process(&mut buf);
+            for (p, b) in power.iter_mut().zip(&buf) {
+                *p += b.norm_sqr() / nch;
+            }
+        }
+        energy.push(power.iter().sum());
+        let cur: Vec<f32> = bands
+            .iter()
+            .map(|band| (1.0 + gain * band.iter().map(|&(k, w)| power.get(k).map_or(0.0, |p| p.sqrt()) * w).sum::<f32>()).log10())
+            .collect();
+        let rise = |b: usize, v: f32| {
+            (v - prev.get(b.saturating_sub(1)..(b + 2).min(prev.len())).map_or(0.0, |s| s.iter().copied().fold(0.0, f32::max))).max(0.0)
+        };
+        flux.push(if prev.is_empty() { 0.0 } else { cur.iter().enumerate().map(|(b, v)| rise(b, *v)).sum() });
+        prev = cur;
+    }
+    let frames_of = |secs: f32| ((secs * sr) as usize / hop).max(1);
+    let (near, before, after, gap) = (frames_of(0.03), frames_of(0.1), frames_of(0.07), frames_of(0.03));
+    let delta = 2.5 * 2f32.powf((0.5 - sens) * 4.0);
+    let mut out: Vec<usize> = Vec::new();
+    let mut last: Option<usize> = None;
+    for (m, &cur) in flux.iter().enumerate() {
+        let span = |a: usize, b: usize| flux.get(m.saturating_sub(a)..(m + b + 1).min(frames)).unwrap_or(&[]);
+        let peak = span(near, near).iter().copied().fold(0.0, f32::max);
+        let around = span(before, after);
+        let mean = around.iter().sum::<f32>() / around.len().max(1) as f32;
+        if cur <= 0.0 || cur < peak || cur < mean + delta || last.is_some_and(|l| m - l < gap) {
+            continue;
+        }
+        let (at, contrast) = attack_start(&ch, m * hop, n, sr);
+        // A fast release smears energy between a note's partials, which looks like a rise. Its
+        // attack edge is weak and the energy doesn't grow, unlike a real onset's.
+        let was = energy.get(m.saturating_sub(1)).copied().unwrap_or(0.0);
+        let grows = energy.get(m..(m + 2).min(frames)).is_some_and(|e| e.iter().any(|v| *v > was));
+        if contrast < std::f64::consts::LN_2 && !grows {
+            continue;
+        }
+        last = Some(m);
+        if out.last().is_none_or(|&p| at > p) {
+            out.push(at);
         }
     }
     out
+}
+
+/// Triangular filters 24 to the octave from 30 Hz to 20 kHz over the bins of an `n`-point FFT, without
+/// duplicates where bins are coarser than that; each filter's weights sum to 1.
+fn log_bands(n: usize, sr: f32) -> Vec<Vec<(usize, f32)>> {
+    let bin_hz = sr / n as f32;
+    let top = 20_000.0f32.min(sr * 0.45);
+    let mut centres: Vec<usize> = Vec::new();
+    let mut f = 30.0f32;
+    while f <= top {
+        let k = (f / bin_hz).round() as usize;
+        if centres.last().is_none_or(|&c| k > c) {
+            centres.push(k);
+        }
+        f *= 2f32.powf(1.0 / 24.0);
+    }
+    centres
+        .windows(3)
+        .filter_map(|w| {
+            let (&lo, &mid, &hi) = (w.first()?, w.get(1)?, w.get(2)?);
+            let tri: Vec<(usize, f32)> = (lo..=hi)
+                .map(|k| (k, if k <= mid { (k - lo) as f32 / (mid - lo).max(1) as f32 } else { (hi - k) as f32 / (hi - mid).max(1) as f32 }))
+                .filter(|(_, v)| *v > 0.0)
+                .collect();
+            let sum: f32 = tri.iter().map(|(_, v)| v).sum();
+            (sum > 0.0).then(|| tri.into_iter().map(|(k, v)| (k, v / sum)).collect())
+        })
+        .collect()
+}
+
+/// Where the attack found in the frame starting at `frame` begins. The log spectrum jumps as soon as the
+/// window reaches an attack, so it can sit up to half a window past the frame. Find the step edge of the
+/// high-passed energy, the sample where the next 3 ms gain most over the 6 ms before, then go back to
+/// where the energy first crosses the midpoint (in dB) between the two.
+fn attack_start(ch: &[Vec<f32>], frame: usize, n: usize, sr: f32) -> (usize, f64) {
+    let (before, after, short) = (((sr * 0.006) as usize).max(1), ((sr * 0.003) as usize).max(1), ((sr * 0.0005) as usize).max(1));
+    let (from, to) = (frame.saturating_sub(before), frame + n + n / 2 + after);
+    let mut cum = vec![0.0f64; to - from + 1];
+    for (j, i) in (from..to).enumerate() {
+        let e: f32 = ch
+            .iter()
+            .map(|x| {
+                let d = x.get(i).copied().unwrap_or(0.0) - i.checked_sub(1).and_then(|p| x.get(p)).copied().unwrap_or(0.0);
+                d * d
+            })
+            .sum();
+        let sum = cum.get(j).copied().unwrap_or(0.0) + f64::from(e);
+        if let Some(c) = cum.get_mut(j + 1) {
+            *c = sum;
+        }
+    }
+    let at = |i: usize| cum.get(i.saturating_sub(from)).copied().unwrap_or(0.0);
+    let mean = |a: usize, b: usize| (at(b) - at(a)) / b.saturating_sub(a).max(1) as f64;
+    let contrast = |k: usize| ((mean(k, k + after) + 1e-12) / (mean(k.saturating_sub(before), k) + 1e-12)).ln();
+    let k = (frame..frame + n + n / 2).max_by(|&a, &b| contrast(a).total_cmp(&contrast(b))).unwrap_or(frame);
+    let level = (mean(k.saturating_sub(before), k) * mean(k, k + after)).sqrt();
+    ((k.saturating_sub(after)..=k).find(|&i| mean(i, i + short) > level).unwrap_or(k), contrast(k))
 }
 
 /// Strip Silence: ranges `(start, end)` (end exclusive) of material whose peak across channels
@@ -443,39 +521,71 @@ pub fn detect_transients(ch: &[Vec<f32>], sample_rate: f32, sensitivity: f32) ->
 /// Each region is padded by `pad_before`/`pad_after` (clamped to the buffer) and overlapping
 /// regions are merged.
 pub fn non_silent_ranges(ch: &[Vec<f32>], threshold_db: f32, min_len: usize, pad_before: usize, pad_after: usize) -> Vec<(usize, usize)> {
-    let len = max_len(ch);
-    let thr = db_to_gain(if threshold_db.is_nan() { -48.0 } else { threshold_db });
-    let mut raw: Vec<(usize, usize)> = Vec::new();
-    let mut start: Option<usize> = None;
-    let mut last_loud = 0usize;
-    for i in 0..len {
-        let loud = ch.iter().any(|c| c.get(i).is_some_and(|v| v.is_finite() && v.abs() > thr));
-        if !loud {
-            continue;
-        }
-        match start {
-            Some(s) if i - last_loud > min_len.max(1) => {
-                raw.push((s, last_loud + 1));
-                start = Some(i);
+    let mut scan = SilenceScan::new(threshold_db, min_len as u64);
+    scan.push(ch);
+    let at = |x: u64| usize::try_from(x).unwrap_or(usize::MAX);
+    scan.finish(pad_before as u64, pad_after as u64).into_iter().map(|(s, e)| (at(s), at(e))).collect()
+}
+
+/// [`non_silent_ranges`] over audio that arrives a block at a time, so material of any length can
+/// be scanned without holding all of it.
+pub struct SilenceScan {
+    thr: f32,
+    min_len: u64,
+    len: u64,
+    start: Option<u64>,
+    last_loud: u64,
+    raw: Vec<(u64, u64)>,
+}
+
+impl SilenceScan {
+    pub fn new(threshold_db: f32, min_len: u64) -> Self {
+        let thr = db_to_gain(if threshold_db.is_nan() { -48.0 } else { threshold_db });
+        SilenceScan { thr, min_len, len: 0, start: None, last_loud: 0, raw: Vec::new() }
+    }
+
+    /// Scan the next block (planar), which follows the audio scanned so far.
+    pub fn push(&mut self, ch: &[Vec<f32>]) {
+        let n = max_len(ch);
+        for k in 0..n {
+            if !ch.iter().any(|c| c.get(k).is_some_and(|v| v.is_finite() && v.abs() > self.thr)) {
+                continue;
             }
-            None => start = Some(i),
-            _ => {}
+            let i = self.len.saturating_add(k as u64);
+            match self.start {
+                Some(s) if i - self.last_loud > self.min_len.max(1) => {
+                    self.raw.push((s, self.last_loud.saturating_add(1)));
+                    self.start = Some(i);
+                }
+                None => self.start = Some(i),
+                _ => {}
+            }
+            self.last_loud = i;
         }
-        last_loud = i;
+        self.len = self.len.saturating_add(n as u64);
     }
-    if let Some(s) = start {
-        raw.push((s, last_loud + 1));
+
+    /// Pass over `n` samples known to be silent.
+    pub fn skip(&mut self, n: u64) {
+        self.len = self.len.saturating_add(n);
     }
-    let mut out: Vec<(usize, usize)> = Vec::with_capacity(raw.len());
-    for (s, e) in raw {
-        let s = s.saturating_sub(pad_before);
-        let e = e.saturating_add(pad_after).min(len);
-        match out.last_mut() {
-            Some(last) if s <= last.1 => last.1 = last.1.max(e),
-            _ => out.push((s, e)),
+
+    /// The regions found, padded and merged (see [`non_silent_ranges`]).
+    pub fn finish(mut self, pad_before: u64, pad_after: u64) -> Vec<(u64, u64)> {
+        if let Some(s) = self.start {
+            self.raw.push((s, self.last_loud.saturating_add(1)));
         }
+        let mut out: Vec<(u64, u64)> = Vec::with_capacity(self.raw.len());
+        for (s, e) in self.raw {
+            let s = s.saturating_sub(pad_before);
+            let e = e.saturating_add(pad_after).min(self.len);
+            match out.last_mut() {
+                Some(last) if s <= last.1 => last.1 = last.1.max(e),
+                _ => out.push((s, e)),
+            }
+        }
+        out
     }
-    out
 }
 
 /// Runs a plugin over whole buffers in blocks, compensating its latency so the output lines up

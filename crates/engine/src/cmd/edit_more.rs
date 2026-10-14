@@ -178,7 +178,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.copy_to_target_playlist",
             "Target Playlist",
             ["Edit", "Copy Selection to..."],
-            None,
+            Some("Alt+Shift+Up"),
             "{tracks?, start?, end?} — copies the selection into each track's target playlist",
             has_range,
             |e, p| to_playlist(e, p, Dest::Target, false, "edit.copy_to_target_playlist")
@@ -196,14 +196,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.move_to_target_playlist",
             "Target Playlist",
             ["Edit", "Move Selection to..."],
-            None,
+            Some("Alt+Shift+T"),
             "{tracks?, start?, end?} — copies to the target playlist and clears it from the main",
             has_range,
             |e, p| to_playlist(e, p, Dest::Target, true, "edit.move_to_target_playlist")
         ),
-        cmd!("edit.move_to_new_playlist", "New Playlist", ["Edit", "Move Selection to..."], None, "{tracks?, start?, end?}", has_range, |e, p| {
-            to_playlist(e, p, Dest::New, true, "edit.move_to_new_playlist")
-        }),
+        cmd!(
+            "edit.move_to_new_playlist",
+            "New Playlist",
+            ["Edit", "Move Selection to..."],
+            Some("Alt+Shift+N"),
+            "{tracks?, start?, end?}",
+            has_range,
+            |e, p| to_playlist(e, p, Dest::New, true, "edit.move_to_new_playlist")
+        ),
         cmd!(
             "edit.move_to_duplicate_playlist",
             "Duplicate of Main Playlist",
@@ -284,7 +290,7 @@ pub(super) fn cut_all_automation(e: &mut Engine, p: &Value) -> Result<Value> {
 fn auto_copy(e: &mut Engine, p: &Value, which: Lanes, cut: bool, id: &str) -> Result<Value> {
     let tracks = tracks_required(e, id, p)?;
     let r = nonempty_range(e, p, id)?;
-    let mut cb = Clipboard { length: r.len(), ..Clipboard::default() };
+    let mut cb = Clipboard { automation_only: true, ..Clipboard::of_range(e.session(), r) };
     let mut lanes_n = 0;
     for t in &tracks {
         cb.tracks.push(Vec::new());
@@ -326,7 +332,7 @@ fn auto_copy(e: &mut Engine, p: &Value, which: Lanes, cut: bool, id: &str) -> Re
     Ok(json!({"lanes": lanes_n, "length": r.len()}))
 }
 
-fn copy_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn copy_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "edit.copy_clip_gain";
     let tracks = tracks_required(e, id, p)?;
     let r = nonempty_range(e, p, id)?;
@@ -545,12 +551,13 @@ fn duplicate_extend(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "edit.duplicate_extend";
     let tracks = tracks_required(e, id, p)?;
     let r = nonempty_range(e, p, id)?;
+    let (sh, follow) = (shuffle(e.session()), e.session().edit.automation_follows_edit);
     let s = e.session_mut();
     let mut n = 0;
     for t in &tracks {
         let clips = ops::copy_range(s, *t, r);
-        n += ops::paste(s, *t, r.end, &clips, r.len(), false).len();
-        if let Some(tr) = s.track_mut(*t) {
+        n += ops::paste(s, *t, r.end, &clips, r.len(), sh).map_err(|why| bad(id, why))?.len();
+        if follow && let Some(tr) = s.track_mut(*t) {
             for l in &mut tr.automation {
                 let pts: Vec<_> = l.points.iter().filter(|pt| r.contains(pt.at)).copied().collect();
                 for pt in pts {
@@ -677,7 +684,7 @@ fn snap(e: &mut Engine, p: &Value, next: bool) -> Result<Value> {
             others.iter().filter(|x| x.end() <= c.start).map(Clip::end).max().map(|en| en - c.start)
         };
         if let Some(d) = delta.filter(|d| *d != 0) {
-            moved += ops::move_clips(s, &[id], d, None);
+            moved += ops::move_clips(s, &[id], d, &[]);
         }
     }
     Ok(json!({"moved": moved}))
@@ -1039,6 +1046,22 @@ mod tests {
         let (mut e, t, ids) = session_with_clips(&[(0, 1000), (2000, 1000)]);
         e.execute("clip.gain", &json!({"clip": ids[0].0, "db": -6.0})).unwrap();
         e.execute("edit.copy_clip_gain", &json!({"start": 0, "end": 1000})).unwrap();
+        e.execute("edit.paste_clip_gain", &json!({"at": 2000})).unwrap();
+        let c = e.session().track(t).unwrap().clips()[1].clone();
+        assert!((clip_db(&c, 500) + 6.0).abs() < 1e-3, "{c:?}");
+    }
+
+    #[test]
+    fn cut_clip_gain_can_be_pasted() {
+        let (mut e, t, ids) = session_with_clips(&[(0, 1000), (2000, 1000), (4000, 1000)]);
+        e.execute("clip.gain", &json!({"clip": ids[0].0, "db": -6.0})).unwrap();
+        e.execute("clip.gain", &json!({"clip": ids[2].0, "db": -12.0})).unwrap();
+        // An older copy sits in the clipboard: the paste must get the cut gain, not this one.
+        e.execute("edit.copy_clip_gain", &json!({"start": 4000, "end": 5000})).unwrap();
+        e.execute("edit.select", &json!({"tracks": [t.0], "clips": [ids[0].0], "start": 0, "end": 1000})).unwrap();
+        e.execute("edit.cut_clip_gain", &json!({})).unwrap();
+        let src = e.session().track(t).unwrap().clips()[0].clone();
+        assert!(clip_db(&src, 500).abs() < 1e-3, "cut resets the source: {src:?}");
         e.execute("edit.paste_clip_gain", &json!({"at": 2000})).unwrap();
         let c = e.session().track(t).unwrap().clips()[1].clone();
         assert!((clip_db(&c, 500) + 6.0).abs() < 1e-3, "{c:?}");

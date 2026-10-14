@@ -1,8 +1,8 @@
 //! Clips: windows onto audio sources or MIDI sequences, placed on a playlist.
 
-use crate::{ClipId, SourceId};
+use crate::{ClipId, MAX_NAME_CHARS, SourceId, truncate_chars};
 use soundcraft_midi::Sequence;
-use soundcraft_time::{Range, Samples};
+use soundcraft_time::{MAX_POSITION, Range, Samples};
 
 /// Fade curve shapes (Pro Tools offers standard, equal-power, S-curve and custom presets).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
@@ -132,6 +132,10 @@ pub struct Clip {
     /// Reversed playback (AudioSuite Reverse renders into a new source; this is for previews).
     #[serde(default)]
     pub group: Option<u64>,
+    /// Marks the clips made by `clip.loop` (the origin and its copies share one id), so
+    /// `clip.unloop` still recognises the loop after the source's content is edited.
+    #[serde(default)]
+    pub loop_id: Option<u64>,
 }
 
 fn one() -> f64 {
@@ -158,6 +162,7 @@ impl Clip {
             color: None,
             stretch: 1.0,
             group: None,
+            loop_id: None,
         }
     }
 
@@ -247,14 +252,24 @@ impl Clip {
         // MIDI note ticks are re-anchored by the engine, which knows the tempo map.
         self.length -= delta;
         self.start = new_start;
+        if self.sync_point != 0 {
+            self.sync_point = self.sync_point.saturating_sub(delta);
+        }
+        self.drop_stray_sync();
         self.clamp_fades();
-        self.gain_env = self.gain_env.iter().filter_map(|&(t, v)| (t - delta >= 0).then_some((t - delta, v))).collect();
+        // Keep the gain at the cut when earlier breakpoints are dropped.
+        if self.gain_env.iter().any(|&(t, _)| t < delta) && self.gain_env.iter().all(|&(t, _)| t != delta) {
+            self.gain_env.insert(0, (delta, env_value(&self.gain_env, delta)));
+        }
+        self.gain_env.retain(|&(t, _)| t >= delta);
+        self.gain_env.iter_mut().for_each(|(t, _)| *t = t.saturating_sub(delta));
     }
 
     /// Move the end edge to `new_end`.
     pub fn trim_end_to(&mut self, new_end: Samples) {
         let new_end = new_end.max(self.start + 1);
         self.length = new_end - self.start;
+        self.drop_stray_sync();
         self.clamp_fades();
     }
 
@@ -263,6 +278,48 @@ impl Clip {
         self.fade_in.len = self.fade_in.len.clamp(0, self.length);
         self.fade_out.len = self.fade_out.len.clamp(0, self.length);
     }
+
+    /// A sync point (0 means none) that a trim left outside the clip no longer marks anything.
+    fn drop_stray_sync(&mut self) {
+        if !(0..self.length).contains(&self.sync_point) {
+            self.sync_point = 0;
+        }
+    }
+
+    /// Repair a clip read from a file: positions and lengths within ±[`MAX_POSITION`], as commands
+    /// keep theirs, fades within the clip, a name that can be drawn, and a usable gain and stretch.
+    pub fn sanitize(&mut self) {
+        bound(&mut self.start);
+        self.length = self.length.clamp(1, MAX_POSITION);
+        bound(&mut self.sync_point);
+        self.gain_env.iter_mut().for_each(|(at, _)| bound(at));
+        match &mut self.content {
+            ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } => bound(offset),
+            ClipContent::Midi { sequence } => bound_sequence(sequence),
+        }
+        self.clamp_fades();
+        self.fade_in.sanitize();
+        self.fade_out.sanitize();
+        truncate_chars(&mut self.name, MAX_NAME_CHARS);
+        if !self.gain_db.is_finite() {
+            self.gain_db = 0.0;
+        }
+        if !self.stretch.is_finite() || self.stretch <= 0.0 {
+            self.stretch = 1.0;
+        }
+    }
+}
+
+pub(crate) fn bound(at: &mut Samples) {
+    *at = (*at).clamp(-MAX_POSITION, MAX_POSITION);
+}
+
+pub(crate) fn bound_sequence(s: &mut Sequence) {
+    for n in &mut s.notes {
+        bound(&mut n.start);
+        n.length = n.length.clamp(1, MAX_POSITION);
+    }
+    s.ctrls.iter_mut().for_each(|c| bound(&mut c.tick));
 }
 
 fn env_value(env: &[(Samples, f32)], at: Samples) -> f32 {
@@ -384,6 +441,27 @@ mod tests {
         let mut c = Clip::audio(ClipId(1), "a", SourceId(1), 0, 0, 1000);
         c.gain_env = vec![(0, 0.0), (1000, -20.0)];
         assert!((c.gain_at(500) - db_to_gain(-10.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn trim_start_keeps_gain_envelope_at_cut() {
+        for (env, cut, expected) in [
+            (vec![(0, 0.0), (1000, -20.0)], 500, vec![(0, -10.0), (500, -20.0)]),
+            (vec![(0, 0.0), (100, -20.0)], 500, vec![(0, -20.0)]),
+            (vec![(0, 0.0), (500, -10.0), (1000, -20.0)], 500, vec![(0, -10.0), (500, -20.0)]),
+            (vec![], 500, vec![]),
+            (vec![(100, -3.0)], 0, vec![(100, -3.0)]),
+            (vec![(100, -3.0)], -100, vec![(200, -3.0)]),
+        ] {
+            let mut clip = Clip::audio(ClipId(1), "a", SourceId(1), 100, 0, 1000);
+            clip.gain_env = env;
+            let gain_at_cut = clip.gain_at(cut);
+            clip.trim_start_to(cut);
+            assert_eq!(clip.gain_env, expected);
+            if cut > 0 {
+                assert!((clip.gain_at(0) - gain_at_cut).abs() < 1e-6);
+            }
+        }
     }
 
     #[test]

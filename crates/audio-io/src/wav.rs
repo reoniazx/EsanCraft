@@ -1,8 +1,9 @@
 //! Native WAV / BWF / RF64 reader and writer (RIFF chunk layout per the Microsoft multimedia
 //! specification, `bext` per EBU Tech 3285, `ds64` per EBU Tech 3306).
 
-use crate::pcm::{PcmKind, Quantizer, clamp_float, deinterleave, le_u16, le_u32, le_u64, tag, validate_buffer};
+use crate::pcm::{PcmKind, Quantizer, deinterleave, le_u16, le_u32, le_u64, sample_format, tag, validate_buffer, validate_layout, write_interleaved};
 use crate::{AudioBuffer, AudioError, AudioInfo, BitDepth, BwfInfo, FileFormat, Result, SampleFormat};
+use std::io::{Cursor, Seek, SeekFrom, Write};
 
 const WAVE_FORMAT_PCM: u16 = 1;
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
@@ -81,6 +82,57 @@ fn parse_bext(c: &[u8]) -> Option<BwfInfo> {
         origination_time: fixed_str(c.get(330..338)?),
         time_reference: (hi << 32) | lo,
     })
+}
+
+/// Refuse the WAVE file at `at`, which symphonia reads (A-law, ADPCM, ...), if an INFO entry
+/// claims more bytes than the file holds: symphonia allocates each entry's length. Chunks are
+/// walked where symphonia reads them: after the bytes a chunk's parser used, not its length.
+pub(crate) fn check_info(b: &[u8], at: usize) -> Result<()> {
+    if tag(b, at + 8) != Some(*b"WAVE") {
+        return Ok(());
+    }
+    let mut pos = at + 12;
+    while let Some(id) = tag(b, pos) {
+        let Some(len) = le_u32(b, pos + 4).map(|n| n as usize) else { break };
+        let (body, pad) = (pos + 8, len & 1);
+        let used = match &id {
+            b"data" => break,
+            b"fmt " => fmt_used(b, body, len),
+            b"LIST" if len < 4 => break,
+            b"LIST" => {
+                let entries = if tag(b, body) == Some(*b"INFO") { info_entries(b, body + 4, len - 4)? } else { 0 };
+                // The list pads itself, then the chunk is padded again.
+                4 + entries.max(len - 4) + pad
+            }
+            _ => len,
+        };
+        pos = body.saturating_add(used).saturating_add(pad);
+    }
+    Ok(())
+}
+
+/// The bytes symphonia reads of a `fmt ` chunk: some formats' parsers go by their own extra size.
+fn fmt_used(b: &[u8], body: usize, len: usize) -> usize {
+    match le_u16(b, body) {
+        Some(2 | 6 | 7 | 0x11) => le_u16(b, body + 16).map_or(len, |extra| 18 + usize::from(extra)),
+        Some(0xfffe) => 40,
+        _ => len,
+    }
+}
+
+/// Check the INFO entries in the `len` bytes from `start`; returns the bytes symphonia reads of
+/// them, with the pad it reads after an odd entry.
+fn info_entries(b: &[u8], start: usize, len: usize) -> Result<usize> {
+    let mut used = 0;
+    while used + 8 <= len {
+        let Some(n) = le_u32(b, start + used + 4).map(|n| n as usize) else { break };
+        if n > b.len().saturating_sub(start + used + 8) {
+            return Err(AudioError::Malformed("a WAV INFO entry is larger than the file".into()));
+        }
+        used += 8 + n;
+        used += used & 1;
+    }
+    Ok(used)
 }
 
 /// True when the bytes start like a RIFF/RF64/BW64 WAVE file.
@@ -255,6 +307,74 @@ fn push_chunk(out: &mut Vec<u8>, id: &[u8; 4], body: &[u8]) {
     }
 }
 
+/// A WAV written block by block: a placeholder header first, then the real one (the same length,
+/// RF64 above 4 GiB, or always when `force_rf64`) written over it by [`Writer::finish`].
+pub(crate) struct Writer<W> {
+    out: W,
+    start: u64,
+    channels: usize,
+    sample_rate: u32,
+    format: (u16, bool),
+    bwf: Option<BwfInfo>,
+    mask: Option<u32>,
+    force_rf64: bool,
+    quantizers: Vec<Quantizer>,
+    frames: u64,
+    bytes: Vec<u8>,
+}
+
+impl<W: Write + Seek> Writer<W> {
+    pub(crate) fn new(
+        mut out: W,
+        channels: usize,
+        sample_rate: u32,
+        depth: BitDepth,
+        dither: bool,
+        bwf: Option<&BwfInfo>,
+        mask: Option<u32>,
+        force_rf64: bool,
+    ) -> Result<Self> {
+        validate_layout(channels, sample_rate)?;
+        let format = sample_format(depth);
+        let start = out.stream_position()?;
+        out.write_all(&header(channels, sample_rate, format, bwf, mask, 0, force_rf64)?)?;
+        let quantizers = Quantizer::per_channel(u32::from(format.0), dither, channels);
+        Ok(Writer { out, start, channels, sample_rate, format, bwf: bwf.cloned(), mask, force_rf64, quantizers, frames: 0, bytes: Vec::new() })
+    }
+
+    fn header(&self, frames: u64) -> Result<Vec<u8>> {
+        header(self.channels, self.sample_rate, self.format, self.bwf.as_ref(), self.mask, frames, self.force_rf64)
+    }
+
+    /// The frame count after `frames` more (RF64 has room for any bounce).
+    pub(crate) fn check_room(&self, frames: u64) -> Result<u64> {
+        let total = self.frames.saturating_add(frames);
+        self.header(total)?;
+        Ok(total)
+    }
+
+    /// Appends `frames` frames of planar audio (missing samples are silence).
+    pub(crate) fn write(&mut self, block: &[Vec<f32>], frames: usize) -> Result<()> {
+        let total = self.check_room(frames as u64)?;
+        write_interleaved(&mut self.out, &mut self.bytes, block, frames, &mut self.quantizers, self.format, false)?;
+        self.frames = total;
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<W> {
+        let data_len = u64::from(self.format.0 / 8).saturating_mul(self.channels as u64).saturating_mul(self.frames);
+        if data_len % 2 == 1 {
+            self.out.write_all(&[0])?;
+        }
+        let head = self.header(self.frames)?;
+        self.out.seek(SeekFrom::Start(self.start))?;
+        self.out.write_all(&head)?;
+        self.out.seek(SeekFrom::End(0))?;
+        self.out.flush()?;
+        Ok(self.out)
+    }
+}
+
 /// Encode a WAV file. `force_rf64` writes the RF64 layout even for small files (for tests);
 /// it is used automatically when the file would exceed 4 GiB.
 /// `mask` overrides the speaker mask derived from the channel count.
@@ -269,36 +389,15 @@ pub(crate) fn encode(
     validate_buffer(buf)?;
     let channels = buf.channels.len();
     let frames = buf.frames();
-    let (bits, is_float): (u16, bool) = match depth {
-        BitDepth::Int16 => (16, false),
-        BitDepth::Int24 => (24, false),
-        BitDepth::Int32 => (32, false),
-        BitDepth::Float32 => (32, true),
-    };
-    let bytes = usize::from(bits / 8);
-    let head = header(channels, buf.sample_rate, (bits, is_float), bwf, mask, frames as u64, force_rf64)?;
-    let data_len = (bytes * channels).checked_mul(frames).ok_or_else(|| AudioError::TooLarge("data size overflow".into()))?;
-
+    let format = sample_format(depth);
+    let head = header(channels, buf.sample_rate, format, bwf, mask, frames as u64, force_rf64)?;
+    let data_len = (usize::from(format.0 / 8) * channels).checked_mul(frames).ok_or_else(|| AudioError::TooLarge("data size overflow".into()))?;
     let mut out = Vec::new();
     out.try_reserve_exact(head.len().saturating_add(data_len).saturating_add(1))
         .map_err(|_| AudioError::TooLarge(format!("cannot allocate {data_len} bytes for WAV output")))?;
-    out.extend_from_slice(&head);
-    let mut qs = Quantizer::per_channel(u32::from(bits), dither, channels);
-    for f in 0..frames {
-        for (ch, q) in buf.channels.iter().zip(qs.iter_mut()) {
-            let s = ch.get(f).copied().unwrap_or(0.0);
-            if is_float {
-                out.extend_from_slice(&clamp_float(s).to_le_bytes());
-            } else {
-                let v = q.quantize(s).to_le_bytes();
-                out.extend_from_slice(v.get(..bytes).unwrap_or_default());
-            }
-        }
-    }
-    if data_len % 2 == 1 {
-        out.push(0);
-    }
-    Ok(out)
+    let mut w = Writer::new(Cursor::new(out), channels, buf.sample_rate, depth, dither, bwf, mask, force_rf64)?;
+    w.write(&buf.channels, frames)?;
+    Ok(w.finish()?.into_inner())
 }
 
 /// Everything before the sample data of a WAV holding `frames` frames.

@@ -316,7 +316,15 @@ impl Plugin for ModFx {
     }
 
     fn tail_samples(&self) -> usize {
-        ms_to_samples(200.0, self.sr) as usize
+        // Time for feedback to fall by 60 dB at the longest delay of the sweep, as for the delay
+        // above; never shorter than the 200 ms this used to report.
+        let longest = match self.kind {
+            ModKind::Chorus => self.p.v(2) + self.p.v(1) / 100.0 * 6.0,
+            ModKind::Flanger => self.p.v(2),
+        };
+        let fb = (self.p.v(3).abs() / 100.0).clamp(0.0, 0.99);
+        let repeats = if fb < 1e-3 { 1.0 } else { (-60.0 / (20.0 * fb.log10())).min(500.0) + 1.0 };
+        ms_to_samples((longest * repeats).max(200.0), self.sr) as usize
     }
 }
 

@@ -14,11 +14,13 @@ use crate::{ClapError, scan};
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, clap_event_header, clap_event_midi,
-    clap_event_note, clap_event_param_value, clap_input_events, clap_output_events,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE,
+    CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi, clap_event_note, clap_event_param_value,
+    clap_event_transport, clap_input_events, clap_output_events,
 };
 use clap_sys::ext::audio_ports::{CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, clap_audio_port_info, clap_plugin_audio_ports};
-use clap_sys::ext::gui::{CLAP_EXT_GUI, clap_host_gui, clap_plugin_gui};
+use clap_sys::ext::gui::{CLAP_EXT_GUI, clap_host_gui, clap_plugin_gui, clap_window, clap_window_handle};
 use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_host_latency, clap_plugin_latency};
 use clap_sys::ext::log::{CLAP_EXT_LOG, CLAP_LOG_ERROR, CLAP_LOG_FATAL, CLAP_LOG_WARNING, clap_host_log, clap_log_severity};
 use clap_sys::ext::note_ports::{CLAP_EXT_NOTE_PORTS, clap_note_port_info, clap_plugin_note_ports};
@@ -27,16 +29,18 @@ use clap_sys::ext::params::{
 };
 use clap_sys::ext::state::{CLAP_EXT_STATE, clap_host_state, clap_plugin_state};
 use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
+use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
 use clap_sys::host::clap_host;
 use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{CLAP_PROCESS_ERROR, clap_process};
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::{CLAP_VERSION, clap_version_is_compatible};
+use soundcraft_dsp::Transport;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// Most plugins one factory may report (hostile-input cap).
@@ -275,7 +279,7 @@ impl Bundle {
         inst.state_ext = inst.extension::<clap_plugin_state>(CLAP_EXT_STATE);
         let gui = inst.extension::<clap_plugin_gui>(CLAP_EXT_GUI);
         inst.gui = Arc::new(GuiLink {
-            inner: Mutex::new(GuiInner { plugin, gui, alive: !gui.is_null(), created: false, visible: false }),
+            inner: Mutex::new(GuiInner { plugin, gui, state: inst.state_ext, alive: true, created: false, visible: false, window: None }),
             host: Arc::clone(&inst.state),
         });
         Ok(inst)
@@ -310,6 +314,8 @@ pub(crate) struct HostState {
     pub gui_destroyed: AtomicBool,
     pub gui_show: AtomicBool,
     pub gui_hide: AtomicBool,
+    /// A size an embedded editor asked for (`width << 32 | height`; 0 = none pending).
+    pub gui_resize: AtomicU64,
     /// Parameter changes the plugin reported (output events: typically edits in its GUI),
     /// waiting for the UI. Bounded by `EDIT_CAP`; the audio thread only `try_lock`s it.
     pub edits: Mutex<Vec<(u32, f64)>>,
@@ -328,6 +334,7 @@ impl Default for HostState {
             gui_destroyed: AtomicBool::new(false),
             gui_show: AtomicBool::new(false),
             gui_hide: AtomicBool::new(false),
+            gui_resize: AtomicU64::new(0),
             edits: Mutex::new(Vec::with_capacity(EDIT_CAP)),
         }
     }
@@ -408,8 +415,16 @@ unsafe extern "C" fn host_state_mark_dirty(host: *const clap_host) {
 
 unsafe extern "C" fn host_gui_resize_hints_changed(_host: *const clap_host) {}
 
-unsafe extern "C" fn host_gui_request_resize(_host: *const clap_host, _width: u32, _height: u32) -> bool {
-    // Floating windows belong to the plugin, which resizes them itself.
+unsafe extern "C" fn host_gui_request_resize(host: *const clap_host, width: u32, height: u32) -> bool {
+    // Floating windows belong to the plugin, which resizes them itself; an embedded editor's host
+    // window is resized by the editor's `idle` on the main thread.
+    // SAFETY: the plugin passes back the host pointer we gave it.
+    if let Some(s) = unsafe { state(host) }
+        && width > 0
+        && height > 0
+    {
+        s.gui_resize.store((u64::from(width) << 32) | u64::from(height), Ordering::Relaxed);
+    }
     true
 }
 
@@ -579,6 +594,40 @@ impl RawEvent {
     }
 }
 
+fn transport_event(t: &Transport) -> clap_event_transport {
+    let fixed = |x: f64, factor: i64| if x.is_finite() { (x * factor as f64).round() as i64 } else { 0 };
+    let mut flags =
+        CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE | CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+    if t.playing {
+        flags |= CLAP_TRANSPORT_IS_PLAYING;
+    }
+    if t.recording {
+        flags |= CLAP_TRANSPORT_IS_RECORDING;
+    }
+    clap_event_transport {
+        header: clap_event_header {
+            size: u32::try_from(size_of::<clap_event_transport>()).unwrap_or(u32::MAX),
+            time: 0,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: CLAP_EVENT_TRANSPORT,
+            flags: 0,
+        },
+        flags,
+        song_pos_beats: fixed(t.quarters, CLAP_BEATTIME_FACTOR),
+        song_pos_seconds: fixed(t.seconds, CLAP_SECTIME_FACTOR),
+        tempo: t.tempo,
+        tempo_inc: 0.0,
+        loop_start_beats: 0,
+        loop_end_beats: 0,
+        loop_start_seconds: 0,
+        loop_end_seconds: 0,
+        bar_start: fixed(t.bar_start, CLAP_BEATTIME_FACTOR),
+        bar_number: i32::try_from(t.bar).unwrap_or(0),
+        tsig_num: u16::try_from(t.numerator).unwrap_or(4),
+        tsig_denom: u16::try_from(t.denominator).unwrap_or(4),
+    }
+}
+
 unsafe extern "C" fn in_events_size(list: *const clap_input_events) -> u32 {
     if list.is_null() {
         return 0;
@@ -696,17 +745,21 @@ fn window_api() -> Option<&'static CStr> {
 struct GuiInner {
     plugin: *const clap_plugin,
     gui: *const clap_plugin_gui,
+    state: *const clap_plugin_state,
     /// The plugin instance exists (cleared by `Instance::drop` before it destroys the plugin).
     alive: bool,
     created: bool,
     visible: bool,
+    /// The host window of an embedded editor (`None` for floating editors).
+    window: Option<hostwin::HostWindow>,
 }
 
-/// The link between an instance and its editor handles. The instance may process on the audio
-/// thread while the editor is driven from the main thread: CLAP allows `clap.gui` (main-thread)
-/// calls concurrently with audio-thread calls. Every GUI call happens under this lock, and the
-/// instance clears `alive` (destroying any GUI) under the same lock before it destroys the
-/// plugin, so a handle can never call into a destroyed plugin.
+/// The link between an instance and its editor and state handles. The instance may process on
+/// the audio thread while the editor is driven and the state saved from the main thread: CLAP
+/// allows `clap.gui` and `clap.state` (main-thread) calls concurrently with audio-thread calls.
+/// Every such call happens under this lock, and the instance clears `alive` (destroying any GUI)
+/// under the same lock before it destroys the plugin, so a handle can never call into a destroyed
+/// plugin.
 pub(crate) struct GuiLink {
     inner: Mutex<GuiInner>,
     host: Arc<HostState>,
@@ -715,7 +768,15 @@ pub(crate) struct GuiLink {
 impl Default for GuiLink {
     fn default() -> Self {
         GuiLink {
-            inner: Mutex::new(GuiInner { plugin: std::ptr::null(), gui: std::ptr::null(), alive: false, created: false, visible: false }),
+            inner: Mutex::new(GuiInner {
+                plugin: std::ptr::null(),
+                gui: std::ptr::null(),
+                state: std::ptr::null(),
+                alive: false,
+                created: false,
+                visible: false,
+                window: None,
+            }),
             host: Arc::new(HostState::default()),
         }
     }
@@ -731,7 +792,8 @@ impl GuiLink {
     }
 
     pub fn available(&self) -> bool {
-        self.lock().alive
+        let g = self.lock();
+        g.alive && !g.gui.is_null()
     }
 
     pub fn host(&self) -> &HostState {
@@ -755,6 +817,9 @@ impl GuiLink {
                 // SAFETY: live plugin with a created GUI; main thread (checked).
                 unsafe { show(g.plugin) };
             }
+            if let Some(w) = &g.window {
+                w.raise();
+            }
             g.visible = true;
             return Ok(());
         }
@@ -762,7 +827,11 @@ impl GuiLink {
         let (Some(supported), Some(create)) = (vt.is_api_supported, vt.create) else { return Err("incomplete clap.gui extension".into()) };
         // SAFETY: live plugin; `api` is a static NUL-terminated string; main thread.
         if !unsafe { supported(g.plugin, api.as_ptr(), true) } {
-            return Err("this plugin offers only an embedded editor; SoundCraft hosts floating CLAP editors".into());
+            // SAFETY: as above.
+            if hostwin::SUPPORTED && unsafe { supported(g.plugin, api.as_ptr(), false) } {
+                return self.open_embedded(&mut g, vt, api, title);
+            }
+            return Err("this plugin offers only an embedded editor, which SoundCraft hosts on Windows only".into());
         }
         self.host.gui_closed.store(false, Ordering::Relaxed);
         self.host.gui_destroyed.store(false, Ordering::Relaxed);
@@ -794,6 +863,61 @@ impl GuiLink {
         Ok(())
     }
 
+    /// Embeds the editor in a host window of ours (plugins that offer no floating editor).
+    fn open_embedded(&self, g: &mut GuiInner, vt: clap_plugin_gui, api: &CStr, title: &str) -> Result<(), String> {
+        let (Some(create), Some(set_parent)) = (vt.create, vt.set_parent) else { return Err("incomplete clap.gui extension".into()) };
+        self.host.gui_closed.store(false, Ordering::Relaxed);
+        self.host.gui_destroyed.store(false, Ordering::Relaxed);
+        self.host.gui_resize.store(0, Ordering::Relaxed);
+        // SAFETY: live plugin; `api` is a static NUL-terminated string; main thread; no GUI yet.
+        if !unsafe { create(g.plugin, api.as_ptr(), false) } {
+            return Err("the plugin could not create its editor".into());
+        }
+        g.created = true;
+        if let Some(f) = vt.set_scale {
+            // SAFETY: live plugin with a created GUI.
+            unsafe { f(g.plugin, 1.0) };
+        }
+        let (mut w, mut h) = (640u32, 480u32);
+        if let Some(f) = vt.get_size {
+            let (mut a, mut b) = (0u32, 0u32);
+            // SAFETY: live plugin with a created GUI; both out-pointers are valid locals.
+            if unsafe { f(g.plugin, &mut a, &mut b) } && a > 0 && b > 0 {
+                (w, h) = (a.min(16_384), b.min(16_384));
+            }
+        }
+        let win = match hostwin::HostWindow::new(title, f64::from(w), f64::from(h)) {
+            Ok(win) => win,
+            Err(e) => {
+                GuiLink::destroy(g);
+                return Err(e);
+            }
+        };
+        let parent = clap_window { api: api.as_ptr(), specific: clap_window_handle { win32: win.parent() } };
+        // SAFETY: live plugin with a created embedded GUI; `parent` names our live window and
+        // outlives the call.
+        if !unsafe { set_parent(g.plugin, &parent) } {
+            win.close();
+            GuiLink::destroy(g);
+            return Err("the editor could not attach to its window".into());
+        }
+        g.window = Some(win);
+        let shown = match vt.show {
+            // SAFETY: live plugin with a created, parented GUI.
+            Some(f) => unsafe { f(g.plugin) },
+            None => true,
+        };
+        if !shown {
+            GuiLink::destroy(g);
+            return Err("the plugin could not show its editor".into());
+        }
+        if let Some(win) = &g.window {
+            win.raise();
+        }
+        g.visible = true;
+        Ok(())
+    }
+
     fn destroy(g: &mut GuiInner) {
         if g.created
             && let Some(f) = GuiLink::vt(g).and_then(|v| v.destroy)
@@ -803,6 +927,26 @@ impl GuiLink {
         }
         g.created = false;
         g.visible = false;
+        // The plugin's child window is gone; now its host window can go too.
+        if let Some(w) = g.window.take() {
+            w.close();
+        }
+    }
+
+    /// `clap_plugin_state.save` into memory (`None` without the extension, on failure, or once the
+    /// plugin is gone).
+    pub fn save_state(&self) -> Option<Vec<u8>> {
+        let g = self.lock();
+        if !g.alive {
+            return None;
+        }
+        // SAFETY: `state` is null or the plugin's static extension vtable, valid while `alive`.
+        let save = unsafe { g.state.as_ref() }?.save?;
+        let mut out: Vec<u8> = Vec::new();
+        let stream = clap_ostream { ctx: (&mut out as *mut Vec<u8>).cast::<c_void>(), write: Some(ostream_write) };
+        // SAFETY: live plugin (`alive`, under the lock); the stream and its context live on this
+        // frame for the call.
+        unsafe { save(g.plugin, &stream) }.then_some(out)
     }
 
     /// Closes (destroys) the editor.
@@ -815,7 +959,7 @@ impl GuiLink {
 
     pub fn is_open(&self) -> bool {
         let g = self.lock();
-        g.alive && g.created && g.visible
+        g.alive && g.created && g.visible && g.window.as_ref().is_none_or(hostwin::HostWindow::is_visible)
     }
 
     /// Main-thread housekeeping: runs a requested `on_main_thread`, follows the plugin's
@@ -836,7 +980,21 @@ impl GuiLink {
             }
         }
         if g.created {
-            if self.host.gui_closed.swap(false, Ordering::Relaxed) {
+            let resize = self.host.gui_resize.swap(0, Ordering::Relaxed);
+            if resize != 0
+                && let Some(win) = &g.window
+            {
+                let (w, h) = ((resize >> 32) as u32, resize as u32);
+                hostwin::resize(win.raw(), f64::from(w), f64::from(h));
+                if let Some(f) = GuiLink::vt(&g).and_then(|v| v.set_size) {
+                    // SAFETY: live plugin with a created embedded GUI, main thread.
+                    unsafe { f(g.plugin, w, h) };
+                }
+            }
+            if g.window.as_ref().is_some_and(|w| !w.is_visible()) {
+                // The user closed the embedded editor's host window: free the editor.
+                GuiLink::destroy(&mut g);
+            } else if self.host.gui_closed.swap(false, Ordering::Relaxed) {
                 // The user closed the floating window (or the plugin lost its GUI): free it.
                 self.host.gui_destroyed.store(false, Ordering::Relaxed);
                 GuiLink::destroy(&mut g);
@@ -872,6 +1030,8 @@ impl GuiLink {
             } else {
                 log::warn!("clap: editor still open while its plugin is destroyed off the main thread");
                 g.created = false;
+                // Window calls are main-thread only: leave the host window rather than crash.
+                g.window = None;
             }
         }
         g.alive = false;
@@ -1012,19 +1172,14 @@ impl Instance {
         self.gui.available().then(|| Arc::clone(&self.gui))
     }
 
-    /// `clap_plugin_state.save` into memory (`None` without the extension or on failure).
-    pub fn save_state(&self) -> Option<Vec<u8>> {
-        // SAFETY: the extension pointer, when non-null, points to a static vtable in the plugin.
-        let save = unsafe { self.state_ext.as_ref() }?.save?;
-        let mut out: Vec<u8> = Vec::new();
-        let stream = clap_ostream { ctx: (&mut out as *mut Vec<u8>).cast::<c_void>(), write: Some(ostream_write) };
-        // SAFETY: valid instance; the stream and its context live on this frame for the call.
-        unsafe { save(self.plugin, &stream) }.then_some(out)
+    /// The same link, for state handles (`None` when the plugin has no `clap.state`).
+    pub fn state_link(&self) -> Option<Arc<GuiLink>> {
+        (!self.state_ext.is_null()).then(|| Arc::clone(&self.gui))
     }
 
     /// `clap_plugin_state.load` from memory. `false` without the extension or when refused.
     pub fn load_state(&self, data: &[u8]) -> bool {
-        // SAFETY: see `save_state`.
+        // SAFETY: the extension pointer, when non-null, points to a static vtable in the plugin.
         let Some(load) = (unsafe { self.state_ext.as_ref() }).and_then(|s| s.load) else { return false };
         let mut cursor = ReadCursor { data, pos: 0 };
         let stream = clap_istream { ctx: (&mut cursor as *mut ReadCursor<'_>).cast::<c_void>(), read: Some(istream_read) };
@@ -1186,6 +1341,7 @@ impl Instance {
         outputs: &mut PortBuffers,
         events: &[Event],
         offset: u32,
+        transport: Option<&Transport>,
     ) -> Result<i32, ClapError> {
         if !self.active {
             return Err(ClapError::Process("not active".into()));
@@ -1219,10 +1375,11 @@ impl Instance {
         self.out_params.clear();
         let out_events =
             clap_output_events { ctx: (&mut self.out_params as *mut Vec<(u32, f64)>).cast::<c_void>(), try_push: Some(out_events_try_push) };
+        let transport = transport.map(transport_event);
         let p = clap_process {
             steady_time,
             frames_count: u32::try_from(frames).unwrap_or(0),
-            transport: std::ptr::null(),
+            transport: transport.as_ref().map_or(std::ptr::null(), std::ptr::from_ref),
             audio_inputs: inputs.bufs.as_ptr(),
             audio_outputs: outputs.bufs.as_mut_ptr(),
             audio_inputs_count: u32::try_from(inputs.bufs.len()).unwrap_or(0),
@@ -1232,8 +1389,8 @@ impl Instance {
         };
         // SAFETY: valid, processing instance. Every buffer pointer refers to `frames` (or more)
         // valid f32s owned by `inputs`/`outputs`, which are borrowed for the whole call; the event
-        // lists and their contexts live on this stack frame / in `self.raw`, untouched until the
-        // call returns.
+        // lists and their contexts and the transport live on this stack frame / in `self.raw`,
+        // untouched until the call returns.
         let status = unsafe { process(self.plugin, &p) };
         if !self.out_params.is_empty()
             && let Ok(mut edits) = self.state.edits.try_lock()
@@ -1262,5 +1419,239 @@ impl Drop for Instance {
             unsafe { f(self.plugin) };
         }
         self.created = false;
+    }
+}
+
+// ---- host window for embedded editors ------------------------------------------------------
+
+/// The Windows host window for embedded editors: a top-level window owned by the app's active
+/// window (no taskbar button) whose client area is the plugin's parent `HWND`. Closing it only
+/// hides it; the editor link notices in `idle`, destroys the plugin's GUI, then the window.
+/// Messages are dispatched by the app's own event loop on the main thread.
+#[cfg(windows)]
+mod hostwin {
+    use std::ffi::c_void;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        AdjustWindowRectEx, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_EXSTYLE, GWL_STYLE,
+        GetWindowLongPtrW, IDC_ARROW, IsWindow, IsWindowVisible, LoadCursorW, RegisterClassExW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CLOSE, WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_OVERLAPPED, WS_SYSMENU,
+    };
+
+    pub const SUPPORTED: bool = true;
+
+    /// Rust names the process's first thread "main"; the app runs its UI (and message loop) there.
+    fn on_main_thread() -> bool {
+        std::thread::current().name() == Some("main")
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().filter(|&c| c != 0).chain(Some(0)).collect()
+    }
+
+    const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+
+    unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if msg == WM_CLOSE {
+            // SAFETY: `hwnd` is the window this procedure was called for.
+            unsafe { ShowWindow(hwnd, SW_HIDE) };
+            return 0;
+        }
+        // SAFETY: default handling of a message for the window it was sent to.
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    /// Registers the window class once; the name lives for the whole process.
+    fn class_name() -> Option<&'static [u16]> {
+        static CLASS: OnceLock<Option<Vec<u16>>> = OnceLock::new();
+        CLASS
+            .get_or_init(|| {
+                let name = wide("SoundCraftClapEditor");
+                // SAFETY: null asks for this process's module handle.
+                let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+                let wc = WNDCLASSEXW {
+                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                    style: CS_HREDRAW | CS_VREDRAW,
+                    lpfnWndProc: Some(wndproc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: instance,
+                    hIcon: std::ptr::null_mut(),
+                    // SAFETY: a system cursor (null instance + predefined id).
+                    hCursor: unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) },
+                    hbrBackground: std::ptr::null_mut(),
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: name.as_ptr(),
+                    hIconSm: std::ptr::null_mut(),
+                };
+                // SAFETY: a fully initialised class description whose strings outlive the call
+                // (the name is kept for the process lifetime in this `OnceLock`).
+                (unsafe { RegisterClassExW(&wc) } != 0).then_some(name)
+            })
+            .as_deref()
+    }
+
+    /// Outer window size for a client area of `w`×`h`.
+    fn outer_size(style: u32, ex_style: u32, w: f64, h: f64) -> (i32, i32) {
+        let mut r = RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
+        // SAFETY: `r` is a valid, writable rect.
+        unsafe { AdjustWindowRectEx(&mut r, style, 0, ex_style) };
+        (r.right.saturating_sub(r.left), r.bottom.saturating_sub(r.top))
+    }
+
+    /// Owns the window handle; destroyed in `close` (main thread only).
+    pub struct HostWindow {
+        hwnd: HWND,
+    }
+
+    // SAFETY: the handle is only used on the main thread (every method checks); the struct
+    // merely carries it between threads' locks.
+    unsafe impl Send for HostWindow {}
+
+    impl HostWindow {
+        fn live(&self) -> Option<HWND> {
+            // SAFETY: `IsWindow` accepts any value and only reports whether it names a window.
+            (on_main_thread() && unsafe { IsWindow(self.hwnd) } != 0).then_some(self.hwnd)
+        }
+
+        pub fn new(title: &str, w: f64, h: f64) -> Result<HostWindow, String> {
+            if !on_main_thread() {
+                return Err("plugin editors must be opened on the main thread".into());
+            }
+            let class = class_name().ok_or_else(|| "cannot register the editor window class".to_string())?;
+            let title = wide(title);
+            let (ow, oh) = outer_size(STYLE, 0, w, h);
+            // SAFETY: main thread; the active window (or null) of this thread's queue.
+            let owner = unsafe { GetActiveWindow() };
+            // SAFETY: registered class and NUL-terminated strings that outlive the call; the
+            // owner is null or a window of this thread.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    title.as_ptr(),
+                    STYLE,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    ow,
+                    oh,
+                    owner,
+                    std::ptr::null_mut(),
+                    GetModuleHandleW(std::ptr::null()),
+                    std::ptr::null(),
+                )
+            };
+            if hwnd.is_null() {
+                return Err("cannot create the editor window".into());
+            }
+            Ok(HostWindow { hwnd })
+        }
+
+        /// The window handle (for resizes).
+        pub fn raw(&self) -> *mut c_void {
+            self.hwnd
+        }
+
+        /// The `HWND` the plugin creates its child window in.
+        pub fn parent(&self) -> *mut c_void {
+            self.live().unwrap_or(std::ptr::null_mut())
+        }
+
+        pub fn raise(&self) {
+            if let Some(h) = self.live() {
+                // SAFETY: a live window of this thread.
+                unsafe {
+                    ShowWindow(h, SW_SHOW);
+                    SetForegroundWindow(h);
+                }
+            }
+        }
+
+        pub fn is_visible(&self) -> bool {
+            // SAFETY: a live window of this thread.
+            self.live().is_some_and(|h| unsafe { IsWindowVisible(h) } != 0)
+        }
+
+        pub fn close(self) {
+            if let Some(h) = self.live() {
+                // SAFETY: our own live window; the plugin's GUI was destroyed first.
+                unsafe { DestroyWindow(h) };
+            }
+        }
+    }
+
+    /// Resizes a host window's client area (`window` from [`HostWindow::raw`]); main thread only.
+    pub fn resize(window: *mut c_void, w: f64, h: f64) {
+        // SAFETY: `IsWindow` accepts any value.
+        if !on_main_thread() || window.is_null() || unsafe { IsWindow(window) } == 0 {
+            return;
+        }
+        // SAFETY: a live window of this thread; style values are read, not changed.
+        let (style, ex) = unsafe { (GetWindowLongPtrW(window, GWL_STYLE) as u32, GetWindowLongPtrW(window, GWL_EXSTYLE) as u32) };
+        let (ow, oh) = outer_size(style, ex, w, h);
+        // SAFETY: as above; only the size changes.
+        unsafe { SetWindowPos(window, std::ptr::null_mut(), 0, 0, ow, oh, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    }
+}
+
+/// Other platforms: embedded editors are not hosted (floating ones still are).
+#[cfg(not(windows))]
+mod hostwin {
+    use std::ffi::c_void;
+
+    pub const SUPPORTED: bool = false;
+
+    pub struct HostWindow;
+
+    impl HostWindow {
+        pub fn new(_title: &str, _w: f64, _h: f64) -> Result<HostWindow, String> {
+            Err("embedded plugin editors are not hosted on this platform".into())
+        }
+        pub fn raw(&self) -> *mut c_void {
+            std::ptr::null_mut()
+        }
+        pub fn parent(&self) -> *mut c_void {
+            std::ptr::null_mut()
+        }
+        pub fn raise(&self) {}
+        pub fn is_visible(&self) -> bool {
+            false
+        }
+        pub fn close(self) {}
+    }
+
+    pub fn resize(_window: *mut c_void, _w: f64, _h: f64) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_transport_reaches_clap_in_fixed_point() {
+        let t = Transport {
+            playing: true,
+            tempo: 90.0,
+            numerator: 3,
+            denominator: 4,
+            samples: 96_000,
+            seconds: 2.0,
+            quarters: 3.5,
+            bar_start: 3.0,
+            bar: 1,
+            ..Transport::default()
+        };
+        let e = transport_event(&t);
+        assert_eq!((e.header.type_, e.header.size as usize), (CLAP_EVENT_TRANSPORT, size_of::<clap_event_transport>()));
+        assert_eq!(e.flags & CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_PLAYING);
+        assert_eq!(e.flags & CLAP_TRANSPORT_IS_RECORDING, 0);
+        assert_eq!((e.song_pos_beats, e.bar_start), (7 * CLAP_BEATTIME_FACTOR / 2, 3 * CLAP_BEATTIME_FACTOR));
+        assert_eq!(e.song_pos_seconds, 2 * CLAP_SECTIME_FACTOR);
+        assert_eq!((e.tempo, e.bar_number, e.tsig_num, e.tsig_denom), (90.0, 1, 3, 4));
+        let nan = transport_event(&Transport { quarters: f64::NAN, ..t });
+        assert_eq!(nan.song_pos_beats, 0);
     }
 }

@@ -3,7 +3,8 @@
 //! - `org.soundcraft.test.gain`: stereo in/out, param 7 "Gain" (0..2, default 1), param 3 "Mode"
 //!   (stepped enum A/B/C), hidden param 9, latency 3 samples.
 //! - `org.soundcraft.test.synth`: instrument, stereo out, CLAP note port; outputs a constant equal
-//!   to the velocity of the held note (0 when none), switching at the event's sample offset.
+//!   to the velocity of the held note (0 when none), switching at the event's sample offset. A
+//!   MIDI CC 7 (volume) sets the constant to its value / 127.
 //!
 //! The gain plugin also implements `clap.state` (gain and mode as two little-endian f64s) and a
 //! floating-only `clap.gui` without a real window: showing it "edits" the gain to 0.25 in the GUI,
@@ -150,6 +151,12 @@ fn apply(f: &mut Fx, h: &clap_event_header) {
             f.level = e.velocity;
         }
         CLAP_EVENT_NOTE_OFF => f.level = 0.0,
+        CLAP_EVENT_MIDI => {
+            let e = unsafe { &*(h as *const clap_event_header as *const clap_event_midi) };
+            if e.data[0] & 0xF0 == 0xB0 && e.data[1] == 7 {
+                f.level = f64::from(e.data[2]) / 127.0;
+            }
+        }
         _ => {}
     }
 }

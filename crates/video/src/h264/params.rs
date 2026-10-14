@@ -1,8 +1,13 @@
 //! Sequence and picture parameter sets (7.3.2.1, 7.3.2.2) including VUI and scaling lists.
 
 use crate::bitstream::BitReader;
-use crate::h264::error::{Result, ensure, unsupported};
+use crate::h264::error::{Error, Result, ensure, unsupported};
 use crate::h264::tables::*;
+
+/// `v + k` for a coded `*_minus*` field, or the error its range check gives.
+fn plus(v: u32, k: u32, err: &str) -> Result<u32> {
+    v.checked_add(k).ok_or_else(|| Error::Invalid(err.to_string()))
+}
 
 /// Scaling matrices after applying fall-back rules, stored in raster order (weightScale).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,7 +155,7 @@ pub struct HrdParameters {
 }
 
 fn parse_hrd(r: &mut BitReader) -> Result<HrdParameters> {
-    let cpb_cnt = r.read_ue()? + 1;
+    let cpb_cnt = plus(r.read_ue()?, 1, "cpb_cnt_minus1 out of range")?;
     ensure!(cpb_cnt <= 32, "cpb_cnt_minus1 out of range");
     let mut h = HrdParameters { cpb_cnt, bit_rate_scale: r.read_bits(4)? as u8, cpb_size_scale: r.read_bits(4)? as u8, ..Default::default() };
     for _ in 0..cpb_cnt {
@@ -353,8 +358,8 @@ impl Sps {
             if chroma_format_idc == 3 {
                 separate_colour_plane = r.read_flag()?;
             }
-            bit_depth_luma = r.read_ue()? + 8;
-            bit_depth_chroma = r.read_ue()? + 8;
+            bit_depth_luma = plus(r.read_ue()?, 8, "bit depth out of range")?;
+            bit_depth_chroma = plus(r.read_ue()?, 8, "bit depth out of range")?;
             ensure!(bit_depth_luma <= 14 && bit_depth_chroma <= 14, "bit depth out of range");
             bypass = r.read_flag()?;
             seq_scaling_matrix_present = r.read_flag()?;
@@ -363,7 +368,7 @@ impl Sps {
                 scaling_lists = parse_scaling_lists(&mut r, count, None)?;
             }
         }
-        let log2_max_frame_num = r.read_ue()? + 4;
+        let log2_max_frame_num = plus(r.read_ue()?, 4, "log2_max_frame_num out of range")?;
         ensure!(log2_max_frame_num <= 16, "log2_max_frame_num out of range");
         let pic_order_cnt_type = r.read_ue()?;
         ensure!(pic_order_cnt_type <= 2, "pic_order_cnt_type out of range");
@@ -373,7 +378,7 @@ impl Sps {
         let mut offset_for_top_to_bottom_field = 0;
         let mut offset_for_ref_frame = Vec::new();
         if pic_order_cnt_type == 0 {
-            log2_max_poc_lsb = r.read_ue()? + 4;
+            log2_max_poc_lsb = plus(r.read_ue()?, 4, "log2_max_pic_order_cnt_lsb out of range")?;
             ensure!(log2_max_poc_lsb <= 16, "log2_max_pic_order_cnt_lsb out of range");
         } else if pic_order_cnt_type == 1 {
             delta_pic_order_always_zero = r.read_flag()?;
@@ -388,8 +393,8 @@ impl Sps {
         let max_num_ref_frames = r.read_ue()?;
         ensure!(max_num_ref_frames <= 16, "max_num_ref_frames out of range");
         let gaps_in_frame_num_allowed = r.read_flag()?;
-        let pic_width_in_mbs = r.read_ue()? + 1;
-        let pic_height_in_map_units = r.read_ue()? + 1;
+        let pic_width_in_mbs = plus(r.read_ue()?, 1, "picture too large")?;
+        let pic_height_in_map_units = plus(r.read_ue()?, 1, "picture too large")?;
         ensure!(pic_width_in_mbs <= 1024 && pic_height_in_map_units <= 1024, "picture too large");
         let frame_mbs_only = r.read_flag()?;
         let mb_adaptive_frame_field = if !frame_mbs_only { r.read_flag()? } else { false };
@@ -429,7 +434,8 @@ impl Sps {
         };
         if let Some((l, rr, t, b)) = sps.frame_crop {
             let (cx, cy) = sps.crop_unit();
-            ensure!((l + rr) * cx < sps.width() && (t + b) * cy < sps.height(), "frame cropping exceeds picture size");
+            let fits = |a: u32, b: u32, unit: u32, size: u32| a.checked_add(b).and_then(|v| v.checked_mul(unit)).is_some_and(|v| v < size);
+            ensure!(fits(l, rr, cx, sps.width()) && fits(t, b, cy, sps.height()), "frame cropping exceeds picture size");
         }
         Ok(sps)
     }
@@ -466,7 +472,8 @@ impl Sps {
             None => (0, 0, self.width(), self.height()),
             Some((l, r, t, b)) => {
                 let (cx, cy) = self.crop_unit();
-                (l * cx, t * cy, self.width() - (l + r) * cx, self.height() - (t + b) * cy)
+                let cut = |a: u32, b: u32, unit: u32| a.saturating_add(b).saturating_mul(unit);
+                (l.saturating_mul(cx), t.saturating_mul(cy), self.width().saturating_sub(cut(l, r, cx)), self.height().saturating_sub(cut(t, b, cy)))
             }
         }
     }
@@ -572,7 +579,7 @@ impl Pps {
             .ok_or_else(|| crate::h264::Error::MissingParameterSet(format!("SPS {sps_id} for PPS {id}")))?;
         let entropy_coding_mode = r.read_flag()?;
         let bottom_field_pic_order_in_frame_present = r.read_flag()?;
-        let num_slice_groups = r.read_ue()? + 1;
+        let num_slice_groups = plus(r.read_ue()?, 1, "num_slice_groups out of range")?;
         ensure!(num_slice_groups <= 8, "num_slice_groups out of range");
         let mut slice_group_map_type = 0;
         if num_slice_groups > 1 {
@@ -595,7 +602,7 @@ impl Pps {
                     r.read_ue()?;
                 }
                 6 => {
-                    let n = r.read_ue()? + 1;
+                    let n = plus(r.read_ue()?, 1, "pic_size_in_map_units_minus1 out of range")?;
                     let bits = 32 - (num_slice_groups - 1).leading_zeros();
                     for _ in 0..n {
                         r.read_bits(bits)?;
@@ -604,13 +611,13 @@ impl Pps {
                 _ => {}
             }
         }
-        let num_ref_idx_l0_default_active = r.read_ue()? + 1;
-        let num_ref_idx_l1_default_active = r.read_ue()? + 1;
+        let num_ref_idx_l0_default_active = plus(r.read_ue()?, 1, "num_ref_idx_default_active out of range")?;
+        let num_ref_idx_l1_default_active = plus(r.read_ue()?, 1, "num_ref_idx_default_active out of range")?;
         ensure!(num_ref_idx_l0_default_active <= 32 && num_ref_idx_l1_default_active <= 32, "num_ref_idx_default_active out of range");
         let weighted_pred = r.read_flag()?;
         let weighted_bipred_idc = r.read_bits(2)?;
-        let pic_init_qp = 26 + r.read_se()?;
-        let pic_init_qs = 26 + r.read_se()?;
+        let pic_init_qp = r.read_se()?.checked_add(26).ok_or_else(|| Error::Invalid("pic_init_qp_minus26 out of range".into()))?;
+        let pic_init_qs = r.read_se()?.checked_add(26).ok_or_else(|| Error::Invalid("pic_init_qs_minus26 out of range".into()))?;
         let chroma_qp_index_offset = r.read_se()?;
         ensure!((-12..=12).contains(&chroma_qp_index_offset), "chroma_qp_index_offset out of range");
         let deblocking_filter_control_present = r.read_flag()?;
@@ -715,5 +722,191 @@ mod tests {
         assert_eq!((sps.width(), sps.height()), (176, 144));
         assert_eq!(sps.pic_order_cnt_type, 2);
         assert_eq!(sps.crop_rect(), (0, 0, 176, 144));
+    }
+
+    /// Coded SPS fields; the default is the minimal baseline SPS above.
+    #[derive(Clone, Copy)]
+    struct SpsFields {
+        high_profile: bool,
+        bit_depth_luma_minus8: u32,
+        log2_max_frame_num_minus4: u32,
+        poc_type: u32,
+        log2_max_poc_lsb_minus4: u32,
+        width_minus1: u32,
+        height_minus1: u32,
+        crop: Option<(u32, u32, u32, u32)>,
+        cpb_cnt_minus1: Option<u32>,
+    }
+
+    impl Default for SpsFields {
+        fn default() -> Self {
+            Self {
+                high_profile: false,
+                bit_depth_luma_minus8: 0,
+                log2_max_frame_num_minus4: 0,
+                poc_type: 2,
+                log2_max_poc_lsb_minus4: 0,
+                width_minus1: 10,
+                height_minus1: 8,
+                crop: None,
+                cpb_cnt_minus1: None,
+            }
+        }
+    }
+
+    fn sps(f: SpsFields) -> Result<Sps> {
+        let mut w = BitWriter::new();
+        w.write_bits(if f.high_profile { 100 } else { 66 }, 8);
+        w.write_bits(0, 8);
+        w.write_bits(30, 8);
+        w.write_ue(0);
+        if f.high_profile {
+            w.write_ue(1); // chroma_format_idc
+            w.write_ue(f.bit_depth_luma_minus8);
+            w.write_ue(0); // bit_depth_chroma_minus8
+            w.write_bit(false); // qpprime_y_zero_transform_bypass
+            w.write_bit(false); // seq_scaling_matrix_present
+        }
+        w.write_ue(f.log2_max_frame_num_minus4);
+        w.write_ue(f.poc_type);
+        if f.poc_type == 0 {
+            w.write_ue(f.log2_max_poc_lsb_minus4);
+        }
+        w.write_ue(1);
+        w.write_bit(false);
+        w.write_ue(f.width_minus1);
+        w.write_ue(f.height_minus1);
+        w.write_bit(true); // frame_mbs_only
+        w.write_bit(true); // direct_8x8
+        w.write_bit(f.crop.is_some());
+        if let Some((l, r, t, b)) = f.crop {
+            for v in [l, r, t, b] {
+                w.write_ue(v);
+            }
+        }
+        w.write_bit(f.cpb_cnt_minus1.is_some()); // vui
+        if let Some(n) = f.cpb_cnt_minus1 {
+            for _ in 0..5 {
+                w.write_bit(false); // aspect ratio, overscan, video signal, chroma loc, timing
+            }
+            w.write_bit(true); // nal_hrd
+            w.write_ue(n);
+            w.write_bits(0, 8);
+            w.write_ue(0);
+            w.write_ue(0);
+            w.write_bit(false);
+            w.write_bits(0, 20);
+            w.write_bit(false); // vcl_hrd
+            w.write_bit(false); // low_delay_hrd
+            w.write_bit(false); // pic_struct_present
+            w.write_bit(false); // bitstream_restriction
+        }
+        w.rbsp_trailing();
+        Sps::parse(&w.finish())
+    }
+
+    fn invalid_sps(f: SpsFields) -> String {
+        match sps(f) {
+            Err(crate::h264::Error::Invalid(m)) => m,
+            other => panic!("expected an invalid SPS, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sps_fields_of_the_test_writer_parse() {
+        let s = sps(SpsFields { high_profile: true, poc_type: 0, crop: Some((0, 2, 0, 2)), cpb_cnt_minus1: Some(0), ..Default::default() }).unwrap();
+        assert_eq!((s.bit_depth_luma, s.log2_max_poc_lsb, s.width(), s.height()), (8, 4, 176, 144));
+        assert_eq!(s.crop_rect(), (0, 0, 172, 140));
+        assert_eq!(s.vui.and_then(|v| v.nal_hrd).map(|h| h.cpb_cnt), Some(1));
+    }
+
+    #[test]
+    fn huge_bit_depth_is_an_error() {
+        assert_eq!(invalid_sps(SpsFields { high_profile: true, bit_depth_luma_minus8: u32::MAX, ..Default::default() }), "bit depth out of range");
+    }
+
+    #[test]
+    fn huge_log2_max_frame_num_is_an_error() {
+        assert_eq!(invalid_sps(SpsFields { log2_max_frame_num_minus4: u32::MAX, ..Default::default() }), "log2_max_frame_num out of range");
+    }
+
+    #[test]
+    fn huge_log2_max_poc_lsb_is_an_error() {
+        let f = SpsFields { poc_type: 0, log2_max_poc_lsb_minus4: u32::MAX, ..Default::default() };
+        assert_eq!(invalid_sps(f), "log2_max_pic_order_cnt_lsb out of range");
+    }
+
+    #[test]
+    fn huge_picture_size_is_an_error() {
+        assert_eq!(invalid_sps(SpsFields { width_minus1: u32::MAX, ..Default::default() }), "picture too large");
+        assert_eq!(invalid_sps(SpsFields { height_minus1: u32::MAX, ..Default::default() }), "picture too large");
+    }
+
+    #[test]
+    fn crop_offsets_that_overflow_are_an_error() {
+        let msg = "frame cropping exceeds picture size";
+        // The sum of two offsets overflows, then the scaling by the crop unit does.
+        assert_eq!(invalid_sps(SpsFields { crop: Some((u32::MAX, 1, 0, 0)), ..Default::default() }), msg);
+        assert_eq!(invalid_sps(SpsFields { crop: Some((0, 0, 1 << 31, 0)), ..Default::default() }), msg);
+    }
+
+    #[test]
+    fn huge_cpb_count_is_an_error() {
+        assert_eq!(invalid_sps(SpsFields { cpb_cnt_minus1: Some(u32::MAX), ..Default::default() }), "cpb_cnt_minus1 out of range");
+    }
+
+    /// A PPS for the SPS above; `slice_groups` is (num_slice_groups_minus1, pic_size_in_map_units_minus1)
+    /// coded with slice_group_map_type 6.
+    fn pps(slice_groups: Option<(u32, u32)>, num_ref_idx_l0_minus1: u32, pic_init_qp_minus26: i32) -> Result<Pps> {
+        let mut w = BitWriter::new();
+        w.write_ue(0);
+        w.write_ue(0);
+        w.write_bit(false);
+        w.write_bit(false);
+        match slice_groups {
+            Some((groups, units)) => {
+                w.write_ue(groups);
+                w.write_ue(6);
+                w.write_ue(units);
+            }
+            None => w.write_ue(0),
+        }
+        w.write_ue(num_ref_idx_l0_minus1);
+        w.write_ue(0);
+        w.write_bit(false);
+        w.write_bits(0, 2);
+        w.write_se(pic_init_qp_minus26);
+        w.write_se(0);
+        w.write_se(0);
+        w.write_bit(false);
+        w.write_bit(false);
+        w.write_bit(false);
+        w.rbsp_trailing();
+        Pps::parse(&w.finish(), &[Some(sps(SpsFields::default()).unwrap())])
+    }
+
+    fn invalid_pps(p: Result<Pps>) -> String {
+        match p {
+            Err(crate::h264::Error::Invalid(m)) => m,
+            other => panic!("expected an invalid PPS, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pps_fields_of_the_test_writer_parse() {
+        let p = pps(None, 2, -4).unwrap();
+        assert_eq!((p.num_slice_groups, p.num_ref_idx_l0_default_active, p.pic_init_qp), (1, 3, 22));
+    }
+
+    #[test]
+    fn huge_pps_counts_are_an_error() {
+        assert_eq!(invalid_pps(pps(Some((u32::MAX, 0)), 0, 0)), "num_slice_groups out of range");
+        assert_eq!(invalid_pps(pps(Some((1, u32::MAX)), 0, 0)), "pic_size_in_map_units_minus1 out of range");
+        assert_eq!(invalid_pps(pps(None, u32::MAX, 0)), "num_ref_idx_default_active out of range");
+    }
+
+    #[test]
+    fn huge_pic_init_qp_is_an_error() {
+        assert_eq!(invalid_pps(pps(None, 0, i32::MAX)), "pic_init_qp_minus26 out of range");
     }
 }

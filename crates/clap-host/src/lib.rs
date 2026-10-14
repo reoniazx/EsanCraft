@@ -20,8 +20,10 @@
 //! Plugin state (`clap.state`) round-trips through [`Plugin::save_state`] /
 //! [`Plugin::load_state`] as an opaque blob. Plugin editors (`clap.gui`) open as the plugin's own
 //! floating window ([`Plugin::open_editor`], or [`Plugin::editor`] for a handle usable on the main
-//! thread while the instance processes on the audio thread); plugins that offer only embedded
-//! editors are not hosted yet, and SoundCraft's generic parameter editor still works for them.
+//! thread while the instance processes on the audio thread). Plugins that offer only an embedded
+//! editor get a host window of SoundCraft's on Windows (resized on `request_resize`, closed by
+//! its title bar); elsewhere they are not hosted yet, and SoundCraft's generic parameter editor
+//! still works for them.
 //! Parameter changes made in the plugin's GUI arrive as output events while the plugin processes
 //! and are reported by the editor's `idle`.
 
@@ -88,6 +90,9 @@ pub enum ClapError {
 mod api {
     use super::*;
 
+    pub fn cached() -> Option<Vec<ClapDescriptor>> {
+        registry::cached()
+    }
     pub fn scan() -> Vec<ClapDescriptor> {
         registry::scan()
     }
@@ -115,6 +120,9 @@ mod api {
 mod api {
     use super::*;
 
+    pub fn cached() -> Option<Vec<ClapDescriptor>> {
+        Some(Vec::new())
+    }
     pub fn scan() -> Vec<ClapDescriptor> {
         Vec::new()
     }
@@ -159,6 +167,11 @@ pub fn add_search_dir(dir: &Path) -> usize {
 /// Scans the given folders without touching the cache.
 pub fn scan_paths(dirs: &[PathBuf]) -> Vec<ClapDescriptor> {
     api::scan_paths(dirs)
+}
+
+/// The plugins of the last scan, without scanning: `None` until something has scanned.
+pub fn cached() -> Option<Vec<ClapDescriptor>> {
+    api::cached()
 }
 
 /// The plugins in one `.clap` file or bundle.

@@ -5,6 +5,9 @@ use crate::theme::{Tokens, mono, rgb};
 use egui::{Color32, Sense, vec2};
 use serde_json::json;
 use soundcraft_model::{AutomationMode, ClipContent};
+use soundcraft_playback::AudioConfig;
+use soundcraft_playback::devices::{AudioSystem, DeviceInfo};
+use std::sync::Arc;
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     audio_health(app, ctx);
@@ -111,7 +114,7 @@ fn automation(app: &mut SoundApp, ctx: &egui::Context) {
         for f in ["volume", "pan", "mute", "send level", "send pan", "send mute", "plugin"] {
             let id = format!("automation.enable.{}", f.replace(' ', "_"));
             let mut on = !app.engine.session().edit.flag(&format!("{id}.off"));
-            if ui.checkbox(&mut on, f).changed() {
+            if crate::widgets::checkbox(ui, &mut on, f).changed() {
                 app.engine.session_mut().edit.set_flag(&format!("{id}.off"), !on);
             }
         }
@@ -143,6 +146,8 @@ fn color_palette(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
         });
+        ui.separator();
+        ui.add(egui::Slider::new(&mut app.ui.track_tint, 0.0..=1.0).show_value(false).text("Track tint in the Edit window"));
     });
     app.ui.show_color_palette = open;
 }
@@ -178,11 +183,17 @@ fn system_usage(app: &mut SoundApp, ctx: &egui::Context) {
 fn task_manager(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_task_manager;
     win(ctx, &mut open, "Task Manager", vec2(320.0, 120.0), |ui| {
-        ui.label("No background tasks are running.");
+        match &app.bounce {
+            Some(b) => {
+                ui.label(format!("Bouncing {} ({:.0}%)", b.path().display(), b.progress() * 100.0));
+                ui.add(egui::ProgressBar::new(b.progress()));
+            }
+            None => {
+                ui.label("No background tasks are running.");
+            }
+        }
         ui.label(
-            egui::RichText::new("Renders, bounces and AudioSuite processes run to completion before returning.")
-                .small()
-                .color(Tokens::current().text_dim),
+            egui::RichText::new("Renders and AudioSuite processes run to completion before returning.").small().color(Tokens::current().text_dim),
         );
     });
     app.ui.show_task_manager = open;
@@ -202,10 +213,7 @@ fn metadata(app: &mut SoundApp, ctx: &egui::Context) {
                 ("Clips", s.tracks.iter().map(|t| t.clips().len()).sum::<usize>().to_string()),
                 ("Audio files", s.sources.len().to_string()),
                 ("Markers", s.markers.len().to_string()),
-                (
-                    "Length",
-                    soundcraft_time::format_position(s.content_end(), soundcraft_time::TimeFormat::MinSecs, s.sample_rate, &s.tempo, s.frame_rate, 0),
-                ),
+                ("Length", s.format_position(s.content_end(), soundcraft_time::TimeFormat::MinSecs)),
             ] {
                 ui.label(k);
                 ui.label(v);
@@ -334,7 +342,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                         let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
                         let ext = std::path::Path::new(&name).extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
-                        (is_dir || ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "caf", "mid", "midi", "scraft"].contains(&ext.as_str()))
+                        (is_dir || ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "m4b", "caf", "mid", "midi", "scraft"].contains(&ext.as_str()))
                             .then_some((name, is_dir))
                     })
                     .collect()
@@ -402,40 +410,199 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
     app.ui.show_configurations = open;
 }
 
-/// Setup › Playback Engine / Hardware.
+/// The audio systems as last enumerated (enumerating probes devices: done when the window opens
+/// and on Refresh, not every frame).
+fn audio_systems(ctx: &egui::Context, refresh: bool) -> Arc<Vec<AudioSystem>> {
+    let id = egui::Id::new("audio_systems");
+    if !refresh && let Some(s) = ctx.data(|d| d.get_temp::<Arc<Vec<AudioSystem>>>(id)) {
+        return s;
+    }
+    let s = Arc::new(soundcraft_playback::devices::audio_systems());
+    ctx.data_mut(|d| d.insert_temp(id, Arc::clone(&s)));
+    s
+}
+
+/// The system a config means (its own, else the default one) in an enumeration.
+fn chosen_system<'a>(systems: &'a [AudioSystem], cfg: &AudioConfig) -> Option<&'a AudioSystem> {
+    cfg.system
+        .as_deref()
+        .and_then(|n| systems.iter().find(|s| s.name.eq_ignore_ascii_case(n)))
+        .or_else(|| systems.iter().find(|s| s.is_default))
+        .or(systems.first())
+}
+
+/// The device a config means (by name, else the system default).
+fn chosen_device<'a>(devices: &'a [DeviceInfo], name: Option<&str>) -> Option<&'a DeviceInfo> {
+    name.and_then(|n| devices.iter().find(|d| d.name == n)).or_else(|| devices.iter().find(|d| d.is_default))
+}
+
+fn device_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<String>, devices: &[DeviceInfo]) {
+    let default = devices.iter().find(|d| d.is_default).map_or("none".to_string(), |d| d.name.clone());
+    let shown = value.clone().unwrap_or_else(|| format!("Default ({default})"));
+    egui::ComboBox::from_id_salt(id).width(300.0).selected_text(shown).show_ui(ui, |ui| {
+        ui.selectable_value(value, None, format!("Default ({default})"));
+        for d in devices {
+            ui.selectable_value(value, Some(d.name.clone()), format!("{} ({} ch)", d.name, d.max_channels));
+        }
+    });
+}
+
+fn number_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, options: &[u32], unit: &str) {
+    let shown = value.map_or("Device default".to_string(), |v| format!("{v} {unit}"));
+    egui::ComboBox::from_id_salt(id).width(300.0).selected_text(shown).show_ui(ui, |ui| {
+        ui.selectable_value(value, None, "Device default");
+        for v in options {
+            ui.selectable_value(value, Some(*v), format!("{v} {unit}"));
+        }
+    });
+}
+
+/// Setup › Playback Engine / Hardware: choose the audio system, devices, rate and buffer size.
 pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_playback_engine;
-    win(ctx, &mut open, "Playback Engine", vec2(380.0, 220.0), |ui| {
-        egui::Grid::new("pe").num_columns(2).show(ui, |ui| {
+    if !open {
+        return;
+    }
+    let draft_id = egui::Id::new("audio_draft");
+    let mut draft = ctx.data(|d| d.get_temp::<AudioConfig>(draft_id)).unwrap_or_else(|| app.ui.audio.clone());
+    let mut refresh = false;
+    let mut apply = false;
+    let systems = audio_systems(ctx, false);
+    win(ctx, &mut open, "Playback Engine", vec2(460.0, 360.0), |ui| {
+        let t = Tokens::current();
+        egui::Grid::new("pe").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
+            ui.label("Audio system");
+            let def = systems.iter().find(|s| s.is_default).map_or("none".to_string(), |s| s.name.clone());
+            let shown = draft.system.clone().unwrap_or_else(|| format!("Default ({def})"));
+            egui::ComboBox::from_id_salt("pe-system").width(300.0).selected_text(shown).show_ui(ui, |ui| {
+                let before = draft.system.clone();
+                ui.selectable_value(&mut draft.system, None, format!("Default ({def})"));
+                for s in systems.iter() {
+                    ui.selectable_value(&mut draft.system, Some(s.name.clone()), &s.name);
+                }
+                if draft.system != before {
+                    // Device names belong to a system.
+                    draft.output = None;
+                    draft.input = None;
+                }
+            });
+            ui.end_row();
+            let sys = chosen_system(&systems, &draft);
             ui.label("Output device");
-            ui.label(app.player.as_ref().map_or("none".to_string(), |p| p.device_name.clone()));
-            ui.end_row();
-            ui.label("Device rate");
-            ui.label(app.player.as_ref().map_or("-".to_string(), |p| format!("{} Hz", p.device_rate)));
-            ui.end_row();
-            ui.label("Session rate");
-            ui.label(format!("{} Hz", app.engine.session().sample_rate.hz()));
+            device_combo(ui, "pe-out", &mut draft.output, sys.map_or(&[][..], |s| &s.outputs));
             ui.end_row();
             ui.label("Input device");
-            ui.label(
-                app.recorder
-                    .as_ref()
-                    .map_or("opened on first record".to_string(), |r| format!("{} ({} ch @ {} Hz)", r.device_name, r.channels, r.sample_rate)),
-            );
+            device_combo(ui, "pe-in", &mut draft.input, sys.map_or(&[][..], |s| &s.inputs));
             ui.end_row();
-            ui.label("Mix block size");
-            ui.label("512 samples (resampled to the device rate when they differ)");
+            let out = sys.and_then(|s| chosen_device(&s.outputs, draft.output.as_deref()));
+            ui.label("Sample rate");
+            number_combo(ui, "pe-rate", &mut draft.sample_rate, out.map_or(&[][..], |d| &d.sample_rates), "Hz");
+            ui.end_row();
+            ui.label("Buffer size");
+            let buffers = out.map(DeviceInfo::buffer_sizes).unwrap_or_else(|| soundcraft_playback::devices::STANDARD_BUFFERS.to_vec());
+            number_combo(ui, "pe-buffer", &mut draft.buffer_size, &buffers, "samples");
             ui.end_row();
         });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("Refresh devices").clicked() {
+                refresh = true;
+            }
+            let changed = draft != app.ui.audio;
+            if ui.add_enabled(changed, egui::Button::new("Apply")).on_hover_text("Reopen the audio devices with these settings").clicked() {
+                apply = true;
+            }
+            if changed && ui.button("Revert").clicked() {
+                draft = app.ui.audio.clone();
+            }
+        });
+        ui.separator();
+        egui::Grid::new("pe-state").num_columns(2).show(ui, |ui| {
+            ui.label("Output");
+            ui.label(app.player.as_ref().map_or("none".to_string(), |p| {
+                if p.silent {
+                    "no device (silent clock)".to_string()
+                } else {
+                    let buf = p.device_buffer.map_or("default buffer".to_string(), |b| format!("{b} samples"));
+                    format!("{} · {} Hz · {} ch · {buf}", p.device_name, p.device_rate, p.device_channels)
+                }
+            }));
+            ui.end_row();
+            ui.label("Input");
+            ui.label(app.recorder.as_ref().map_or("opened on first record or monitor".to_string(), |r| {
+                format!("{} · {} Hz · {} ch", r.device_name, r.sample_rate, r.channels)
+            }));
+            ui.end_row();
+            ui.label("Session rate");
+            let sr = app.engine.session().sample_rate.hz();
+            let note = app
+                .player
+                .as_ref()
+                .filter(|p| !p.silent && p.device_rate != sr)
+                .map_or(String::new(), |_| " (resampled to the device rate)".to_string());
+            ui.label(format!("{sr} Hz{note}"));
+            ui.end_row();
+        });
+        ui.label(egui::RichText::new("The mix runs in 512-sample blocks; the buffer size sets the device's own latency.").small().color(t.text_dim));
         let mut dc = app.engine.session().edit.delay_compensation;
-        if ui.checkbox(&mut dc, "Delay compensation").changed() {
+        if crate::widgets::checkbox(ui, &mut dc, "Delay compensation").changed() {
             let _ = app.run("options.delay_compensation", json!({"value": dc}));
         }
         if ui.button("Reconnect audio device").clicked() {
-            app.player = Some(soundcraft_playback::Player::new(app.engine.session_arc()));
+            app.reconnect_audio();
         }
     });
+    if refresh {
+        audio_systems(ctx, true);
+    }
+    if apply && let Err(e) = app.apply_audio_config(draft.clone()) {
+        app.ui.status = e;
+    }
+    if open {
+        ctx.data_mut(|d| d.insert_temp(draft_id, draft));
+    } else {
+        // Closing discards unapplied edits and the device list (re-read on the next open).
+        ctx.data_mut(|d| {
+            d.remove_temp::<AudioConfig>(draft_id);
+            d.remove_temp::<Arc<Vec<AudioSystem>>>(egui::Id::new("audio_systems"));
+        });
+    }
     app.ui.show_playback_engine = open;
+}
+
+/// `ui.audio_device`: `{list?: bool}` returns the audio systems and their devices;
+/// `{system?, output?, input?, sample_rate?, buffer_size?}` (a `null` value means "default") sets
+/// the choice and reopens the devices. Always returns the choice and the open device.
+pub fn audio_device_command(app: &mut SoundApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use serde_json::Value;
+    let mut changed = false;
+    let mut cfg = app.ui.audio.clone();
+    for (key, slot) in [("system", &mut cfg.system), ("output", &mut cfg.output), ("input", &mut cfg.input)] {
+        if let Some(v) = p.get(key) {
+            *slot = v.as_str().map(str::to_string).filter(|s| !s.is_empty());
+            changed = true;
+        }
+    }
+    for (key, slot, range) in [("sample_rate", &mut cfg.sample_rate, 8_000..=768_000u64), ("buffer_size", &mut cfg.buffer_size, 16..=8192u64)] {
+        if let Some(v) = p.get(key) {
+            *slot = match v {
+                Value::Null => None,
+                v => Some(v.as_u64().filter(|n| range.contains(n)).ok_or_else(|| format!("`{key}` must be a number in {range:?} or null"))? as u32),
+            };
+            changed = true;
+        }
+    }
+    if changed {
+        app.apply_audio_config(cfg)?;
+    }
+    let device = app.player.as_ref().map(|pl| {
+        json!({"name": pl.device_name, "sample_rate": pl.device_rate, "channels": pl.device_channels, "buffer_size": pl.device_buffer, "silent": pl.silent})
+    });
+    let mut out = json!({"config": app.ui.audio, "device": device});
+    if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
+        out["systems"] = json!(soundcraft_playback::devices::audio_systems());
+    }
+    Ok(out)
 }
 
 /// Setup › I/O: busses and output paths.

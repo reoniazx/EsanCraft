@@ -10,17 +10,22 @@
 //!   encoder), with optional TPDF dither.
 //! * [`wav_float_header`] heads a float WAV written while it grows (recording).
 //! * [`peaks`] builds multi-resolution min/max overviews for waveform drawing.
+//! * [`FileEncoder`] writes the same formats block by block into any `Write + Seek`, so a file
+//!   of any length never has to fit in memory.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod aiff;
 mod buffer;
+mod caf;
 mod flac;
+mod mp4;
 mod pcm;
 pub mod peaks;
 mod symph;
 mod wav;
 
 pub use buffer::AudioBuffer;
+use std::io::{Seek, Write};
 
 /// Errors from probing, decoding and encoding.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +42,9 @@ pub enum AudioError {
     /// Encoding failed (e.g. an empty buffer).
     #[error("audio encode failed: {0}")]
     Encode(String),
+    /// Writing the output failed.
+    #[error("audio write failed: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Result alias for this crate.
@@ -187,7 +195,7 @@ fn detect_by_ext(ext: &str) -> FileFormat {
         "flac" => FileFormat::Flac,
         "mp3" | "mp2" | "mp1" => FileFormat::Mp3,
         "ogg" | "oga" => FileFormat::Ogg,
-        "aac" | "m4a" | "mp4" | "adts" => FileFormat::Aac,
+        "aac" | "m4a" | "m4b" | "mp4" | "adts" => FileFormat::Aac,
         "caf" => FileFormat::Caf,
         _ => FileFormat::Other,
     }
@@ -205,16 +213,16 @@ pub fn probe(bytes: &[u8], ext_hint: Option<&str>) -> Result<AudioInfo> {
         FileFormat::Wav if wav::is_wav(bytes) => match wav::parse(bytes)? {
             wav::WavParse::Native(l) => Ok(l.info),
             wav::WavParse::Foreign { bwf } => {
-                let mut info = symph::probe(bytes, Some("wav"), format)?;
+                let mut info = symph::probe(bytes, format)?;
                 info.bwf = bwf;
                 Ok(info)
             }
         },
         FileFormat::Aiff if aiff::is_aiff(bytes) => match aiff::parse(bytes)? {
             aiff::AiffParse::Native(l) => Ok(l.info),
-            aiff::AiffParse::Foreign => symph::probe(bytes, Some("aiff"), format),
+            aiff::AiffParse::Foreign => symph::probe(bytes, format),
         },
-        _ => symph::probe(bytes, ext_hint, format),
+        _ => symph::probe(bytes, format),
     }
 }
 
@@ -230,7 +238,7 @@ pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioB
                 Ok((info, buf))
             }
             wav::WavParse::Foreign { bwf } => {
-                let (mut info, buf) = symph::decode(bytes, Some("wav"), format)?;
+                let (mut info, buf) = symph::decode(bytes, format)?;
                 info.bwf = bwf;
                 Ok((info, buf))
             }
@@ -242,9 +250,9 @@ pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioB
                 info.frames = buf.frames() as u64;
                 Ok((info, buf))
             }
-            aiff::AiffParse::Foreign => symph::decode(bytes, Some("aiff"), format),
+            aiff::AiffParse::Foreign => symph::decode(bytes, format),
         },
-        _ => symph::decode(bytes, ext_hint, format),
+        _ => symph::decode(bytes, format),
     }
 }
 
@@ -283,6 +291,60 @@ pub fn encode_with_channel_mask(buf: &AudioBuffer, opts: &EncodeOptions, mask: u
     match opts.format {
         FileFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, Some(mask)),
         _ => encode(buf, opts),
+    }
+}
+
+/// Writes WAV/BWF (RF64 above 4 GiB), AIFF / AIFF-C `fl32` or FLAC block by block, producing
+/// the same bytes [`encode_with_channel_mask`] would for the whole buffer.
+pub struct FileEncoder<W: Write + Seek>(Writer<W>);
+
+enum Writer<W> {
+    Wav(wav::Writer<W>),
+    Aiff(aiff::Writer<W>),
+    Flac(flac::Writer<W>),
+}
+
+impl<W: Write + Seek> FileEncoder<W> {
+    /// Starts a file at the current position of `out`. `mask` overrides the WAV speaker mask
+    /// derived from the channel count.
+    pub fn new(out: W, opts: &EncodeOptions, channels: usize, sample_rate: u32, mask: Option<u32>) -> Result<Self> {
+        let (depth, dither) = (opts.bit_depth, opts.dither);
+        Ok(FileEncoder(match opts.format {
+            FileFormat::Wav => Writer::Wav(wav::Writer::new(out, channels, sample_rate, depth, dither, opts.bwf.as_ref(), mask, false)?),
+            FileFormat::Aiff => Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither)?),
+            FileFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither)?),
+            other => return Err(AudioError::Unsupported(format!("encoding {other:?} is not supported"))),
+        }))
+    }
+
+    /// Fails, without writing anything, when `frames` more frames would not fit the format (an
+    /// AIFF holds 4 GiB, a FLAC 2^36 frames).
+    pub fn check_room(&self, frames: u64) -> Result<()> {
+        match &self.0 {
+            Writer::Wav(w) => w.check_room(frames),
+            Writer::Aiff(w) => w.check_room(frames),
+            Writer::Flac(w) => w.check_room(frames),
+        }
+        .map(drop)
+    }
+
+    /// Appends the first `frames` frames of `block`, one `Vec` per channel (missing samples are
+    /// silence), unless they don't fit (see [`FileEncoder::check_room`]).
+    pub fn write(&mut self, block: &[Vec<f32>], frames: usize) -> Result<()> {
+        match &mut self.0 {
+            Writer::Wav(w) => w.write(block, frames),
+            Writer::Aiff(w) => w.write(block, frames),
+            Writer::Flac(w) => w.write(block, frames),
+        }
+    }
+
+    /// Completes the headers and hands back `out`, positioned at the end of the file.
+    pub fn finish(self) -> Result<W> {
+        match self.0 {
+            Writer::Wav(w) => w.finish(),
+            Writer::Aiff(w) => w.finish(),
+            Writer::Flac(w) => w.finish(),
+        }
     }
 }
 

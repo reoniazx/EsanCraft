@@ -8,8 +8,8 @@
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use soundcraft_model::TrackId;
@@ -17,7 +17,29 @@ use soundcraft_model::TrackId;
 /// What [`Recorder::finish`] returns: the takes that hold audio and the first problem met.
 pub type Takes = (Vec<(TrackId, PathBuf)>, Option<String>);
 
+/// Frames each block of a [`LiveTake`] sums up.
+pub const LIVE_BLOCK: usize = 128;
+/// Blocks a live take keeps per channel at most (three hours at 48 kHz); its file records on.
+const LIVE_BLOCKS: usize = 1 << 22;
+
+/// A take while it records, summed up for drawing: per channel, the (min, max) of each
+/// [`LIVE_BLOCK`] frames so far.
+pub type LiveTake = Vec<Vec<(f32, f32)>>;
+
 const RING_SECONDS: usize = 4;
+/// How long a recording input may go without a callback before it counts as gone.
+const STALL: Duration = Duration::from_secs(2);
+const GONE: u8 = 1;
+const BROKEN: u8 = 2;
+
+/// Why the input can't go on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Trouble {
+    /// The device went away or stopped sending audio, or its callback hit a bug.
+    Device(String),
+    /// Writing a take failed (a full disk, say).
+    Disk(String),
+}
 
 /// Single-producer single-consumer FIFO of samples (input callback → writer thread). The slots
 /// are atomics, so it needs no lock and no `unsafe`.
@@ -57,19 +79,44 @@ impl CaptureRing {
     }
 }
 
+/// An input sample, or silence for NaN and infinities, which would poison the take and the mix.
+fn finite(x: f32) -> f32 {
+    if x.is_finite() { x } else { 0.0 }
+}
+
 struct Shared {
     armed: AtomicBool,
     ring: CaptureRing,
     /// Samples lost while the ring was full.
     dropped: AtomicUsize,
+    /// Input callbacks so far, to tell a device that stopped sending.
+    beats: AtomicU64,
+    /// Set from the input stream when it can't go on: `GONE` or `BROKEN`.
+    fault: AtomicU8,
+    /// The first failure writing a take, until it's reported.
+    failed: Mutex<Option<String>>,
 }
 
 impl Shared {
+    fn new(ring: CaptureRing) -> Shared {
+        let (beats, fault, failed) = (AtomicU64::new(0), AtomicU8::new(0), Mutex::new(None));
+        Shared { armed: AtomicBool::new(false), ring, dropped: AtomicUsize::new(0), beats, fault, failed }
+    }
+
+    /// Run the input callback's `work`. After a panic in it, the input is broken and does
+    /// nothing more.
+    fn guarded(&self, work: impl FnOnce()) {
+        self.beats.fetch_add(1, Ordering::Relaxed);
+        if self.fault.load(Ordering::Relaxed) != BROKEN && std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_err() {
+            self.fault.store(BROKEN, Ordering::Relaxed);
+        }
+    }
+
     /// The input callback's work while armed. Samples that don't fit are owed (`owed`) and queued
     /// as silence before the next block, so the take keeps its timing.
     fn capture(&self, data: &[f32], owed: &mut usize) {
         *owed -= self.ring.push(*owed, |_| 0.0);
-        let kept = if *owed == 0 { self.ring.push(data.len(), |i| data.get(i).copied().unwrap_or(0.0)) } else { 0 };
+        let kept = if *owed == 0 { self.ring.push(data.len(), |i| data.get(i).copied().map_or(0.0, finite)) } else { 0 };
         *owed = owed.saturating_add(data.len() - kept);
         self.dropped.fetch_add(data.len() - kept, Ordering::Relaxed);
     }
@@ -84,56 +131,125 @@ pub struct Recorder {
     pub device_name: String,
     pub sample_rate: u32,
     pub channels: usize,
-    writer: Option<std::thread::JoinHandle<Takes>>,
+    /// The take writer, and what each track's take holds so far.
+    writer: Option<(std::thread::JoinHandle<Takes>, Vec<(TrackId, Arc<Mutex<LiveTake>>)>)>,
+    /// The callback count last seen, and since when.
+    seen: (u64, Instant),
+}
+
+/// The input stream: device samples are converted to f32 in a scratch buffer allocated here (so
+/// the callback never allocates), then feed the monitor ring and, while armed, the capture.
+#[cfg(not(target_os = "freebsd"))]
+fn build_input<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    shared: &Arc<Shared>,
+    monitor: &Arc<InputRing>,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    use cpal::Sample;
+    use cpal::traits::DeviceTrait;
+    let (sh, errors) = (Arc::clone(shared), Arc::clone(shared));
+    let mon = Arc::clone(monitor);
+    let mut scratch = vec![0.0f32; 8192 * usize::from(config.channels).max(1)];
+    let chunk = scratch.len();
+    let mut owed = 0;
+    device.build_input_stream(
+        config,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            crate::mark_audio_thread();
+            sh.guarded(|| {
+                for part in data.chunks(chunk) {
+                    let Some(s) = scratch.get_mut(..part.len()) else { return };
+                    for (o, x) in s.iter_mut().zip(part) {
+                        *o = f32::from_sample(*x);
+                    }
+                    mon.push(s);
+                    if sh.armed.load(Ordering::Acquire) {
+                        sh.capture(s, &mut owed);
+                    } else {
+                        owed = 0;
+                    }
+                }
+            });
+        },
+        move |e| {
+            // Possibly the audio thread (see `crate::mark_audio_thread`).
+            crate::mark_audio_thread();
+            if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+                let _ = errors.fault.compare_exchange(0, GONE, Ordering::Relaxed, Ordering::Relaxed);
+            }
+            log::warn!("input stream error: {e}");
+        },
+        None,
+    )
 }
 
 impl Recorder {
     /// Open the default input device. Errors when there is none (the caller shows a message).
-    #[cfg(not(target_os = "freebsd"))]
     pub fn open() -> Result<Recorder, String> {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        let host = cpal::default_host();
-        let device = host.default_input_device().ok_or("no audio input device")?;
+        Recorder::open_with(&crate::AudioConfig::default())
+    }
+
+    /// Open the input device `audio` chooses (else the default) at its chosen rate and buffer
+    /// size when the device offers them, else at the device's defaults. Integer devices (ASIO
+    /// drivers usually are) are converted to f32.
+    #[cfg(not(target_os = "freebsd"))]
+    pub fn open_with(audio: &crate::AudioConfig) -> Result<Recorder, String> {
+        use cpal::traits::{DeviceTrait, StreamTrait};
+        let host = crate::devices::host(audio);
+        let device = crate::devices::device(&host, audio.input.as_deref(), false).ok_or("no audio input device")?;
         #[allow(deprecated)]
         let name = device.name().unwrap_or_else(|_| "Input".into());
-        let cfg = device.default_input_config().map_err(|e| e.to_string())?;
-        if cfg.sample_format() != cpal::SampleFormat::F32 {
-            return Err(format!("unsupported input sample format {:?}", cfg.sample_format()));
+        // At the chosen rate when the device offers it, so input and output run together: the
+        // best format first, then the most channels.
+        let at_rate = audio.sample_rate.and_then(|r| {
+            device
+                .supported_input_configs()
+                .ok()?
+                .filter(|c| crate::devices::format_rank(c.sample_format()).is_some() && c.min_sample_rate().0 <= r && c.max_sample_rate().0 >= r)
+                .min_by_key(|c| (crate::devices::format_rank(c.sample_format()), std::cmp::Reverse(c.channels())))
+                .map(|c| c.with_sample_rate(cpal::SampleRate(r)))
+        });
+        let cfg = match at_rate {
+            Some(c) => c,
+            None => device.default_input_config().map_err(|e| e.to_string())?,
+        };
+        let format = cfg.sample_format();
+        if crate::devices::format_rank(format).is_none() {
+            return Err(format!("unsupported input sample format {format:?}"));
         }
-        let config = cfg.config();
+        let mut config = cfg.config();
+        config.buffer_size = crate::devices::buffer_size(audio.buffer_size, cfg.buffer_size());
         let channels = usize::from(config.channels).max(1);
         let ring = CaptureRing::new((config.sample_rate.0 as usize).saturating_mul(channels * RING_SECONDS).min(1 << 25));
-        let shared = Arc::new(Shared { armed: AtomicBool::new(false), ring, dropped: AtomicUsize::new(0) });
-        let sh = Arc::clone(&shared);
+        let shared = Arc::new(Shared::new(ring));
         let monitor = InputRing::new(usize::from(config.channels), config.sample_rate.0);
-        let mon = Arc::clone(&monitor);
-        let mut owed = 0;
-        let stream = device
-            .build_input_stream(
-                &config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    crate::mark_audio_thread();
-                    mon.push(data);
-                    if sh.armed.load(Ordering::Acquire) {
-                        sh.capture(data, &mut owed);
-                    } else {
-                        owed = 0;
-                    }
-                },
-                |e| {
-                    // Possibly the audio thread (see `crate::mark_audio_thread`).
-                    crate::mark_audio_thread();
-                    log::warn!("input stream error: {e}");
-                },
-                None,
-            )
-            .map_err(|e| e.to_string())?;
+        let build = |config: &cpal::StreamConfig| match format {
+            cpal::SampleFormat::I32 => build_input::<i32>(&device, config, &shared, &monitor),
+            cpal::SampleFormat::I16 => build_input::<i16>(&device, config, &shared, &monitor),
+            _ => build_input::<f32>(&device, config, &shared, &monitor),
+        };
+        // The chosen buffer size first; if the device refuses it, its default.
+        let stream = match build(&config) {
+            Ok(s) => s,
+            Err(e) if config.buffer_size != cpal::BufferSize::Default => {
+                log::warn!("cannot open the input with buffer {:?}: {e}; using the device default", config.buffer_size);
+                config.buffer_size = cpal::BufferSize::Default;
+                build(&config).map_err(|e| e.to_string())?
+            }
+            Err(e) => return Err(e.to_string()),
+        };
         stream.play().map_err(|e| e.to_string())?;
-        Ok(Recorder { monitor, shared, _stream: Some(stream), device_name: name, sample_rate: config.sample_rate.0, channels, writer: None })
+        let seen = (0, Instant::now());
+        Ok(Recorder { monitor, shared, _stream: Some(stream), device_name: name, sample_rate: config.sample_rate.0, channels, writer: None, seen })
     }
 
     #[cfg(target_os = "freebsd")]
-    pub fn open() -> Result<Recorder, String> {
+    pub fn open_with(_audio: &crate::AudioConfig) -> Result<Recorder, String> {
         Err("recording is not supported on this platform yet".into())
     }
 
@@ -145,12 +261,14 @@ impl Recorder {
         }
         let takes =
             takes.into_iter().map(|(id, inputs, path)| TakeWriter::create(id, inputs, path, self.sample_rate)).collect::<Result<Vec<_>, _>>()?;
+        let live = takes.iter().map(|t| (t.id, Arc::clone(&t.live))).collect();
         let ring = &self.shared.ring;
         ring.tail.store(ring.head.load(Ordering::Acquire), Ordering::Release);
+        *self.shared.failed.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.shared.armed.store(true, Ordering::Release);
         let (shared, channels) = (Arc::clone(&self.shared), self.channels);
         match std::thread::Builder::new().name("take writer".into()).spawn(move || write_takes(&shared, takes, channels)) {
-            Ok(w) => self.writer = Some(w),
+            Ok(w) => self.writer = Some((w, live)),
             Err(e) => {
                 self.shared.armed.store(false, Ordering::Release);
                 return Err(e.to_string());
@@ -159,9 +277,40 @@ impl Recorder {
         Ok(())
     }
 
+    /// What the take recording onto `track` holds so far.
+    pub fn live_take(&self, track: TrackId) -> Option<MutexGuard<'_, LiveTake>> {
+        let (_, take) = self.writer.as_ref()?.1.iter().find(|(id, _)| *id == track)?;
+        Some(take.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Why the input can't go on, if it can't: the device went away or, while recording, stopped
+    /// sending audio; its callback hit a bug; or writing a take failed (reported once).
+    pub fn trouble(&mut self) -> Option<Trouble> {
+        if let Some(e) = self.shared.failed.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            return Some(Trouble::Disk(e));
+        }
+        let name = &self.device_name;
+        match self.shared.fault.load(Ordering::Relaxed) {
+            GONE => return Some(Trouble::Device(format!("“{name}” was disconnected"))),
+            BROKEN => return Some(Trouble::Device("the audio input hit an internal error (see the log)".into())),
+            _ => {}
+        }
+        let beats = self.shared.beats.load(Ordering::Relaxed);
+        if beats != self.seen.0 || !self.shared.armed.load(Ordering::Relaxed) {
+            self.seen = (beats, Instant::now());
+        }
+        (self.seen.1.elapsed() >= STALL).then(|| Trouble::Device(format!("“{name}” stopped sending audio")))
+    }
+
+    /// Input the current take has lost to a slow disk so far, in milliseconds.
+    pub fn lost_ms(&self) -> u64 {
+        let frames = self.shared.dropped.load(Ordering::Relaxed) / self.channels.max(1);
+        (frames as u64).saturating_mul(1000) / u64::from(self.sample_rate.max(1))
+    }
+
     pub fn finish(&mut self) -> Takes {
         self.shared.armed.store(false, Ordering::Release);
-        let (takes, problem) = self.writer.take().and_then(|w| w.join().ok()).unwrap_or_default();
+        let (takes, problem) = self.writer.take().and_then(|(w, _)| w.join().ok()).unwrap_or_default();
         let lost = self.shared.dropped.swap(0, Ordering::Relaxed) / self.channels.max(1);
         let slow =
             (lost > 0).then(|| format!("{} ms of input lost: the disk was too slow", lost.saturating_mul(1000) / self.sample_rate.max(1) as usize));
@@ -176,7 +325,7 @@ impl Drop for Recorder {
 }
 
 fn write_takes(shared: &Shared, mut takes: Vec<TakeWriter>, channels: usize) -> Takes {
-    let (mut block, mut header_written) = (Vec::new(), Instant::now());
+    let (mut block, mut header_written, mut reported) = (Vec::new(), Instant::now(), false);
     loop {
         let stopping = !shared.armed.load(Ordering::Acquire);
         // The ring holds interleaved samples and a pop can end mid-frame: write whole frames and
@@ -185,6 +334,10 @@ fn write_takes(shared: &Shared, mut takes: Vec<TakeWriter>, channels: usize) -> 
         let whole = block.len() - block.len() % channels.max(1);
         takes.iter_mut().for_each(|t| t.write(&block[..whole], channels));
         block.drain(..whole);
+        if !reported && let Some(e) = takes.iter().find_map(|t| t.error.clone()) {
+            *shared.failed.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
+            reported = true;
+        }
         if stopping {
             break;
         }
@@ -216,13 +369,15 @@ struct TakeWriter {
     rate: u32,
     frames: u64,
     error: Option<String>,
+    live: Arc<Mutex<LiveTake>>,
 }
 
 impl TakeWriter {
     fn create(id: TrackId, inputs: Vec<usize>, path: PathBuf, rate: u32) -> Result<TakeWriter, String> {
         let file = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| File::create_new(&path));
         let file = file.map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut take = TakeWriter { id, inputs, path, file, rate, frames: 0, error: None };
+        let live = Arc::new(Mutex::new(vec![Vec::new(); inputs.len()]));
+        let mut take = TakeWriter { id, inputs, path, file, rate, frames: 0, error: None, live };
         take.write_header();
         take.error.take().map_or(Ok(take), Err)
     }
@@ -238,8 +393,27 @@ impl TakeWriter {
             .flat_map(|f| self.inputs.iter().flat_map(move |&i| f.get(i).copied().unwrap_or(0.0).to_le_bytes()))
             .collect();
         match self.file.write_all(&bytes) {
-            Ok(()) => self.frames += (block.len() / channels) as u64,
+            Ok(()) => {
+                self.summarize(block, channels);
+                self.frames += (block.len() / channels) as u64;
+            }
             Err(e) => self.fail(e),
+        }
+    }
+
+    /// Add this take's channels of `block` to its live take.
+    fn summarize(&self, block: &[f32], channels: usize) {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        for (f, n) in block.chunks_exact(channels).zip(self.frames..) {
+            let at = (n / LIVE_BLOCK as u64) as usize;
+            for (blocks, &i) in live.iter_mut().zip(&self.inputs) {
+                let v = f.get(i).copied().unwrap_or(0.0);
+                match blocks.get_mut(at) {
+                    Some(b) => *b = (b.0.min(v), b.1.max(v)),
+                    None if at < LIVE_BLOCKS => blocks.push((v, v)),
+                    None => {}
+                }
+            }
         }
     }
 
@@ -269,7 +443,7 @@ mod tests {
 
     #[test]
     fn a_full_ring_owes_the_lost_samples_as_silence() {
-        let shared = Shared { armed: AtomicBool::new(true), ring: CaptureRing::new(8), dropped: AtomicUsize::new(0) };
+        let shared = Shared::new(CaptureRing::new(8));
         let (mut owed, mut out) = (0, Vec::new());
         shared.capture(&[1.0; 6], &mut owed);
         shared.capture(&[2.0; 4], &mut owed);
@@ -278,6 +452,75 @@ mod tests {
         shared.ring.pop_all(&mut out);
         assert_eq!(out, [vec![1.0; 6], vec![2.0; 2], vec![0.0; 2], vec![3.0; 2]].concat());
         assert_eq!((owed, shared.dropped.load(Ordering::Relaxed)), (0, 2));
+    }
+
+    #[test]
+    fn nan_and_infinite_input_records_as_silence() {
+        let shared = Shared::new(CaptureRing::new(8));
+        let (mut owed, mut out) = (0, Vec::new());
+        shared.capture(&[0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.5], &mut owed);
+        shared.ring.pop_all(&mut out);
+        assert_eq!(out, [0.5, 0.0, 0.0, 0.0, -0.5]);
+    }
+
+    fn recorder(shared: &Arc<Shared>) -> Recorder {
+        Recorder {
+            shared: Arc::clone(shared),
+            monitor: InputRing::new(1, 48_000),
+            #[cfg(not(target_os = "freebsd"))]
+            _stream: None,
+            device_name: "Mic In".into(),
+            sample_rate: 48_000,
+            channels: 1,
+            writer: None,
+            seen: (0, Instant::now()),
+        }
+    }
+
+    #[test]
+    fn a_bug_a_stall_or_a_lost_device_is_trouble() {
+        let shared = Arc::new(Shared::new(CaptureRing::new(64)));
+        let mut r = recorder(&shared);
+        shared.armed.store(true, Ordering::Release);
+        assert_eq!(r.trouble(), None);
+        r.seen.1 = Instant::now().checked_sub(STALL).unwrap();
+        assert_eq!(r.trouble(), Some(Trouble::Device("“Mic In” stopped sending audio".into())));
+        shared.guarded(|| {});
+        assert_eq!(r.trouble(), None, "it sent again");
+        shared.armed.store(false, Ordering::Release);
+        r.seen.1 = Instant::now().checked_sub(STALL).unwrap();
+        assert_eq!(r.trouble(), None, "a quiet input that isn't recording is fine");
+        shared.guarded(|| std::panic::panic_any("a bug in the input"));
+        let mut ran = false;
+        shared.guarded(|| ran = true);
+        assert!(!ran);
+        assert_eq!(r.trouble(), Some(Trouble::Device("the audio input hit an internal error (see the log)".into())));
+        let gone = Arc::new(Shared::new(CaptureRing::new(64)));
+        gone.fault.store(GONE, Ordering::Relaxed);
+        assert_eq!(recorder(&gone).trouble(), Some(Trouble::Device("“Mic In” was disconnected".into())));
+    }
+
+    #[test]
+    fn a_failed_write_is_trouble_while_still_recording() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-failed-take-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut take = TakeWriter::create(TrackId(1), vec![0], dir.join("Vox_01.wav"), 48_000).unwrap();
+        take.file = File::open(&take.path).unwrap();
+        let shared = Arc::new(Shared::new(CaptureRing::new(1 << 12)));
+        shared.armed.store(true, Ordering::Release);
+        let mut r = recorder(&shared);
+        let sh = Arc::clone(&shared);
+        let writer = std::thread::spawn(move || write_takes(&sh, vec![take], 1));
+        shared.capture(&[0.5; 480], &mut 0);
+        let trouble = (0..300).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            r.trouble()
+        });
+        assert!(matches!(&trouble, Some(Trouble::Disk(e)) if e.contains("Vox_01.wav")), "{trouble:?}");
+        assert_eq!(r.trouble(), None, "reported once");
+        shared.armed.store(false, Ordering::Release);
+        assert!(writer.join().unwrap().1.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -292,7 +535,8 @@ mod tests {
         vox.write(&[0.25; 150], 3);
         assert_eq!(decode(&dir.join("Vox_01.wav"))[0].len(), 100, "the header covers what it has seen");
 
-        let shared = Arc::new(Shared { armed: AtomicBool::new(true), ring: CaptureRing::new(1 << 16), dropped: AtomicUsize::new(0) });
+        let shared = Arc::new(Shared::new(CaptureRing::new(1 << 16)));
+        shared.armed.store(true, Ordering::Release);
         let sh = Arc::clone(&shared);
         let writer = std::thread::spawn(move || write_takes(&sh, vec![gtr, vox], 3));
         let input: Vec<f32> = (0..3 * 4_800).map(|i| i as f32 / 20_000.0).collect();
@@ -304,6 +548,19 @@ mod tests {
         assert_eq!((done.len(), problem), (2, None));
         assert_eq!(decode(&done[0].1), vec![channel(1), channel(2)]);
         assert_eq!(decode(&done[1].1), vec![[vec![0.5; 100], vec![0.25; 50], channel(0)].concat()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_take_sums_itself_up_for_drawing_while_it_records() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-live-take-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut take = TakeWriter::create(TrackId(4), vec![2, 0], dir.join("Gtr_01.wav"), 48_000).unwrap();
+        let input: Vec<f32> = (0..300).flat_map(|f| [f as f32, -1.0, -(f as f32)]).collect();
+        take.write(&input[..3 * 100], 3);
+        take.write(&input[3 * 100..], 3);
+        let live = take.live.lock().unwrap().clone();
+        assert_eq!(live, [[(-127.0, 0.0), (-255.0, -128.0), (-299.0, -256.0)], [(0.0, 127.0), (128.0, 255.0), (256.0, 299.0)]]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -342,7 +599,7 @@ impl InputRing {
 
     pub fn push(&self, samples: &[f32]) {
         if let Ok(mut s) = self.state.try_lock() {
-            s.data.extend(samples.iter().copied());
+            s.data.extend(samples.iter().copied().map(finite));
             while s.data.len() > self.cap {
                 s.data.pop_front();
             }
@@ -436,5 +693,15 @@ mod ring_tests {
         let mut out = vec![vec![1.0f32; 16]];
         ring.pop_into(&mut out, 16, 48_000);
         assert!(out[0].iter().all(|v| *v == 0.0));
+    }
+
+    /// NaN and infinities from the device monitor as silence.
+    #[test]
+    fn monitor_silences_nan_and_infinite_input() {
+        let ring = InputRing::new(1, 48_000);
+        ring.push(&[0.5, f32::NAN, f32::INFINITY, -0.5, 0.0, 0.0, 0.0, 0.0]);
+        let mut out = vec![vec![1.0f32; 4]];
+        ring.pop_into(&mut out, 4, 48_000);
+        assert_eq!(out[0], [0.5, 0.0, 0.0, -0.5]);
     }
 }

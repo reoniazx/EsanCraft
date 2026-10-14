@@ -86,6 +86,24 @@ impl GridValue {
         }
     }
 
+    /// The next larger or smaller value of the same kind, or `self` at either end. Note values keep their
+    /// dot or triplet; seconds, frames and samples step by tens.
+    pub fn stepped(self, larger: bool) -> GridValue {
+        fn next<T: PartialOrd + Copy>(ladder: &[T], v: T, larger: bool) -> Option<T> {
+            if larger { ladder.iter().copied().find(|x| *x > v) } else { ladder.iter().rev().copied().find(|x| *x < v) }
+        }
+        match self {
+            GridValue::Note { value, dotted, triplet } => {
+                let i = NoteValue::ALL.iter().position(|v| *v == value).unwrap_or(0);
+                let j = if larger { i.checked_sub(1) } else { i.checked_add(1) };
+                j.and_then(|j| NoteValue::ALL.get(j)).map_or(self, |&value| GridValue::Note { value, dotted, triplet })
+            }
+            GridValue::Seconds(s) => next(&[0.001, 0.01, 0.1, 1.0, 10.0], s, larger).map_or(self, GridValue::Seconds),
+            GridValue::Frames(f) => next(&[1, 10, 100], f, larger).map_or(self, GridValue::Frames),
+            GridValue::Samples(n) => next(&[1, 10, 100, 1_000, 10_000, 100_000], n, larger).map_or(self, GridValue::Samples),
+        }
+    }
+
     fn note_ticks(value: NoteValue, dotted: bool, triplet: bool, map: &TempoMap, at_tick: i64) -> i64 {
         let base = if value == NoteValue::Bar { map.meter_at_tick(at_tick).ticks_per_bar() } else { value.ticks() };
         let mut t = base;
@@ -123,7 +141,13 @@ impl GridValue {
     pub fn line_at_or_before(&self, pos: Samples, sr: SampleRate, map: &TempoMap, rate: FrameRate) -> Samples {
         match *self {
             GridValue::Note { value, dotted, triplet } => {
-                let t = map.samples_to_ticks_f(pos, sr).floor() as i64;
+                // Float ticks can land a hair either side of a line's own tick.
+                let mut t = map.samples_to_ticks_f(pos, sr).floor() as i64;
+                if map.tick_to_samples(t, sr) > pos {
+                    t = t.saturating_sub(1);
+                } else if map.tick_to_samples(t.saturating_add(1), sr) <= pos {
+                    t = t.saturating_add(1);
+                }
                 // Grid lines restart at each bar line so odd meters stay aligned.
                 let bb = map.bar_beat_at_tick(t);
                 let bar_tick = map.bar_start_tick(bb.bar);
@@ -133,7 +157,7 @@ impl GridValue {
             }
             _ => {
                 let step = self.step_samples(pos, sr, map, rate);
-                pos.div_euclid(step) * step
+                pos.div_euclid(step).saturating_mul(step)
             }
         }
     }
@@ -168,6 +192,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn grid_lines_are_their_own_line_at_odd_tempos() {
+        let (g, sr, rate) = (GridValue::default(), SampleRate::HZ_48000, FrameRate::Fps30);
+        for bpm in [90.0, 95.0, 110.0, 130.0, 140.0] {
+            let map = TempoMap::new(bpm, 4, 4).unwrap();
+            let mut line = 0;
+            for _ in 0..64 {
+                assert_eq!(g.line_at_or_before(line, sr, &map, rate), line, "{bpm} bpm");
+                line = g.next_line(line, sr, &map, rate);
+            }
+        }
+    }
+
+    #[test]
     fn sixteenth_grid_at_120() {
         let g = GridValue::default();
         let (sr, map, rate) = (SampleRate::HZ_48000, TempoMap::default(), FrameRate::Fps30);
@@ -198,5 +235,20 @@ mod tests {
         assert_eq!(t.step_samples(0, sr, &map, rate), 16_000);
         let d = GridValue::Note { value: NoteValue::Quarter, dotted: true, triplet: false };
         assert_eq!(d.step_samples(0, sr, &map, rate), 36_000);
+    }
+
+    #[test]
+    fn values_step_to_the_next_larger_or_smaller() {
+        let note = |value, triplet| GridValue::Note { value, dotted: false, triplet };
+        assert_eq!(note(NoteValue::Sixteenth, false).stepped(true), note(NoteValue::Eighth, false));
+        assert_eq!(note(NoteValue::Eighth, true).stepped(false), note(NoteValue::Sixteenth, true));
+        assert_eq!(note(NoteValue::Bar, false).stepped(true), note(NoteValue::Bar, false));
+        assert_eq!(note(NoteValue::SixtyFourth, false).stepped(false), note(NoteValue::SixtyFourth, false));
+        assert_eq!(GridValue::Seconds(0.01).stepped(true), GridValue::Seconds(0.1));
+        assert_eq!(GridValue::Seconds(0.5).stepped(false), GridValue::Seconds(0.1));
+        assert_eq!(GridValue::Seconds(10.0).stepped(true), GridValue::Seconds(10.0));
+        assert_eq!(GridValue::Frames(1).stepped(true), GridValue::Frames(10));
+        assert_eq!(GridValue::Samples(100).stepped(false), GridValue::Samples(10));
+        assert_eq!(GridValue::Samples(1).stepped(false), GridValue::Samples(1));
     }
 }

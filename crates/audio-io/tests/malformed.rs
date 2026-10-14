@@ -153,6 +153,194 @@ fn absurd_chunk_sizes() {
     assert_eq!(decode(&aiff, None).unwrap().1.frames(), 0);
 }
 
+fn caf(chunks: &[(&[u8; 4], i64, Vec<u8>)]) -> Vec<u8> {
+    let mut out = b"caff\0\x01\0\0".to_vec();
+    for (kind, size, body) in chunks {
+        out.extend_from_slice(*kind);
+        out.extend_from_slice(&size.to_be_bytes());
+        out.extend_from_slice(body);
+    }
+    out
+}
+
+fn caf_desc(format: &[u8; 4], bytes_per_packet: u32, frames_per_packet: u32, channels: u32, bits: u32) -> (&'static [u8; 4], i64, Vec<u8>) {
+    let mut d = 48_000f64.to_be_bytes().to_vec();
+    d.extend_from_slice(format);
+    for v in [0, bytes_per_packet, frames_per_packet, channels, bits] {
+        d.extend_from_slice(&v.to_be_bytes());
+    }
+    (b"desc", 32, d)
+}
+
+fn packet_table(packets: i64, frames: i64, entries: &[u8]) -> Vec<u8> {
+    [&packets.to_be_bytes()[..], &frames.to_be_bytes(), &[0; 8], entries].concat()
+}
+
+#[test]
+fn caf_sizes_beyond_the_file_are_errors_not_aborts() {
+    let aac = || caf_desc(b"aac ", 0, 1024, 2, 0);
+    let huge = 1i64 << 50;
+    let cookie = caf(&[aac(), (b"kuki", huge, vec![0; 8])]);
+    let files = [
+        cookie.clone(),
+        [vec![0; 100], cookie].concat(),
+        caf(&[aac(), (b"data", -1, [&[0; 4][..], b"kuki", &huge.to_be_bytes()].concat())]),
+        caf(&[aac(), (b"pakt", 24, packet_table(huge, 1024, &[])), (b"data", -1, vec![0; 16])]),
+        caf(&[aac(), (b"pakt", 32, packet_table(1, 1024, &[0x82, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0])), (b"data", -1, vec![0; 64])]),
+        caf(&[aac(), (b"pakt", 25, packet_table(1, 1024, &[0x80]))]),
+    ];
+    for f in files {
+        assert!(matches!(probe(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
+        assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
+    }
+    let constant = caf(&[caf_desc(b"lpcm", 2, 1, 1, 16), (b"pakt", 25, packet_table(1, 1, &[1])), (b"data", -1, vec![0; 16])]);
+    assert!(matches!(decode(&constant, None), Err(AudioError::Malformed(m)) if m.contains("lists packets")));
+}
+
+#[test]
+fn well_formed_caf_still_reads() {
+    let pcm: Vec<u8> = (0..480i16).flat_map(|i| (i * 50).to_be_bytes()).collect();
+    let chan = [((100u32 << 16) | 1).to_be_bytes(), [0; 4], [0; 4]].concat();
+    let data = [vec![0; 4], pcm].concat();
+    let lpcm = caf(&[caf_desc(b"lpcm", 2, 1, 1, 16), (b"chan", 12, chan), (b"free", 8, vec![0; 8]), (b"data", data.len() as i64, data)]);
+    let (info, buf) = decode(&lpcm, None).unwrap();
+    assert_eq!((info.format, buf.frames()), (FileFormat::Caf, 480));
+    let table = packet_table(3, 3072, &[10, 0x81, 0x48, 5]);
+    let aac = caf(&[caf_desc(b"aac ", 0, 1024, 2, 0), (b"pakt", table.len() as i64, table), (b"data", 219, vec![0; 219])]);
+    assert_eq!(probe(&aac, None).unwrap().frames, 3072);
+}
+
+fn atom(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    [&(8 + body.len() as u32).to_be_bytes()[..], kind, body].concat()
+}
+
+/// A mono 16-bit, 48 kHz audio sample entry of `version`, its version fields and codec atoms.
+fn sample_entry(kind: &[u8; 4], version: u8, fields: &[u8], codec: &[u8]) -> Vec<u8> {
+    let base = [0, 0, 0, 0, 0, 0, 0, 1, 0, version, 0, 0, 0, 0, 0, 0, 0, 1, 0, 16, 0, 0, 0, 0];
+    atom(kind, &[&base[..], &(48_000u32 << 16).to_be_bytes(), fields, codec].concat())
+}
+
+/// An MP4 of `frames` 2-byte samples described by `entry`; `swap` may replace any version-0 atom.
+fn mp4(frames: u32, entry: &[u8], swap: impl Fn(&[u8; 4], Vec<u8>) -> Vec<u8>) -> Vec<u8> {
+    let full = |kind: &[u8; 4], fields: &[u32]| {
+        let body: Vec<u8> = [0].iter().chain(fields).flat_map(|v: &u32| v.to_be_bytes()).collect();
+        swap(kind, atom(kind, &body))
+    };
+    let moov = |offset: u32| {
+        let stsd = atom(b"stsd", &[&[0, 0, 0, 0, 0, 0, 0, 1][..], entry].concat());
+        let stbl =
+            [stsd, full(b"stts", &[1, frames, 1]), full(b"stsc", &[1, 1, frames, 1]), full(b"stsz", &[2, frames]), full(b"stco", &[1, offset])];
+        let minf = [full(b"smhd", &[0]), atom(b"stbl", &stbl.concat())].concat();
+        let mdia = [full(b"mdhd", &[0, 0, 48_000, frames, 0]), full(b"hdlr", &[0, u32::from_be_bytes(*b"soun"), 0, 0, 0, 0]), atom(b"minf", &minf)];
+        let trak = [full(b"tkhd", &[0; 20]), atom(b"mdia", &mdia.concat())].concat();
+        atom(b"moov", &[full(b"mvhd", &[[0, 0, 48_000, frames, 1 << 16].as_slice(), &[0; 18], &[2]].concat()), atom(b"trak", &trak)].concat())
+    };
+    let ftyp = atom(b"ftyp", b"M4A \0\0\0\0M4A isom");
+    let offset = (ftyp.len() + moov(0).len() + 8) as u32;
+    let pcm: Vec<u8> = (0..frames as i16).flat_map(|i| (i * 40).to_le_bytes()).collect();
+    [ftyp, moov(offset), atom(b"mdat", &pcm)].concat()
+}
+
+#[test]
+fn mp4_sizes_beyond_the_file_are_errors_not_aborts() {
+    let pcm = sample_entry(b"sowt", 0, &[], &[]);
+    let (_, buf) = decode(&mp4(480, &pcm, |_, a| a), None).unwrap();
+    assert_eq!(buf.frames(), 480);
+    let huge = |kind: &[u8; 4], a: Vec<u8>| [&1u32.to_be_bytes()[..], kind, &(1u64 << 60).to_be_bytes(), &a[8..]].concat();
+    // The first field after version and flags: stts's entry count, stsz's sample size.
+    let first_field_max = |mut a: Vec<u8>| {
+        a[12..16].copy_from_slice(&u32::MAX.to_be_bytes());
+        a
+    };
+    let sizes: Vec<u8> = (0..480u32).flat_map(|i| if i == 479 { u32::MAX } else { 2 }.to_be_bytes()).collect();
+    let per_sample = atom(b"stsz", &[&[0; 8][..], &480u32.to_be_bytes(), &sizes].concat());
+    // A header that starts inside its container is read whole, past the container's end.
+    let mdia = atom(b"mdia", &1u32.to_be_bytes());
+    let straddling = [&b"hdlr"[..], &(1u64 << 60).to_be_bytes(), &[0; 24]].concat();
+    let files = [
+        mp4(480, &pcm, |k, a| if k == b"hdlr" { huge(k, a) } else { a }),
+        mp4(480, &pcm, |k, a| if k == b"stts" { first_field_max(a) } else { a }),
+        mp4(480, &pcm, |k, a| if k == b"stsz" { first_field_max(a) } else { a }),
+        mp4(480, &pcm, |k, a| if k == b"stsz" { per_sample.clone() } else { a }),
+        [atom(b"ftyp", b"M4A \0\0\0\0M4A isom"), atom(b"moov", &atom(b"trak", &mdia)), straddling].concat(),
+    ];
+    for f in files {
+        assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
+    }
+}
+
+#[test]
+fn atoms_running_past_their_parent_are_walked_once() {
+    // Each moov holds a trak that runs to the end of the file; symphonia stops after the first.
+    let unit = atom(b"moov", &[&u32::MAX.to_be_bytes()[..], b"trak"].concat());
+    let f = [atom(b"ftyp", b"M4A \0\0\0\0M4A isom"), unit.repeat(1 << 18)].concat();
+    assert!(decode(&f, None).is_err());
+}
+
+#[test]
+fn packets_longer_than_any_codec_uses_are_refused() {
+    let be = |v: &[u32]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let v2 = |frames: u32| [&be(&[72])[..], &48_000f64.to_be_bytes(), &be(&[1, 0x7f00_0000, 16, 4, 2, frames])].concat();
+    let lpcm = |frames: u32| sample_entry(b"lpcm", 2, &v2(frames), &[]);
+    let config = |frames: u32| [&be(&[0, frames])[..], &[0, 16, 40, 10, 14, 1, 0, 255], &be(&[0, 0, 48_000])].concat();
+    let alac = |frames: u32| sample_entry(b"alac", 0, &[], &atom(b"alac", &config(frames)));
+    let (_, buf) = decode(&mp4(480, &lpcm(1), |_, a| a), None).unwrap();
+    assert_eq!(buf.frames(), 480);
+    for entry in [lpcm(1 << 21), alac(1 << 21)] {
+        assert!(matches!(decode(&mp4(480, &entry, |_, a| a), None), Err(AudioError::Malformed(m)) if m.contains("declares packets")));
+    }
+}
+
+#[test]
+fn flac_metadata_fields_beyond_their_block_are_refused() {
+    let with_block = |kind: u8, body: &[u8]| {
+        let f = small(FileFormat::Flac, BitDepth::Int16, 1);
+        let head = ((0x80 | u32::from(kind)) << 24 | body.len() as u32).to_be_bytes();
+        [&f[..4], &[f[4] & 0x7f], &f[5..42], &head, body, &f[42..]].concat()
+    };
+    let picture = |data: u32| [&[0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0][..], &[0; 16], &data.to_be_bytes(), &[1, 2, 3]].concat();
+    assert_eq!(decode(&with_block(6, &picture(3)), None).unwrap().1.frames(), 300);
+    let comment = [&0u32.to_le_bytes()[..], &1u32.to_le_bytes(), &u32::MAX.to_le_bytes()].concat();
+    for f in [with_block(6, &picture(0x7fff_fff0)), with_block(4, &comment)] {
+        assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than its block")));
+    }
+}
+
+#[test]
+fn an_id3_tag_before_the_audio_is_skipped_unread() {
+    let frame = [&b"TIT2"[..], &0x7fff_ffffu32.to_be_bytes(), &[0, 0, 3, b'h', b'i', 0]].concat();
+    let tag = [&b"ID3\x03\0\0\0\0\0"[..], &[frame.len() as u8], &frame].concat();
+    let flac = small(FileFormat::Flac, BitDepth::Int16, 1);
+    assert_eq!(decode(&[tag, flac].concat(), None).unwrap().1.frames(), 300);
+}
+
+#[test]
+fn wav_info_entries_beyond_the_file_are_refused() {
+    let alaw = |len: u32| {
+        let info = [&b"INFO"[..], b"INAM", &len.to_le_bytes(), b"hi"].concat();
+        riff(&[(b"fmt ", [fmt(6, 1, 8_000, 8), vec![0, 0]].concat()), (b"LIST", info), (b"data", vec![0xD5; 800])])
+    };
+    assert_eq!(decode(&alaw(2), None).unwrap().1.frames(), 800);
+    let mut f = alaw(0x7fff_fff0);
+    f[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    let list = f.windows(4).position(|w| w == b"LIST").unwrap();
+    f[list + 4..list + 8].copy_from_slice(&0x7fff_fffcu32.to_le_bytes());
+    assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
+}
+
+#[test]
+fn wav_info_entries_are_found_where_symphonia_reads_them() {
+    let list = [&b"LIST"[..], &0x7fff_fffcu32.to_le_bytes(), b"INFO", b"INAM", &0x7fff_fff0u32.to_le_bytes(), b"hi"].concat();
+    let alaw = |extra: u16| (b"fmt ", [fmt(6, 1, 8_000, 8), extra.to_le_bytes().to_vec()].concat());
+    // A-law's extra bytes are read past its chunk; an odd list is padded twice.
+    let files =
+        [riff(&[alaw(12), (b"JUNK", [&[0; 4][..], &list].concat())]), [riff(&[alaw(0), (b"LIST", b"adtl\0".to_vec())]), vec![0], list].concat()];
+    for mut f in files {
+        f[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
+    }
+}
+
 #[test]
 fn many_tiny_chunks_terminate() {
     let mut chunks: Vec<(&[u8; 4], Vec<u8>)> = vec![(b"fmt ", fmt(1, 1, 8_000, 16))];
@@ -240,6 +428,7 @@ fn detect_format_by_magic_and_hint() {
     assert_eq!(detect_format(b"", Some(".WAV")), FileFormat::Wav);
     assert_eq!(detect_format(b"zz", Some("aif")), FileFormat::Aiff);
     assert_eq!(detect_format(b"zz", Some("m4a")), FileFormat::Aac);
+    assert_eq!(detect_format(b"zz", Some("M4B")), FileFormat::Aac);
     assert_eq!(detect_format(b"zz", Some("flac")), FileFormat::Flac);
     assert_eq!(detect_format(b"zz", Some("xyz")), FileFormat::Other);
     assert_eq!(detect_format(b"zz", None), FileFormat::Other);

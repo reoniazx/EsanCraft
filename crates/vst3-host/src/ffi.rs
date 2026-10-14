@@ -15,6 +15,7 @@
 #![allow(clippy::unnecessary_cast)]
 
 use crate::{Vst3Error, scan};
+use soundcraft_dsp::Transport;
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use std::time::Duration;
 use vst3::Steinberg::Vst::{self as sv};
 use vst3::Steinberg::Vst::{
     IAudioProcessorTrait, IComponentHandlerTrait, IComponentTrait, IConnectionPointTrait, IEditControllerTrait, IEventListTrait,
-    IHostApplicationTrait, IParamValueQueueTrait, IParameterChangesTrait,
+    IHostApplicationTrait, IMidiMappingTrait, IParamValueQueueTrait, IParameterChangesTrait,
 };
 use vst3::Steinberg::{self as sb};
 use vst3::Steinberg::{FUnknown, IBStreamTrait, IPlugFrameTrait, IPlugViewTrait, IPluginBaseTrait, IPluginFactory2Trait, IPluginFactoryTrait};
@@ -80,6 +81,10 @@ fn write_c16(s: &str, dst: &mut [u16]) {
 fn ok(r: sb::tresult) -> bool {
     r == sb::kResultOk
 }
+
+/// VST3's numbers for the MIDI controllers that aren't CCs.
+pub(crate) const AFTERTOUCH: usize = sv::ControllerNumbers_::kAfterTouch as usize;
+pub(crate) const PITCH_BEND: usize = sv::ControllerNumbers_::kPitchBend as usize;
 
 // ---- loaded binaries -----------------------------------------------------------------------
 
@@ -571,8 +576,10 @@ impl Bundle {
                 // SAFETY: valid controller; the handler (host context) outlives it.
                 unsafe { c.setComponentHandler(h.as_ptr()) };
             }
-            inst.editor = Arc::new(EditorLink { inner: Mutex::new(EditorInner { controller: Some(c.clone()), ..EditorInner::default() }) });
         }
+        inst.editor = Arc::new(EditorLink {
+            inner: Mutex::new(EditorInner { component: Some(inst.component.clone()), controller: inst.controller.clone(), ..EditorInner::default() }),
+        });
         Ok(inst)
     }
 }
@@ -958,17 +965,18 @@ impl IBStreamTrait for MemoryStream {
 pub(crate) enum NoteEvent {
     On { time: u32, key: u8, velocity: f32 },
     Off { time: u32, key: u8 },
+    Pressure { time: u32, key: u8, pressure: f32 },
 }
 
 impl NoteEvent {
     pub fn time(&self) -> u32 {
         match *self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } => time,
+            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } => time,
         }
     }
     pub fn set_time(&mut self, t: u32) {
         match self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } => *time = t,
+            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } => *time = t,
         }
     }
 
@@ -986,6 +994,10 @@ impl NoteEvent {
             NoteEvent::Off { key, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kNoteOffEvent as u16;
                 e.__field0.noteOff = sv::NoteOffEvent { channel: 0, pitch: i16::from(key), velocity: 0.0, noteId: -1, tuning: 0.0 };
+            }
+            NoteEvent::Pressure { key, pressure, .. } => {
+                e.r#type = sv::Event_::EventTypes_::kPolyPressureEvent as u16;
+                e.__field0.polyPressure = sv::PolyPressureEvent { channel: 0, pitch: i16::from(key), pressure, noteId: -1 };
             }
         }
         e
@@ -1072,6 +1084,27 @@ pub(crate) struct Layout {
     pub event_input: bool,
 }
 
+fn apply_transport(c: &mut sv::ProcessContext, t: &Transport) {
+    use sv::ProcessContext_::StatesAndFlags_::*;
+    let mut state = kTempoValid | kTimeSigValid | kProjectTimeMusicValid | kBarPositionValid | kContTimeValid;
+    if t.playing {
+        state |= kPlaying;
+    }
+    if t.recording {
+        state |= kRecording;
+    }
+    // The flag constants are the C default enum type: i32 on Windows, u32 elsewhere.
+    #[allow(clippy::unnecessary_cast)]
+    let state = state as u32;
+    c.state = state;
+    c.tempo = t.tempo;
+    c.timeSigNumerator = i32::try_from(t.numerator).unwrap_or(4);
+    c.timeSigDenominator = i32::try_from(t.denominator).unwrap_or(4);
+    c.projectTimeSamples = t.samples;
+    c.projectTimeMusic = t.quarters;
+    c.barPositionMusic = t.bar_start;
+}
+
 /// A live plugin: component + audio processor (+ edit controller) and the host objects.
 pub(crate) struct Instance {
     processor: Option<ComPtr<sv::IAudioProcessor>>,
@@ -1123,6 +1156,11 @@ impl Instance {
         self.editor.has_controller().then(|| Arc::clone(&self.editor))
     }
 
+    /// The same link, for state handles.
+    pub fn state_link(&self) -> Arc<EditorLink> {
+        Arc::clone(&self.editor)
+    }
+
     /// Writes one state into a fresh memory stream.
     fn read_state(f: impl FnOnce(*mut sb::IBStream) -> sb::tresult) -> Option<Vec<u8>> {
         let stream = MemoryStream::new(Vec::new());
@@ -1130,26 +1168,7 @@ impl Instance {
         ok(f(s.as_ptr())).then(|| stream.take())
     }
 
-    /// The component state plus the controller state, in SoundCraft's container (see
-    /// `STATE_MAGIC`). `None` when the component refuses `getState`.
-    pub fn save_state(&self) -> Option<Vec<u8>> {
-        // SAFETY: valid component; the stream lives in `read_state` for the whole call.
-        let comp = Instance::read_state(|s| unsafe { self.component.getState(s) })?;
-        let ctrl = match &self.controller {
-            // SAFETY: valid controller; as above.
-            Some(c) => Instance::read_state(|s| unsafe { c.getState(s) }).unwrap_or_default(),
-            None => Vec::new(),
-        };
-        let mut out = Vec::with_capacity(12 + comp.len() + ctrl.len());
-        out.extend_from_slice(STATE_MAGIC);
-        out.extend_from_slice(&u32::try_from(comp.len()).ok()?.to_le_bytes());
-        out.extend_from_slice(&comp);
-        out.extend_from_slice(&u32::try_from(ctrl.len()).ok()?.to_le_bytes());
-        out.extend_from_slice(&ctrl);
-        Some(out)
-    }
-
-    /// Restores a [`Instance::save_state`] blob (or a bare component state): component
+    /// Restores a [`EditorLink::save_state`] blob (or a bare component state): component
     /// `setState`, then the controller's `setComponentState` and `setState`. `false` when the
     /// blob is malformed or the component refuses it.
     pub fn load_state(&self, data: &[u8]) -> bool {
@@ -1237,6 +1256,20 @@ impl Instance {
         // SAFETY: valid controller.
         let v = unsafe { c.getParamNormalized(id) };
         v.is_finite().then(|| v.clamp(0.0, 1.0))
+    }
+
+    /// The parameter each MIDI controller drives on channel 1 (`IMidiMapping`), indexed by VST3's
+    /// controller numbers: CCs 0–127, then [`AFTERTOUCH`] and [`PITCH_BEND`]. Main thread only.
+    pub fn midi_mapping(&self) -> Vec<Option<u32>> {
+        let Some(m) = self.controller.as_ref().and_then(|c| c.cast::<sv::IMidiMapping>()) else { return Vec::new() };
+        (0..=PITCH_BEND)
+            .map(|n| {
+                let mut id: sv::ParamID = 0;
+                let n = i16::try_from(n).unwrap_or(0);
+                // SAFETY: valid mapping interface on the main thread; `id` is a local.
+                ok(unsafe { m.getMidiControllerAssignment(0, 0, n, &mut id) }).then_some(id)
+            })
+            .collect()
     }
 
     pub fn value_text(&self, id: u32, normalized: f64) -> Option<String> {
@@ -1392,16 +1425,20 @@ impl Instance {
     }
 
     /// Runs one `process` call over `frames` frames: `params` become one point each at offset 0,
-    /// `notes` (sorted by time) have their times made relative to `offset`.
+    /// `controls` (time, id, value) one point at their time when it falls in this call (the last
+    /// one wins per parameter), and `notes` (sorted by time) have their times made relative to
+    /// `offset`.
     pub fn process(
         &mut self,
         frames: usize,
         inputs: &mut BusBuffers,
         outputs: &mut BusBuffers,
         params: &[(u32, f64)],
+        controls: &[(u32, u32, f64)],
         notes: &[NoteEvent],
         offset: u32,
         project_time: i64,
+        transport: Option<&Transport>,
     ) -> Result<(), Vst3Error> {
         if !self.active {
             return Err(Vst3Error::Process("not active".into()));
@@ -1420,6 +1457,11 @@ impl Instance {
         for &(id, v) in params.iter().take(PARAM_QUEUE_CAP) {
             self.in_params.set(id, 0, v.clamp(0.0, 1.0));
         }
+        for &(time, id, v) in controls {
+            if let Some(at) = time.checked_sub(offset).filter(|&t| (t as usize) < frames) {
+                self.in_params.set(id, i32::try_from(at).unwrap_or(0), v.clamp(0.0, 1.0));
+            }
+        }
         self.out_params.clear();
         let event_in = self.event_in;
         self.in_events.with(|v| {
@@ -1433,8 +1475,11 @@ impl Instance {
         self.out_events.with(Vec::clear);
         inputs.refresh();
         outputs.refresh();
-        self.context.projectTimeSamples = project_time;
         self.context.continousTimeSamples = project_time;
+        match transport {
+            Some(t) => apply_transport(&mut self.context, t),
+            None => self.context.projectTimeSamples = project_time,
+        }
         let mut data = sv::ProcessData {
             processMode: sv::ProcessModes_::kRealtime as i32,
             symbolicSampleSize: sv::SymbolicSampleSizes_::kSample32 as i32,
@@ -1545,17 +1590,20 @@ fn rect_size(r: &sb::ViewRect) -> (f64, f64) {
 #[derive(Default)]
 struct EditorInner {
     /// `None` once the instance is gone.
+    component: Option<ComPtr<sv::IComponent>>,
+    /// `None` once the instance is gone, or without an edit controller.
     controller: Option<ComPtr<sv::IEditController>>,
     view: Option<ComPtr<sb::IPlugView>>,
     frame: Option<ComWrapper<PlugFrame>>,
     window: Option<window::HostWindow>,
 }
 
-/// The link between an instance and its editor handles. The instance may process on the audio
-/// thread while the editor (the edit controller's `IPlugView`) is driven from the main thread,
-/// which is VST3's own threading model (controller and views on the UI thread). All view calls
-/// happen under this lock, and the instance closes the view and drops the controller reference
-/// under the same lock before it terminates, so a handle never calls into a dead plugin.
+/// The link between an instance and its editor and state handles. The instance may process on
+/// the audio thread while the editor (the edit controller's `IPlugView`) is driven and the state
+/// read from the main thread, which is VST3's own threading model (controller, views and
+/// `getState` on the UI thread). All such calls happen under this lock, and the instance closes
+/// the view and drops the component and controller references under the same lock before it
+/// terminates, so a handle never calls into a dead plugin.
 #[derive(Default)]
 pub(crate) struct EditorLink {
     inner: Mutex<EditorInner>,
@@ -1657,6 +1705,41 @@ impl EditorLink {
         }
     }
 
+    /// Hands a host-set value to the controller before a state save (`setParamNormalized`,
+    /// under the lock like [`EditorLink::save_state`]). No-op once the instance is gone.
+    pub fn sync_param(&self, id: u32, n: f64) {
+        if !n.is_finite() {
+            return;
+        }
+        let g = self.lock();
+        if let Some(c) = &g.controller {
+            // SAFETY: valid controller (the instance clears it under this lock before it terminates).
+            unsafe { c.setParamNormalized(id, n.clamp(0.0, 1.0)) };
+        }
+    }
+
+    /// The component state plus the controller state, in SoundCraft's container (see
+    /// `STATE_MAGIC`). `None` when the component refuses `getState` or the instance is gone.
+    pub fn save_state(&self) -> Option<Vec<u8>> {
+        let g = self.lock();
+        let component = g.component.as_ref()?;
+        // SAFETY: valid component (the instance clears it under this lock before it terminates);
+        // the stream lives in `read_state` for the whole call.
+        let comp = Instance::read_state(|s| unsafe { component.getState(s) })?;
+        let ctrl = match &g.controller {
+            // SAFETY: valid controller; as above.
+            Some(c) => Instance::read_state(|s| unsafe { c.getState(s) }).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let mut out = Vec::with_capacity(12 + comp.len() + ctrl.len());
+        out.extend_from_slice(STATE_MAGIC);
+        out.extend_from_slice(&u32::try_from(comp.len()).ok()?.to_le_bytes());
+        out.extend_from_slice(&comp);
+        out.extend_from_slice(&u32::try_from(ctrl.len()).ok()?.to_le_bytes());
+        out.extend_from_slice(&ctrl);
+        Some(out)
+    }
+
     /// Closes the editor. Main thread only (no-op elsewhere).
     pub fn close(&self) {
         if window::on_main_thread() {
@@ -1739,6 +1822,7 @@ impl EditorLink {
                 }
             }
         }
+        g.component = None;
         g.controller = None;
         leaked
     }
@@ -1844,8 +1928,181 @@ mod window {
     }
 }
 
+/// The Windows host window: a top-level window owned by the app's active window (so it stays
+/// above it and has no taskbar button) whose client area is the plugin view's `HWND` parent.
+/// Closing it only hides it; the editor link notices in `idle`, detaches the view, then destroys
+/// the window. Messages are dispatched by the app's own event loop on the main thread.
+#[cfg(windows)]
+mod window {
+    use std::ffi::{c_char, c_void};
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        AdjustWindowRectEx, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_EXSTYLE, GWL_STYLE,
+        GetWindowLongPtrW, IDC_ARROW, IsWindow, IsWindowVisible, LoadCursorW, RegisterClassExW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CLOSE, WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_OVERLAPPED, WS_SYSMENU,
+    };
+
+    pub const PLATFORM_TYPE: Option<*const c_char> = Some(vst3::Steinberg::kPlatformTypeHWND);
+
+    /// Rust names the process's first thread "main"; the app runs its UI (and message loop) there.
+    pub fn on_main_thread() -> bool {
+        std::thread::current().name() == Some("main")
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().filter(|&c| c != 0).chain(Some(0)).collect()
+    }
+
+    const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+
+    unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if msg == WM_CLOSE {
+            // SAFETY: `hwnd` is the window this procedure was called for.
+            unsafe { ShowWindow(hwnd, SW_HIDE) };
+            return 0;
+        }
+        // SAFETY: default handling of a message for the window it was sent to.
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    /// Registers the window class once; the name lives for the whole process.
+    fn class_name() -> Option<&'static [u16]> {
+        static CLASS: OnceLock<Option<Vec<u16>>> = OnceLock::new();
+        CLASS
+            .get_or_init(|| {
+                let name = wide("SoundCraftVst3Editor");
+                // SAFETY: null asks for this process's module handle.
+                let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+                let wc = WNDCLASSEXW {
+                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                    style: CS_HREDRAW | CS_VREDRAW,
+                    lpfnWndProc: Some(wndproc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: instance,
+                    hIcon: std::ptr::null_mut(),
+                    // SAFETY: a system cursor (null instance + predefined id).
+                    hCursor: unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) },
+                    hbrBackground: std::ptr::null_mut(),
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: name.as_ptr(),
+                    hIconSm: std::ptr::null_mut(),
+                };
+                // SAFETY: a fully initialised class description whose strings outlive the call
+                // (the name is kept for the process lifetime in this `OnceLock`).
+                (unsafe { RegisterClassExW(&wc) } != 0).then_some(name)
+            })
+            .as_deref()
+    }
+
+    /// Outer window size for a client area of `w`×`h`.
+    fn outer_size(style: u32, ex_style: u32, w: f64, h: f64) -> (i32, i32) {
+        let mut r = RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
+        // SAFETY: `r` is a valid, writable rect.
+        unsafe { AdjustWindowRectEx(&mut r, style, 0, ex_style) };
+        (r.right.saturating_sub(r.left), r.bottom.saturating_sub(r.top))
+    }
+
+    /// Owns the window handle; destroyed in `close` (main thread only).
+    pub struct HostWindow {
+        hwnd: HWND,
+    }
+
+    // SAFETY: the handle is only used on the main thread (every method checks); the struct
+    // merely carries it between threads' locks.
+    unsafe impl Send for HostWindow {}
+
+    impl HostWindow {
+        fn live(&self) -> Option<HWND> {
+            // SAFETY: `IsWindow` accepts any value and only reports whether it names a window.
+            (on_main_thread() && unsafe { IsWindow(self.hwnd) } != 0).then_some(self.hwnd)
+        }
+
+        pub fn new(title: &str, w: f64, h: f64) -> Result<HostWindow, String> {
+            if !on_main_thread() {
+                return Err("not on the main thread".into());
+            }
+            let class = class_name().ok_or_else(|| "cannot register the editor window class".to_string())?;
+            let title = wide(title);
+            let (ow, oh) = outer_size(STYLE, 0, w, h);
+            // SAFETY: main thread; the active window (or null) of this thread's queue.
+            let owner = unsafe { GetActiveWindow() };
+            // SAFETY: registered class and NUL-terminated strings that outlive the call; the
+            // owner is null or a window of this thread.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    title.as_ptr(),
+                    STYLE,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    ow,
+                    oh,
+                    owner,
+                    std::ptr::null_mut(),
+                    GetModuleHandleW(std::ptr::null()),
+                    std::ptr::null(),
+                )
+            };
+            if hwnd.is_null() {
+                return Err("cannot create the editor window".into());
+            }
+            Ok(HostWindow { hwnd })
+        }
+
+        /// The window handle (for the plug frame's resizes).
+        pub fn raw(&self) -> *mut c_void {
+            self.hwnd
+        }
+
+        /// The `HWND` the plugin view creates its child window in.
+        pub fn parent(&self) -> *mut c_void {
+            self.live().unwrap_or(std::ptr::null_mut())
+        }
+
+        pub fn raise(&self) {
+            if let Some(h) = self.live() {
+                // SAFETY: a live window of this thread.
+                unsafe {
+                    ShowWindow(h, SW_SHOW);
+                    SetForegroundWindow(h);
+                }
+            }
+        }
+
+        pub fn is_visible(&self) -> bool {
+            // SAFETY: a live window of this thread.
+            self.live().is_some_and(|h| unsafe { IsWindowVisible(h) } != 0)
+        }
+
+        pub fn close(self) {
+            if let Some(h) = self.live() {
+                // SAFETY: our own live window; the view was detached before (see `teardown`).
+                unsafe { DestroyWindow(h) };
+            }
+        }
+    }
+
+    /// Resizes a host window's client area (`window` from [`HostWindow::raw`]); main thread only.
+    pub fn resize(window: *mut c_void, w: f64, h: f64) {
+        // SAFETY: `IsWindow` accepts any value.
+        if !on_main_thread() || window.is_null() || unsafe { IsWindow(window) } == 0 {
+            return;
+        }
+        // SAFETY: a live window of this thread; style values are read, not changed.
+        let (style, ex) = unsafe { (GetWindowLongPtrW(window, GWL_STYLE) as u32, GetWindowLongPtrW(window, GWL_EXSTYLE) as u32) };
+        let (ow, oh) = outer_size(style, ex, w, h);
+        // SAFETY: as above; only the size changes.
+        unsafe { SetWindowPos(window, std::ptr::null_mut(), 0, 0, ow, oh, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    }
+}
+
 /// Other platforms: no editor windows yet (opening reports "unsupported").
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 mod window {
     use std::ffi::{c_char, c_void};
 
@@ -1880,6 +2137,31 @@ mod window {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_transport_fills_the_process_context() {
+        use sv::ProcessContext_::StatesAndFlags_::*;
+        // SAFETY: `ProcessContext` is plain data (numbers and small structs); all-zero is valid.
+        let mut c: sv::ProcessContext = unsafe { std::mem::zeroed() };
+        let t = Transport {
+            playing: true,
+            tempo: 90.0,
+            numerator: 3,
+            denominator: 4,
+            samples: 96_000,
+            quarters: 3.5,
+            bar_start: 3.0,
+            ..Transport::default()
+        };
+        apply_transport(&mut c, &t);
+        let playing = kPlaying as u32;
+        assert_eq!(c.state & playing, playing);
+        assert_eq!(c.state & kRecording as u32, 0);
+        assert_eq!((c.tempo, c.timeSigNumerator, c.timeSigDenominator), (90.0, 3, 4));
+        assert_eq!((c.projectTimeSamples, c.projectTimeMusic, c.barPositionMusic), (96_000, 3.5, 3.0));
+        apply_transport(&mut c, &Transport { playing: false, ..t });
+        assert_eq!(c.state & playing, 0);
+    }
 
     #[test]
     fn state_container_parses_strictly() {

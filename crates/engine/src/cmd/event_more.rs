@@ -555,6 +555,10 @@ pub fn chord_name(weights: &[f64; 12], bass: usize) -> Option<String> {
     Some(name)
 }
 
+/// The most bars Extract Chords looks at (55 hours of 4/4 at 120 BPM), and notes sounding in them.
+const MAX_CHORD_BARS: usize = 100_000;
+const MAX_CHORD_NOTES: usize = 10_000_000;
+
 fn extract_chords(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.extract_chords";
     let (_, t0, t1) = selection_ticks(e, p, id)?;
@@ -580,20 +584,36 @@ fn extract_chords(e: &mut Engine, p: &Value) -> Result<Value> {
             }
         }
     }
-    let first_bar = s.tempo.bar_beat_at_tick(t0).bar;
-    let mut bar = first_bar;
+    notes.sort_unstable_by_key(|n| n.0);
+    let mut bar = s.tempo.bar_beat_at_tick(t0).bar;
+    let mut sounding: Vec<(i64, i64, u8)> = Vec::new();
+    let (mut next, mut bars, mut heard) = (0, 0, 0);
     let mut chords: Vec<Value> = Vec::new();
     let mut marks: Vec<(Samples, String)> = Vec::new();
     let mut last = String::new();
-    while chords.len() < 2000 {
+    while chords.len() < 2000 && bars < MAX_CHORD_BARS && heard < MAX_CHORD_NOTES {
         let a = s.tempo.bar_start_tick(bar).max(t0);
         let b = s.tempo.bar_start_tick(bar + 1).min(t1);
         if a >= t1 {
             break;
         }
+        while let Some(&n) = notes.get(next).filter(|n| n.0 < b) {
+            sounding.push(n);
+            next += 1;
+        }
+        sounding.retain(|n| n.1 > a);
+        if sounding.is_empty() {
+            match notes.get(next) {
+                Some(n) => bar = (bar + 1).max(s.tempo.bar_beat_at_tick(n.0).bar),
+                None => break,
+            }
+            continue;
+        }
+        bars += 1;
+        heard += sounding.len();
         let mut w = [0.0f64; 12];
         let mut bass: Option<u8> = None;
-        for (na, nb, pitch) in &notes {
+        for (na, nb, pitch) in &sounding {
             let ov = (*nb).min(b) - (*na).max(a);
             if ov > 0 {
                 if let Some(x) = w.get_mut(usize::from(*pitch) % 12) {
@@ -899,6 +919,18 @@ mod tests {
         assert!(!r["chords"].as_array().unwrap().is_empty(), "{r}");
         assert!(e.session().markers.len() > before);
         assert!(e.session().markers.iter().any(|m| m.ruler == 2));
+    }
+
+    #[test]
+    fn chords_far_down_the_timeline_are_found_without_walking_every_bar() {
+        let mut e = crate::demo::demo_engine();
+        let keys = e.session().track_by_name("Keys").unwrap().id;
+        let far = 1i64 << 39;
+        if let Some(p) = e.session_mut().track_mut(keys).and_then(soundcraft_model::Track::playlist_mut) {
+            p.clips.iter_mut().for_each(|c| c.start += far);
+        }
+        let r = e.execute("event.extract_chords", &json!({"tracks": [keys.0], "start": 0, "end": far + 48_000 * 600})).unwrap();
+        assert!(!r["chords"].as_array().unwrap().is_empty(), "{r}");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha blockers marked after the core-workflow gate) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (G-01: audio device settings and opt-in ASIO) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -15,7 +15,7 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 
 | # | Gap | Dimension | Doc | Est. (h) |
 |---|---|---|---|---:|
-| G-01 | **Alpha blocker.** No audio device, channel or buffer-size selection; no duplex low-latency path | Hardware | [hardware-parity.md](hardware-parity.md) | 25–40 |
+| G-01 | **Alpha blocker.** No channel routing or duplex low-latency path (device, rate and buffer choice done; ASIO opt-in) | Hardware | [hardware-parity.md](hardware-parity.md) | 15–25 |
 | G-02 | **Alpha blocker.** No MIDI device input or output | Hardware / MIDI | [hardware-parity.md](hardware-parity.md) | 20–35 |
 | G-03 | **Alpha blocker.** Cannot exchange sessions with Pro Tools (no AAF/OMF, no `.ptx`) | File formats | [file-format-parity.md](file-format-parity.md) | 50–90 |
 | G-04 | Open correctness bugs in features counted as done (~25 issues) | Stability | this file | 25–40 |
@@ -42,12 +42,15 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 
 ### G-01. Audio interface support
 
-- **Missing:** choosing the output or input device, the device's channel count and routing to
-  physical channels, the buffer size, and the sample rate from the hardware side. Input and
-  output are separate cpal streams on the *default* devices (`crates/playback/src/lib.rs`
-  `open_device`, `record.rs`); the mix runs in fixed 512-sample blocks and resamples when rates
-  differ. `setup.playback_engine` stores `device`/`buffer_size` params, but playback ignores them.
-  No ASIO on Windows (WASAPI shared only), so latency there is high.
+- **Done (2026-10-12):** Setup › Playback Engine chooses the audio system, output and input
+  device, sample rate and device buffer size (kept with the preferences, per machine; `ui.audio_device`
+  for agents); f32 and 16/32-bit integer devices; ASIO behind the opt-in `asio` build feature
+  (verified on Windows with an SSL 2+ at 128 samples).
+- **Missing:** routing to physical channels (I/O Setup), one duplex stream on one clock (input and
+  output are still separate cpal streams), latency reporting and record-offset compensation, ASIO
+  in official builds (owner decision: Steinberg's SDK is proprietary or GPLv3), JACK, and
+  verification on macOS and Linux. The mix still runs in fixed 512-sample blocks.
+  `setup.playback_engine` still stores `device`/`buffer_size` in the session, unused.
 - **Evidence:** code above; Playback Engine window says "Mix block size: 512 samples"; issue #42
   (no input device selection, forced monitoring feedback with virtual routing).
 - **Impact:** blocks tracking with any multichannel interface; latency makes overdubs hard.
@@ -196,5 +199,6 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | G-01 shrunk: audio device, rate and buffer choice; opt-in ASIO |
 | 2026-10-10 | minor | Marked the alpha blockers (G-01, G-02, G-03; parts of G-05 and G-06) from the core-workflow gate |
 | 2026-10-10 | major | Created from the full re-measure against Pro Tools Ultimate 2026.4.1: 22 ranked gaps with evidence and estimates |

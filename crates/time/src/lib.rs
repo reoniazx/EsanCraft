@@ -19,6 +19,10 @@ pub use timecode::{FrameRate, Timecode};
 /// A position or length in samples.
 pub type Samples = i64;
 
+/// Largest position accepted from parameters and files: 2^40 samples (about 265 days at 48 kHz).
+/// Clamping there keeps every later addition and subtraction on positions far away from overflow.
+pub const MAX_POSITION: Samples = 1 << 40;
+
 /// Errors from parsing or converting time values.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum TimeError {

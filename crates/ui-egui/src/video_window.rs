@@ -7,7 +7,7 @@ use crate::video_track::{MovieKey, movie_secs, online, picture_at};
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use serde_json::json;
 use soundcraft_model::{ClipContent, TrackKind};
-use soundcraft_time::{TimeFormat, format_position};
+use soundcraft_time::TimeFormat;
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     if app.ui.show_video {
@@ -37,7 +37,7 @@ fn video(app: &mut SoundApp, ctx: &egui::Context) {
     let mut burn = app.ui.video_burn_in;
     egui::Window::new("Video").open(&mut open).default_size(vec2(480.0, 480.0 / aspect + 28.0)).resizable(true).show(ctx, |ui| {
         ui.horizontal(|ui| {
-            ui.checkbox(&mut burn, "Timecode burn-in");
+            crate::widgets::checkbox(ui, &mut burn, "Timecode burn-in");
             let text = match &pic {
                 Some((k, ..)) => match app.video.info(*k) {
                     Some(Ok(i)) => format!("{}x{}  {:.3} fps  {}", i.width, i.height, i.frame_rate, i.codec_detail),
@@ -81,7 +81,7 @@ fn video(app: &mut SoundApp, ctx: &egui::Context) {
             painter.text(img.center(), Align2::CENTER_CENTER, m, regular(12.0), Color32::from_gray(170));
         }
         if burn {
-            let tc = format_position(pos, TimeFormat::Timecode, s.sample_rate, &s.tempo, s.frame_rate, s.timecode_start);
+            let tc = s.format_position(pos, TimeFormat::Timecode);
             let size = (h / 12.0).clamp(10.0, 36.0);
             let galley = painter.layout_no_wrap(tc, mono(size), Color32::WHITE);
             let at = pos2(img.center().x - galley.size().x / 2.0, img.max.y - galley.size().y - size * 0.6);
@@ -93,6 +93,12 @@ fn video(app: &mut SoundApp, ctx: &egui::Context) {
     if !open {
         app.ui.show_video = false;
     }
+}
+
+/// Timeline position of strip coordinate `x` (the strip spans `left`..`left + width` and samples
+/// 0..`end`), clamped to the start of the clip being drawn.
+fn strip_position(x: f32, left: f32, width: f32, end: i64, clip_start: i64) -> i64 {
+    (((x - left) / width * end as f32) as i64).max(clip_start)
 }
 
 fn first_movie_aspect(s: &soundcraft_model::Session) -> Option<f32> {
@@ -131,8 +137,7 @@ fn universe(app: &mut SoundApp, ctx: &egui::Context) {
             let hpx = ((cr.height() * ppp / 16.0).ceil() * 16.0).clamp(16.0, 256.0) as u32;
             let mut x = cr.min.x;
             while x < cr.max.x {
-                let at = c.start + ((x - r.min.x) / r.width() * end as f32) as i64 - c.start.min(0);
-                let secs = movie_secs(&s, c.start, offset, at.max(c.start)).max(0.0);
+                let secs = movie_secs(&s, c.start, offset, strip_position(x, r.min.x, r.width(), end, c.start)).max(0.0);
                 if let Some(tex) = app.video.thumb(ctx, key, &v.path, secs, hpx) {
                     let tr = Rect::from_min_size(pos2(x, cr.min.y), vec2(tw, cr.height()));
                     let vis = tr.intersect(cr);
@@ -162,5 +167,35 @@ fn universe(app: &mut SoundApp, ctx: &egui::Context) {
     }
     if !open {
         app.ui.show_video_universe = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_position;
+
+    // A 1024 px strip over 1_024_000 samples: 1000 samples per point, exact in f32.
+    const LEFT: f32 = 100.0;
+    const WIDTH: f32 = 1024.0;
+    const END: i64 = 1_024_000;
+
+    #[test]
+    fn strip_position_is_the_timeline_position_for_clips_after_zero() {
+        // A clip at 48_000 has its left edge at x = 148.
+        assert_eq!(strip_position(148.0, LEFT, WIDTH, END, 48_000), 48_000);
+        assert_eq!(strip_position(248.0, LEFT, WIDTH, END, 48_000), 148_000);
+        let s = soundcraft_model::Session::default();
+        let at = strip_position(148.0, LEFT, WIDTH, END, 48_000);
+        assert_eq!(crate::video_track::movie_secs(&s, 48_000, 0, at), 0.0, "the clip's left edge shows the movie's first picture");
+    }
+
+    #[test]
+    fn strip_position_is_unchanged_for_clips_at_or_before_zero() {
+        assert_eq!(strip_position(100.0, LEFT, WIDTH, END, 0), 0);
+        assert_eq!(strip_position(200.0, LEFT, WIDTH, END, 0), 100_000);
+        // A clip at -48_000 starts left of the strip; positions before it clamp to its start.
+        assert_eq!(strip_position(0.0, LEFT, WIDTH, END, -48_000), -48_000);
+        assert_eq!(strip_position(52.0, LEFT, WIDTH, END, -48_000), -48_000);
+        assert_eq!(strip_position(200.0, LEFT, WIDTH, END, -48_000), 100_000);
     }
 }

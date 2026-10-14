@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let at = position_param(e, "session.format_time", p, "at")?.unwrap_or(0);
             let s = e.session();
             let f = str_param(p, "format").and_then(soundcraft_time::TimeFormat::from_id).unwrap_or(s.edit.main_counter);
-            Ok(json!({"text": soundcraft_time::format_position(at, f, s.sample_rate, &s.tempo, s.frame_rate, s.timecode_start)}))
+            Ok(json!({"text": s.format_position(at, f)}))
         }),
     ]
 }

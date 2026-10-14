@@ -39,7 +39,7 @@ impl NativeUiHost {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 return;
             };
-            app.ui(ui);
+            app.guarded(|app| app.ui(ui));
             // Compare across frames, including commands drained by logic before
             // drawing. Clone preferences only when their visible state changes.
             let changed = if let Ok(mut cache) = self.view_state.try_borrow_mut() {
@@ -84,6 +84,10 @@ impl NativeUiHost {
             app.raw_input_hook(raw);
         }
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
+        if app.ui.mix_separate {
+            main_windows::consume_focus_keys(&mut app, &mut raw.events);
+            return;
+        }
         if raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. })) {
             let primary = app.main_windows.primary(&app);
             let window = if raw.viewport_id == egui::ViewportId::ROOT { primary } else { primary.other() };
@@ -112,7 +116,7 @@ fn render_secondary(id: u64, ui: &mut egui::Ui) {
         return;
     };
     let started = std::time::Instant::now();
-    main_windows::show_secondary(&mut app, ui);
+    app.guarded(|app| main_windows::show_secondary(app, ui));
     app.main_windows.secondary_ui_ms = started.elapsed().as_secs_f64() * 1000.0;
 }
 

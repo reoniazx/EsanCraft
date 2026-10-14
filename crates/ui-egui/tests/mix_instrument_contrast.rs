@@ -6,36 +6,67 @@ use soundcraft_ui_egui::{Services, SoundApp, theme::ThemeMode};
 #[derive(Debug)]
 struct Slot {
     rect: Rect,
+    /// The face behind the label's centre line.
     fill: Color32,
+    /// The face's top and bottom colours.
+    faces: [Color32; 2],
     text: Color32,
     border: Color32,
 }
 
-// Read the rectangle and foreground emitted by the real Mix drawing path, rather than
+// Read the face and foreground emitted by the real Mix drawing path, rather than
 // testing a palette token that a custom-painted control might never use.
 fn slot(output: &FullOutput, label: &str) -> Slot {
     // Edit can show the same plugin label in its track header while Mix is
-    // open alongside it. Select the label inside a real 15-point Mix slot.
-    let (text, rect) = output
+    // open alongside it. Select the label inside a real 17-point Mix slot rim.
+    let text = output
         .shapes
         .iter()
         .filter_map(|shape| match &shape.shape {
             Shape::Text(text) if text.galley.job.text == label => Some(text),
             _ => None,
         })
-        .find_map(|text| {
+        .find(|text| {
             let center = text.visual_bounding_rect().center();
-            output.shapes.iter().find_map(|shape| match &shape.shape {
-                Shape::Rect(rect) if rect.rect.height() == 15.0 && rect.rect.contains(center) => Some((text, rect)),
-                _ => None,
+            output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                Shape::Rect(rect) if rect.rect.height() == 17.0 && rect.rect.contains(center))
             })
         })
+        .unwrap_or_else(|| panic!("missing painted label {label}"));
+    let center = text.visual_bounding_rect().center();
+    // A used slot is a raised key: a rim, then a face shaded from top to bottom.
+    let face = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Mesh(mesh) if mesh.calc_bounds().contains(center) => Some(mesh),
+            _ => None,
+        })
+        .min_by(|a, b| a.calc_bounds().area().total_cmp(&b.calc_bounds().area()))
         .unwrap_or_else(|| panic!("missing painted slot for {label}"));
+    let opaque = || face.vertices.iter().filter(|v| v.color.a() == 255);
+    let top = opaque().min_by(|a, b| a.pos.y.total_cmp(&b.pos.y)).unwrap_or_else(|| panic!("{label}: face has no opaque vertices"));
+    let bottom = opaque().max_by(|a, b| a.pos.y.total_cmp(&b.pos.y)).unwrap_or(top);
+    let k = ((center.y - top.pos.y) / (bottom.pos.y - top.pos.y).max(1.0)).clamp(0.0, 1.0);
+    let rim = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Rect(rect) if rect.rect.height() <= 17.0 && rect.rect.contains(center) => Some(rect),
+            _ => None,
+        })
+        .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+        .unwrap_or_else(|| panic!("missing painted rim for {label}"));
     let foreground = text.override_text_color.unwrap_or(text.galley.job.sections[0].format.color);
     assert_eq!(text.opacity_factor, 1.0);
     assert_eq!(foreground.a(), 255);
-    assert_eq!(rect.fill.a(), 255);
-    Slot { rect: rect.rect, fill: rect.fill, text: foreground, border: rect.stroke.color }
+    Slot { rect: rim.rect, fill: top.color.lerp_to_gamma(bottom.color, k), faces: [top.color, bottom.color], text: foreground, border: rim.fill }
+}
+
+/// Face colours as painted: the anti-aliased edge sits half a pixel inside the gradient's ends.
+fn near(a: [Color32; 2], b: [Color32; 2]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.to_array().iter().zip(y.to_array()).all(|(p, q)| p.abs_diff(q) <= 2))
 }
 
 fn contrast(a: Color32, b: Color32) -> f64 {
@@ -101,12 +132,19 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
         }
         let ordinary = slot(harness.output(), "SubSynth");
         let insert = slot(harness.output(), "EQ7");
-        let empty = slot(harness.output(), "no instrument");
         let palette = if light { soundcraft_ui_egui::theme::Tokens::LIGHT } else { soundcraft_ui_egui::theme::Tokens::DARK };
-        assert_eq!(insert.fill, palette.insert_on);
-        assert_eq!(empty.fill, palette.slot_bg);
+        let face = palette.slot_face;
+        assert!(near(insert.faces, face), "{name}: insert faces {:?}", insert.faces);
+        // The empty instrument track's slot sits beside the populated one, drawn as an empty cell.
+        let row = ordinary.rect.center().y;
+        let empty = harness.output().shapes.iter().any(|shape| {
+            matches!(&shape.shape, Shape::Rect(rect) if rect.fill == palette.slot_empty
+                && rect.rect.y_range().contains(row)
+                && rect.rect.min.x > ordinary.rect.max.x)
+        });
+        assert!(empty, "{name}: missing the empty instrument slot");
         assert_eq!(ordinary.text, palette.text);
-        if ordinary.fill != insert.fill || ordinary.border != insert.border {
+        if !near(ordinary.faces, insert.faces) || ordinary.border != insert.border {
             failures.push(format!("{name}: instrument {ordinary:?} differs from populated insert {insert:?}"));
         }
         for hovered in [false, true] {
@@ -126,11 +164,7 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
             if ratio < 4.5 {
                 failures.push(format!("{name} hover={hovered}: contrast {ratio:.6}:1 is below 4.5:1"));
             }
-            if !light {
-                let original = Color32::from_rgb(52, 62, 80);
-                assert_eq!(painted.fill, if hovered { original.gamma_multiply(1.3) } else { original });
-                assert_eq!(painted.border, Color32::from_rgb(16, 16, 16));
-            }
+            assert!(near(painted.faces, face), "{name} hover={hovered}: faces {:?}", painted.faces);
             if let Some(dir) = &proof_dir {
                 harness.render().unwrap().save(dir.join(format!("{name}-{}.png", if hovered { "hover" } else { "ordinary" }))).unwrap();
             }

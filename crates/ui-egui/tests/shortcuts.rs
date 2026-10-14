@@ -25,6 +25,37 @@ fn ctrl_shift_arrows_nudge_the_selected_clip_gain() {
     }
 }
 
+fn type_in_app(ctx: &egui::Context, app: &mut SoundApp, keys: &[(Key, Modifiers)]) {
+    let events = keys
+        .iter()
+        .flat_map(|&(key, modifiers)| [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }))
+        .collect();
+    ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+        app.logic(ui.ctx());
+        app.ui(ui);
+    })
+    .textures_delta
+    .clear();
+}
+
+#[test]
+fn tab_leaves_the_keys_to_the_shortcuts() {
+    let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    let ctx = egui::Context::default();
+    for _ in 0..3 {
+        type_in_app(&ctx, &mut app, &[]);
+    }
+    for tab in [Modifiers::NONE, Modifiers::SHIFT] {
+        type_in_app(&ctx, &mut app, &[(Key::Tab, tab)]);
+        assert_eq!(ctx.memory(|m| m.focused()), None, "{tab:?}");
+        let zoom = app.engine.session().edit.zoom.samples_per_px;
+        type_in_app(&ctx, &mut app, &[(Key::T, Modifiers::NONE)]);
+        assert_eq!(app.engine.session().edit.zoom.samples_per_px, zoom / 2.0, "{tab:?}");
+        type_in_app(&ctx, &mut app, &[(Key::R, Modifiers::NONE)]);
+        assert_eq!(app.engine.session().edit.zoom.samples_per_px, zoom, "{tab:?}");
+    }
+}
+
 #[test]
 fn cmd_equals_toggles_mix_and_edit_without_zooming() {
     let mac_cmd = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };

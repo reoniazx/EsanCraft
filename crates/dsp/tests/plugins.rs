@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::f32::consts::TAU;
 
-use soundcraft_dsp::{Plugin, Unit, create, db_to_gain, gain_to_db, plugin_info, plugins};
+use soundcraft_dsp::{Plugin, Unit, create, db_to_gain, gain_to_db, is_generator, plugin_info, plugins};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 512;
@@ -45,7 +45,7 @@ fn prepared(id: &str) -> Box<dyn Plugin> {
 }
 
 fn is_source(id: &str) -> bool {
-    plugin_info(id).unwrap().is_instrument || id == "signal_generator"
+    plugin_info(id).unwrap().is_instrument || is_generator(id)
 }
 
 #[test]
@@ -200,6 +200,44 @@ fn eq_magnitude_at_center_matches_gain() {
 }
 
 #[test]
+fn eq_switches_and_choices_apply_to_a_running_eq() {
+    // (plugin, settings, the one switch or choice changed while running, test tone)
+    let cases: [(&str, &[(&str, f32)], (&str, f32), f32); 7] = [
+        ("eq_7band", &[("hpf_freq", 2000.0), ("hpf_slope", 3.0)], ("hpf_on", 1.0), 1000.0),
+        ("eq_7band", &[("hpf_freq", 2000.0), ("hpf_slope", 3.0), ("hpf_on", 1.0)], ("hpf_on", 0.0), 1000.0),
+        ("eq_7band", &[("hpf_freq", 2000.0), ("hpf_slope", 0.0), ("hpf_on", 1.0)], ("hpf_slope", 3.0), 1000.0),
+        ("eq_7band", &[("lpf_freq", 2000.0), ("lpf_slope", 3.0)], ("lpf_on", 1.0), 4000.0),
+        ("eq_7band", &[("lpf_freq", 2000.0), ("lpf_slope", 0.0), ("lpf_on", 1.0)], ("lpf_slope", 3.0), 4000.0),
+        ("eq_1band", &[("freq", 1000.0)], ("type", 4.0), 10_000.0),
+        ("channel_strip", &[("hpf_freq", 2000.0)], ("hpf_on", 1.0), 1000.0),
+    ];
+    let mut stale = Vec::new();
+    for (id, setup, (key, value), tone) in cases {
+        let x = [sine(tone, 0.5, 24_000)];
+        let level = |p: &mut dyn Plugin| gain_to_db(rms(&run(p, &x)[0][12_000..]));
+        let build = |settings: &[(&str, f32)]| {
+            let mut p = create(id).unwrap();
+            p.prepare(SR, BLOCK, 1);
+            for &(k, v) in settings {
+                assert!(p.set_param(k, v), "{id} {k}");
+            }
+            p.reset();
+            p
+        };
+        let mut live = build(setup);
+        let before = level(live.as_mut());
+        assert!(live.set_param(key, value));
+        let after = level(live.as_mut());
+        let want = level(build(&[setup, &[(key, value)]].concat()).as_mut());
+        assert!((before - want).abs() > 3.0, "{id} {key}={value}: the tone must tell the settings apart");
+        if (after - want).abs() >= 0.1 {
+            stale.push(format!("{id} {key}={value}: live {after:.2} dB, fresh {want:.2} dB, before {before:.2} dB"));
+        }
+    }
+    assert!(stale.is_empty(), "{stale:#?}");
+}
+
+#[test]
 fn compressor_steady_state_gain_reduction() {
     let mut p = prepared("compressor");
     p.set_param("threshold", -20.0);
@@ -330,6 +368,23 @@ fn delay_repeats_at_time() {
 }
 
 #[test]
+fn modulation_tail_covers_feedback_echoes() {
+    for (id, delay, feedback) in [("chorus", 30.0, 90.0), ("flanger", 10.0, 95.0), ("flanger", 10.0, -95.0)] {
+        let mut p = prepared(id);
+        for (param, v) in [("delay", delay), ("feedback", feedback), ("depth", 0.0), ("mix", 100.0)] {
+            assert!(p.set_param(param, v));
+        }
+        p.reset();
+        let mut x = vec![0.0f32; 48_000 * 5];
+        x[0] = 0.5;
+        let out = run(p.as_mut(), &[x]);
+        let floor = peak(&out[0]) * 1e-3;
+        let last = out[0].iter().rposition(|v| v.abs() > floor).unwrap();
+        assert!(last < p.tail_samples(), "{id} feedback {feedback}: echo at {last}, tail {}", p.tail_samples());
+    }
+}
+
+#[test]
 fn trim_and_invert() {
     let mut p = prepared("invert");
     let out = run(p.as_mut(), &[vec![0.5; 16]]);
@@ -392,6 +447,34 @@ fn synth_note_on_sounds_and_note_off_decays() {
     p.all_notes_off();
     let out = run(p.as_mut(), &vec![vec![0.0; 96_000]; 2]);
     assert!(peak(&out[0][72_000..]) < 1e-6);
+}
+
+#[test]
+fn synth_follows_the_sustain_pedal_and_pitch_bend() {
+    let mut p = prepared("subtractive_synth");
+    p.midi(0, [0xB0, 64, 127]);
+    p.note_on(0, 60, 100);
+    run(p.as_mut(), &vec![vec![0.0; 4800]; 2]);
+    p.note_off(0, 60);
+    let out = run(p.as_mut(), &vec![vec![0.0; 96_000]; 2]);
+    assert!(rms(&out[0][72_000..]) > 0.01, "the pedal holds the note");
+    p.midi(0, [0xB0, 64, 0]);
+    let out = run(p.as_mut(), &vec![vec![0.0; 96_000]; 2]);
+    assert!(peak(&out[0][72_000..]) < 1e-6, "lifting the pedal releases it");
+
+    let rises = |x: &[f32]| x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64;
+    let mut p = prepared("subtractive_synth");
+    p.set_param("osc1_wave", 2.0);
+    p.set_param("osc_mix", 0.0);
+    p.note_on(0, 69, 100);
+    let plain = run(p.as_mut(), &[vec![0.0; 48_000]]);
+    p.midi(0, [0xE0, 0x7F, 0x7F]);
+    let bent = run(p.as_mut(), &[vec![0.0; 48_000]]);
+    let ratio = rises(&bent[0][4800..]) / rises(&plain[0][4800..]);
+    assert!((ratio - 2f64.powf(2.0 / 12.0)).abs() < 0.01, "{ratio}");
+    p.midi(0, [0xB0, 121, 0]);
+    let reset = run(p.as_mut(), &[vec![0.0; 48_000]]);
+    assert!((rises(&reset[0][4800..]) / rises(&plain[0][4800..]) - 1.0).abs() < 0.01);
 }
 
 #[test]

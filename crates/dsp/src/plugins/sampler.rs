@@ -299,6 +299,7 @@ impl Sampler {
                     v.env.gate_off();
                 }
             }
+            EventKind::Sustain(_) | EventKind::Bend(_) | EventKind::ResetControllers => {}
         }
     }
 

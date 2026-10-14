@@ -109,7 +109,7 @@ impl FrameRate {
             return 0;
         }
         let v = (i128::from(f) * i128::from(sr.hz()) * i128::from(d) + i128::from(n) / 2) / i128::from(n);
-        i64::try_from(v).unwrap_or(0)
+        i64::try_from(v).unwrap_or(if v < 0 { i64::MIN } else { i64::MAX })
     }
 
     /// Samples per frame (fractional).
@@ -153,13 +153,14 @@ impl Timecode {
     /// Absolute frame count of this label.
     pub fn to_frames(&self, rate: FrameRate) -> i64 {
         let base = rate.nominal().max(1);
-        let total_min = self.hours * 60 + self.minutes;
-        let mut f = (total_min * 60 + self.seconds) * base + self.frames;
+        let total_min = i128::from(self.hours) * 60 + i128::from(self.minutes);
+        let mut f = (total_min * 60 + i128::from(self.seconds)) * i128::from(base) + i128::from(self.frames);
         if rate.is_drop() {
             let drop = if base >= 60 { 4 } else { 2 };
             f -= drop * (total_min - total_min / 10);
         }
-        if self.negative { -f } else { f }
+        let f = if self.negative { -f } else { f };
+        i64::try_from(f).unwrap_or(if f < 0 { i64::MIN } else { i64::MAX })
     }
 
     pub fn from_samples(s: Samples, rate: FrameRate, sr: SampleRate) -> Timecode {
@@ -202,9 +203,9 @@ impl Timecode {
     }
 }
 
-/// Feet+Frames for 35 mm film (16 frames per foot).
-pub fn feet_frames(s: Samples, rate: FrameRate, sr: SampleRate) -> (i64, i64) {
-    let f = rate.frames_at(s, sr);
+/// Feet+Frames for 35 mm film (16 frames per foot), `start` frames in at sample 0.
+pub fn feet_frames(s: Samples, rate: FrameRate, sr: SampleRate, start: i64) -> (i64, i64) {
+    let f = rate.frames_at(s, sr).saturating_add(start);
     (f.div_euclid(16), f.rem_euclid(16))
 }
 
@@ -234,6 +235,19 @@ mod tests {
     }
 
     #[test]
+    fn huge_timecode_saturates_instead_of_overflowing() {
+        let sr = SampleRate::HZ_48000;
+        for r in [FrameRate::Fps30, FrameRate::Fps29_97Drop] {
+            let tc = Timecode::parse("9223372036854775807:00:00:00").unwrap();
+            assert_eq!(tc.to_samples(r, sr), i64::MAX);
+            let tc = Timecode::parse("-9223372036854775807:00:00:00").unwrap();
+            assert_eq!(tc.to_samples(r, sr), i64::MIN);
+        }
+        let tc = Timecode::parse("01:02:03:04").unwrap();
+        assert_eq!(tc.to_samples(FrameRate::Fps30, sr), 178_710_400);
+    }
+
+    #[test]
     fn parse_variants() {
         let tc = Timecode::parse("01:02:03:04").unwrap();
         assert_eq!((tc.hours, tc.minutes, tc.seconds, tc.frames), (1, 2, 3, 4));
@@ -246,6 +260,6 @@ mod tests {
     #[test]
     fn feet_and_frames() {
         let sr = SampleRate::HZ_48000;
-        assert_eq!(feet_frames(48_000, FrameRate::Fps24, sr), (1, 8));
+        assert_eq!(feet_frames(48_000, FrameRate::Fps24, sr, 0), (1, 8));
     }
 }

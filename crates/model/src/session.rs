@@ -1,5 +1,6 @@
 //! The session: the whole document.
 
+use crate::clip::{bound, bound_sequence};
 use crate::{
     Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, MarkerId, MarkerKind, MemoryLocation, OutputPath, Source, SourceId, SourcePool,
     TRACK_COLORS, Track, TrackId, TrackKind, VideoSource,
@@ -8,6 +9,9 @@ use soundcraft_time::{FrameRate, GridValue, Range, SampleRate, Samples, TempoMap
 
 /// Native session file extension.
 pub const SESSION_EXTENSION: &str = "scraft";
+
+/// `EditState::values` key holding the feet+frames reading of sample 0, in frames.
+pub const FEET_FRAMES_START: &str = "feet_frames.start";
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SessionError {
@@ -148,6 +152,14 @@ impl Default for ZoomState {
     }
 }
 
+/// The view Zoom Toggle goes back to.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ZoomToggle {
+    pub samples_per_px: f64,
+    pub scroll: Samples,
+    pub heights: Vec<(TrackId, crate::TrackHeight)>,
+}
+
 /// Edit-window state saved with the session (selection, tools, modes, view settings).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EditState {
@@ -172,6 +184,8 @@ pub struct EditState {
     pub main_counter: TimeFormat,
     pub sub_counter: Option<TimeFormat>,
     pub zoom: ZoomState,
+    /// Set while Zoom Toggle is on.
+    pub zoom_toggle: Option<ZoomToggle>,
     /// Visible rulers.
     pub rulers: Vec<String>,
     pub link_timeline_edit: bool,
@@ -245,6 +259,7 @@ impl Default for EditState {
             main_counter: TimeFormat::MinSecs,
             sub_counter: Some(TimeFormat::Samples),
             zoom: ZoomState::default(),
+            zoom_toggle: None,
             rulers: vec!["bars_beats".into(), "min_secs".into(), "tempo".into(), "meter".into(), "markers".into()],
             link_timeline_edit: true,
             link_track_edit: false,
@@ -421,6 +436,21 @@ impl Session {
         self.tracks.iter().filter_map(|t| t.playlist().map(|p| p.end())).max().unwrap_or(0)
     }
 
+    /// Feet+frames reading of sample 0, in frames (Setup › Current Feet+Frames Position).
+    pub fn feet_frames_start(&self) -> i64 {
+        self.edit.value(FEET_FRAMES_START, 0.0) as i64
+    }
+
+    /// Format a position against this session's timecode and feet+frames references.
+    pub fn format_position(&self, at: Samples, fmt: TimeFormat) -> String {
+        soundcraft_time::format_position(at, fmt, self.sample_rate, &self.tempo, self.frame_rate, self.timecode_start, self.feet_frames_start())
+    }
+
+    /// Parse a position typed in `fmt` against this session's references.
+    pub fn parse_position(&self, text: &str, fmt: TimeFormat) -> Result<Samples, soundcraft_time::TimeError> {
+        soundcraft_time::parse_position(text, fmt, self.sample_rate, &self.tempo, self.frame_rate, self.timecode_start, self.feet_frames_start())
+    }
+
     pub fn next_track_color(&self) -> [u8; 3] {
         let n = self.tracks.iter().filter(|t| t.kind != TrackKind::Master).count();
         TRACK_COLORS.get(n % TRACK_COLORS.len()).copied().unwrap_or([128, 128, 128])
@@ -432,14 +462,15 @@ impl Session {
         if !base.is_empty() && !taken(base) && !matches!(base, "Audio" | "Aux" | "MIDI" | "Inst" | "VCA" | "Folder" | "Master") {
             return base.to_string();
         }
-        let mut i = 1;
-        loop {
-            let cand = format!("{base} {i}");
-            if !taken(&cand) {
-                return cand;
-            }
-            i += 1;
-        }
+        let prefix = format!("{base} ");
+        let used: std::collections::HashSet<u64> = self
+            .tracks
+            .iter()
+            .filter_map(|t| t.name.strip_prefix(&prefix))
+            .filter_map(|n| n.parse().ok().filter(|i: &u64| i.to_string() == n))
+            .collect();
+        let i = (1..).find(|i| !used.contains(i)).unwrap_or(1);
+        format!("{base} {i}")
     }
 
     /// Add a track with defaults; returns its id.
@@ -528,8 +559,12 @@ impl Session {
             .max()
             .unwrap_or(0);
         self.next_id = self.next_id.max(max_id.saturating_add(1));
+        truncate_chars(&mut self.name, MAX_NAME_CHARS);
+        truncate_chars(&mut self.comments, MAX_COMMENT_CHARS);
         for t in &mut self.tracks {
             t.mixer.sanitize();
+            truncate_chars(&mut t.name, MAX_NAME_CHARS);
+            truncate_chars(&mut t.comments, MAX_COMMENT_CHARS);
             if t.playlists.is_empty() {
                 t.playlists.push(crate::Playlist::new(t.name.clone()));
             }
@@ -537,25 +572,41 @@ impl Session {
                 t.active_playlist = 0;
             }
             for p in &mut t.playlists {
+                truncate_chars(&mut p.name, MAX_NAME_CHARS);
                 p.clips.retain(|c| c.length > 0);
-                for c in &mut p.clips {
-                    c.fade_in.len = c.fade_in.len.clamp(0, c.length);
-                    c.fade_out.len = c.fade_out.len.clamp(0, c.length);
-                    c.fade_in.sanitize();
-                    c.fade_out.sanitize();
-                    if !c.gain_db.is_finite() {
-                        c.gain_db = 0.0;
-                    }
-                    if !c.stretch.is_finite() || c.stretch <= 0.0 {
-                        c.stretch = 1.0;
-                    }
-                }
+                p.clips.iter_mut().for_each(Clip::sanitize);
                 p.sort();
             }
             for l in &mut t.automation {
                 l.points.retain(|p| p.value.is_finite());
+                l.points.iter_mut().for_each(|p| bound(&mut p.at));
                 l.points.sort_by_key(|p| p.at);
             }
+        }
+        for m in &mut self.markers {
+            bound(&mut m.start);
+            bound(&mut m.end);
+            truncate_chars(&mut m.name, MAX_NAME_CHARS);
+            truncate_chars(&mut m.comments, MAX_COMMENT_CHARS);
+        }
+        for (at, key) in &mut self.key_signatures {
+            bound(at);
+            truncate_chars(key, MAX_NAME_CHARS);
+        }
+        self.midi_originals.values_mut().for_each(bound_sequence);
+        let e = &mut self.edit;
+        for at in [
+            &mut e.selection.start,
+            &mut e.selection.end,
+            &mut e.timeline_selection.start,
+            &mut e.timeline_selection.end,
+            &mut e.playhead,
+            &mut e.pre_roll,
+            &mut e.post_roll,
+            &mut e.zoom.scroll,
+            &mut self.timecode_start,
+        ] {
+            bound(at);
         }
         for v in &mut self.videos {
             if !v.frame_rate.is_finite() || v.frame_rate < 0.0 {
@@ -564,7 +615,12 @@ impl Session {
             if !v.duration.is_finite() || v.duration < 0.0 {
                 v.duration = 0.0;
             }
+            truncate_chars(&mut v.name, MAX_NAME_CHARS);
         }
+        self.busses.iter_mut().for_each(|b| truncate_chars(&mut b.name, MAX_NAME_CHARS));
+        self.outputs.iter_mut().for_each(|o| truncate_chars(&mut o.name, MAX_NAME_CHARS));
+        self.groups.iter_mut().for_each(|g| truncate_chars(&mut g.name, MAX_NAME_CHARS));
+        self.sources.iter_mut().for_each(|s| truncate_chars(&mut s.name, MAX_NAME_CHARS));
         // Drop performances whose clip no longer exists anywhere (any playlist).
         let clip_ids: std::collections::BTreeSet<u64> =
             self.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(|p| p.clips.iter().map(|c| c.id.0))).collect();
@@ -572,6 +628,23 @@ impl Session {
         if !self.edit.zoom.samples_per_px.is_finite() || self.edit.zoom.samples_per_px <= 0.0 {
             self.edit.zoom.samples_per_px = 1024.0;
         }
+        if SampleRate::new(self.sample_rate.hz()).is_err() {
+            self.sample_rate = SampleRate::default();
+        }
+        self.tempo.sanitize();
+    }
+}
+
+/// The most characters kept of a name read from a file: longer ones can't be shown, and drawing
+/// a name of a million characters overflows the renderer's buffers.
+pub const MAX_NAME_CHARS: usize = 256;
+/// The most characters kept of a comment read from a file.
+pub const MAX_COMMENT_CHARS: usize = 4096;
+
+/// Cut `s` to at most `max` characters.
+pub fn truncate_chars(s: &mut String, max: usize) {
+    if let Some((end, _)) = s.char_indices().nth(max) {
+        s.truncate(end);
     }
 }
 
@@ -641,6 +714,39 @@ mod tests {
         let mut c = c.clone();
         c.trim_start_to(100);
         assert_eq!(c.source_offset(), 580);
+    }
+
+    #[test]
+    fn unique_track_names_take_the_first_free_number() {
+        let mut s = Session::default();
+        for name in ["Piano", "Piano 1", "Piano 3", "Piano 02", "Pianos 2"] {
+            s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(name));
+        }
+        assert_eq!(s.unique_track_name("Piano"), "Piano 2");
+        assert_eq!(s.unique_track_name("Organ"), "Organ");
+        assert_eq!(s.unique_track_name("Audio"), "Audio 1");
+    }
+
+    #[test]
+    fn names_from_a_file_are_cut_to_a_length_that_can_be_drawn() {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        if let Some(tr) = s.track_mut(t) {
+            tr.name = "é".repeat(1_000);
+        }
+        s.comments = "c".repeat(10_000);
+        let back = Session::from_json(&s.to_json().unwrap()).unwrap();
+        assert_eq!(back.track(t).map(|tr| tr.name.chars().count()), Some(MAX_NAME_CHARS));
+        assert_eq!(back.comments.len(), MAX_COMMENT_CHARS);
+    }
+
+    #[test]
+    fn a_bad_sample_rate_or_tempo_is_repaired_on_load() {
+        let mut v = serde_json::to_value(Session::default()).unwrap();
+        v["sample_rate"] = serde_json::json!(0);
+        v["tempo"]["tempos"] = serde_json::json!([{"tick": 0, "bpm": 4e9}]);
+        let s = Session::from_json(&v.to_string()).unwrap();
+        assert_eq!((s.sample_rate, s.tempo), (SampleRate::HZ_48000, TempoMap::default()));
     }
 
     #[test]

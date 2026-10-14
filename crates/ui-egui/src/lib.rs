@@ -4,6 +4,7 @@
 //! executing commands. It can be replaced without touching anything below it.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bounce;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
@@ -21,19 +22,25 @@ pub mod native_host;
 pub mod ops_windows;
 pub mod palette;
 pub mod panels;
+mod recent;
+pub mod recovery;
+pub mod sampler_window;
 pub mod score_editor;
 pub mod shortcuts;
+pub mod spot;
 pub mod theme;
 pub mod toolbar;
 pub mod video_track;
 pub mod video_window;
+pub mod waveform;
 pub mod widgets;
 pub mod windows;
 
 use serde_json::{Value, json};
 use soundcraft_engine::{Engine, TransportRequest};
 use soundcraft_model::TrackId;
-use soundcraft_playback::Player;
+use soundcraft_playback::record::Trouble;
+use soundcraft_playback::{OutputTrouble, Player};
 use soundcraft_time::{Range, Samples};
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -67,6 +74,8 @@ impl MainWindow {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct UiState {
+    /// File › Open Recent, newest first (see `recent`).
+    pub recent_sessions: Vec<String>,
     pub docking: docking::Workspace,
     #[serde(default = "docking::mix_default")]
     pub mix_docking: docking::Workspace,
@@ -89,8 +98,13 @@ pub struct UiState {
     pub mix_views: Vec<String>,
     /// Edit window track-header columns: io, inserts_ae, sends_ae, comments, color.
     pub edit_views: Vec<String>,
+    /// How strongly Edit window tracks take on their colour, 0..1 (0: only the colour strip).
+    pub track_tint: f32,
     /// Open plugin windows (track, slot).
     pub plugin_windows: Vec<(TrackId, usize)>,
+    /// The send in the Send window (track, slot).
+    #[serde(skip)]
+    pub send_window: Option<(TrackId, usize)>,
     pub audiosuite: Option<String>,
     pub status: String,
     pub show_automation: bool,
@@ -104,6 +118,11 @@ pub struct UiState {
     pub show_workspace: bool,
     pub show_configurations: bool,
     pub show_playback_engine: bool,
+    /// The audio device choice (Setup › Playback Engine), kept with the preferences: per machine.
+    pub audio: soundcraft_playback::AudioConfig,
+    /// The Mix window lives in its own native window (Window › Mix in Separate Window); the main
+    /// window then always shows Edit.
+    pub mix_separate: bool,
     pub show_io_setup: bool,
     pub show_shortcuts: bool,
     pub show_clip_effects: bool,
@@ -132,6 +151,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
+            recent_sessions: Vec::new(),
             docking: docking::Workspace::default(),
             mix_docking: docking::mix_default(),
             window: MainWindow::Edit,
@@ -150,7 +170,9 @@ impl Default for UiState {
             narrow_mix: false,
             mix_views: vec!["inserts_ae".into(), "sends_ae".into(), "io".into(), "color".into()],
             edit_views: vec!["color".into()],
+            track_tint: 0.5,
             plugin_windows: Vec::new(),
+            send_window: None,
             audiosuite: None,
             status: String::new(),
             show_automation: false,
@@ -164,6 +186,8 @@ impl Default for UiState {
             show_workspace: false,
             show_configurations: false,
             show_playback_engine: false,
+            audio: soundcraft_playback::AudioConfig::default(),
+            mix_separate: false,
             show_io_setup: false,
             show_shortcuts: false,
             show_clip_effects: false,
@@ -221,6 +245,8 @@ pub struct MeterDisplay {
     pub hold_age: f32,
     pub clip: bool,
     pub gr: f32,
+    /// [`soundcraft_mix::PluginFailures::count`] as last seen.
+    pub plugin_failures: u32,
 }
 
 /// An in-progress mouse gesture in the Edit window.
@@ -236,11 +262,18 @@ pub enum Gesture {
     Fader { track: TrackId, start_db: f32 },
     ClipGain { clip: soundcraft_model::ClipId, track: TrackId, pos: f32, anchor: (f32, f32), fine: bool, fader_bottom: egui::Pos2 },
     Pencil { track: TrackId, points: Vec<(Samples, f32)> },
+    MidiClip { track: TrackId, from: Samples, to: Samples },
     ZoomBox { start: f32 },
 }
 
 pub struct SoundApp {
     pub engine: Engine,
+    /// The session path as of the last frame, and whether the recent list changed since the host
+    /// last saved it (see `recent`).
+    recent_seen: Option<String>,
+    recent_changed: bool,
+    /// When the recent sessions were last checked for existence, which list, and the result.
+    recent_checked: Option<(f64, Vec<String>, Vec<bool>)>,
     pub player: Option<Player>,
     /// Input capture, opened on first record.
     pub recorder: Option<soundcraft_playback::record::Recorder>,
@@ -248,6 +281,10 @@ pub struct SoundApp {
     /// Punch range to trim the take to (pre/post-roll recordings).
     punch: Option<Range>,
     recorder_failed: bool,
+    /// Input this take lost to a slow disk, as last reported (ms).
+    lost_shown: u64,
+    /// Where the takes being recorded go, autosaved with the session so a crash can't lose them.
+    take_plan: Option<soundcraft_engine::io::Recording>,
     pub ui: UiState,
     pub audio_health_report: Option<Result<Value, String>>,
     pub services: Services,
@@ -255,6 +292,14 @@ pub struct SoundApp {
     pub native_menu_bar: bool,
     /// Folder for crash-recovery autosaves (native apps set it).
     pub autosave_dir: Option<std::path::PathBuf>,
+    /// Writes the open session's autosaves in the background, once there is something to write.
+    autosaver: Option<soundcraft_engine::autosave::Autosaver>,
+    /// The document revision last handed to the autosaver (0 once that autosave is stale).
+    autosaved_rev: u64,
+    /// Unsaved work that earlier runs left in the autosave folder, offered for recovery.
+    pub leftovers: Vec<soundcraft_engine::autosave::Leftover>,
+    /// The document revision last autosaved after a caught panic.
+    panic_rev: u64,
     /// Folder for user plugin presets (native apps set it).
     pub preset_dir: Option<std::path::PathBuf>,
     last_autosave: Option<std::time::Instant>,
@@ -269,7 +314,12 @@ pub struct SoundApp {
     pub ops: ops_windows::OpsState,
     pub extra: extra_windows::ExtraState,
     pub palette: palette::PaletteState,
+    /// Bring the separate Mix window to the front on the next frame.
+    pub(crate) focus_mix: bool,
     pub synthetic: Vec<egui::Event>,
+    /// Where a dropped audio file loads into a track's sampler (last frame's rects).
+    pub sample_drop_targets: Vec<(egui::Rect, TrackId)>,
+    sample_reads: Vec<sampler_window::SampleRead>,
     synthetic_grace: u32,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_shots: Vec<control::PendingShot>,
@@ -282,17 +332,26 @@ pub struct SoundApp {
     pub(crate) docking_context: Option<egui::Context>,
     /// Transport simulation when there is no player (tests, offscreen renders).
     sim: Option<(Samples, Option<Samples>, Option<Range>)>,
+    /// When Record last found nothing to record on, and why: the Record buttons show it for a moment.
+    record_hint: Option<(f64, &'static str)>,
     pub quit_requested: bool,
     pub main_windows: main_windows::WindowState,
     pub arrange_request: bool,
     /// Tracks whose automation was touched during this pass (Touch/Latch writing).
     touched: std::collections::HashSet<TrackId>,
+    /// The pass's last point; `i64::MIN` after a stop or a jump, so the next point erases nothing it skipped.
     last_write_at: Samples,
     pub frame_ms: f32,
     last_frame: Option<f64>,
     last_meter_poll: f64,
     /// Movies for the Video window and Video track (decoded in the background).
     pub video: video_track::VideoPool,
+    /// The Bounce Mix in progress, rendered a slice per frame.
+    pub bounce: Option<soundcraft_engine::io::Bounce>,
+    /// Test-only: owns the process-wide palette lock while this app exists, so frames painted
+    /// and colour assertions in one test can never straddle another test's palette change.
+    #[cfg(test)]
+    _palette_lock: theme::TestPaletteGuard,
 }
 
 /// Whether another automation-write pass is due: the transport moved at least
@@ -308,17 +367,26 @@ fn automation_step_due(pos: Samples, last: Samples, step: Samples) -> bool {
 impl SoundApp {
     pub fn new(engine: Engine, player: Option<Player>, services: Services) -> Self {
         SoundApp {
+            recent_seen: engine.path.clone(),
+            recent_changed: false,
+            recent_checked: None,
             engine,
             player,
             recorder: None,
             record_start: 0,
             punch: None,
             recorder_failed: false,
+            lost_shown: 0,
+            take_plan: None,
             ui: UiState::default(),
             audio_health_report: None,
             services,
             native_menu_bar: false,
             autosave_dir: None,
+            autosaver: None,
+            autosaved_rev: 0,
+            leftovers: Vec::new(),
+            panic_rev: 0,
             preset_dir: None,
             last_autosave: None,
             dialogs: dialogs::Dialogs::default(),
@@ -331,7 +399,10 @@ impl SoundApp {
             ops: ops_windows::OpsState::default(),
             extra: extra_windows::ExtraState::default(),
             palette: palette::PaletteState::default(),
+            focus_mix: false,
             synthetic: Vec::new(),
+            sample_drop_targets: Vec::new(),
+            sample_reads: Vec::new(),
             synthetic_grace: 0,
             control_rx: None,
             pending_shots: Vec::new(),
@@ -341,6 +412,7 @@ impl SoundApp {
             theme_applied: None,
             docking_context: None,
             sim: None,
+            record_hint: None,
             quit_requested: false,
             main_windows: main_windows::WindowState::default(),
             arrange_request: false,
@@ -350,6 +422,9 @@ impl SoundApp {
             last_frame: None,
             last_meter_poll: f64::NEG_INFINITY,
             video: video_track::VideoPool::default(),
+            bounce: None,
+            #[cfg(test)]
+            _palette_lock: theme::lock_test_palette(),
         }
     }
 
@@ -360,6 +435,9 @@ impl SoundApp {
 
     /// Run a command; errors go to the status line. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if matches!(id, "session.new" | "session.open" | "session.close" | "session.revert") && bounce::refuses_session_switch(self) {
+            return Err(self.ui.status.clone());
+        }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
@@ -367,8 +445,12 @@ impl SoundApp {
             // Third-party plugins keep state the session can't see: store it first.
             self.capture_plugin_states();
         }
+        let replacing = matches!(id, "session.new" | "session.open" | "session.close" | "session.revert");
         match self.engine.execute(id, &params) {
             Ok(v) => {
+                if replacing || (id.starts_with("session.save") && !self.engine.is_dirty()) {
+                    self.release_autosave(false);
+                }
                 if id == "app.quit" {
                     self.quit_requested = true;
                 }
@@ -393,6 +475,13 @@ impl SoundApp {
         self.engine.transport.playing
     }
 
+    /// Why the last Record press did nothing, for a few seconds and while it still holds.
+    pub(crate) fn record_hint(&self) -> Option<&'static str> {
+        let (at, why) = self.record_hint?;
+        let fresh = self.last_frame.unwrap_or_default() - at < 4.0;
+        (fresh && !self.engine.session().tracks.iter().any(|t| t.mixer.record_arm)).then_some(why)
+    }
+
     /// Current transport position (playhead while playing, else the edit insertion).
     pub fn position(&self) -> Samples {
         if self.engine.transport.playing { self.engine.transport.position } else { self.engine.session().edit.selection.start }
@@ -407,6 +496,7 @@ impl SoundApp {
         }
         self.engine.transport.playing = true;
         self.engine.transport.position = from;
+        self.last_write_at = i64::MIN;
         // A fresh start resumes the playhead follow: clear a manual hold and
         // re-sync the follow tracker so the current view is not mistaken for
         // an outside move on the first frame.
@@ -459,14 +549,24 @@ impl SoundApp {
     fn start_recording(&mut self) {
         let armed = self.engine.session().tracks.iter().any(|t| t.mixer.record_arm);
         if !armed {
-            self.ui.status = "Record-enable a track first (the red button in its header).".into();
+            let why = if self.engine.session().tracks.is_empty() {
+                "Nothing to record on yet: add a track with Track › New…, then click its R button."
+            } else {
+                "No track is record-enabled: click the R button on the track to record."
+            };
+            self.ui.status = why.into();
+            self.record_hint = Some((self.last_frame.unwrap_or_default(), why));
             return;
         }
         self.ensure_input();
-        if let Err(err) = self.arm_recorder() {
-            self.ui.status = format!("Cannot record: {err}");
-            return;
-        }
+        let takes = match self.arm_recorder() {
+            Ok(takes) => takes,
+            Err(err) => {
+                self.ui.status = format!("Cannot record: {err}");
+                return;
+            }
+        };
+        self.lost_shown = 0;
         if let Some(p) = &self.player {
             p.set_recording(true);
         }
@@ -476,6 +576,7 @@ impl SoundApp {
             // Punch in on the fly at the current playhead.
             self.record_start = self.position();
             self.punch = None;
+            self.plan_recording(takes, None);
             return;
         }
         let e = self.engine.session().edit.clone();
@@ -484,6 +585,7 @@ impl SoundApp {
             self.record_start = sel.start;
             self.punch = None;
             self.start_play(sel.start, None, Some(sel));
+            self.plan_recording(takes, Some(sel.len()));
         } else {
             // Record into the selection when there is one (punch), with pre/post-roll if enabled;
             // the take is trimmed back to the punch range afterwards.
@@ -493,12 +595,23 @@ impl SoundApp {
             self.punch = (!sel.is_empty()).then_some(sel);
             let end = (!sel.is_empty()).then_some(sel.end + post);
             self.start_play(from, end, None);
+            self.plan_recording(takes, None);
+        }
+    }
+
+    /// Remember where the armed `takes` go (split into passes of `pass` when loop recording) and
+    /// autosave that plan with the session.
+    fn plan_recording(&mut self, takes: Vec<soundcraft_engine::io::Take>, pass: Option<Samples>) {
+        let rate = self.recorder.as_ref().map_or(0, |r| r.sample_rate);
+        self.take_plan = Some(soundcraft_engine::io::Recording { start: self.record_start, pass, punch: self.punch, rate, takes });
+        if let Some(root) = self.autosave_dir.clone() {
+            self.queue_autosave(root);
         }
     }
 
     /// Arm the input for the record-enabled tracks; a session never saved records into its
-    /// autosave folder.
-    fn arm_recorder(&mut self) -> Result<(), String> {
+    /// autosave folder. Returns the takes it records.
+    fn arm_recorder(&mut self) -> Result<Vec<soundcraft_engine::io::Take>, String> {
         let name = soundcraft_engine::io::sanitize_name(&self.engine.session().name);
         let unsaved_dir = self.autosave_dir.as_ref().map_or_else(std::env::temp_dir, |d| d.join(name));
         let Some(r) = &mut self.recorder else { return Err("no audio input device".into()) };
@@ -506,11 +619,16 @@ impl SoundApp {
         if plan.is_empty() {
             return Err("no audio track is record-enabled".into());
         }
-        r.arm(plan)
+        let takes = plan
+            .iter()
+            .map(|(track, inputs, path)| soundcraft_engine::io::Take { track: *track, path: path.clone(), channels: inputs.len() })
+            .collect();
+        r.arm(plan)?;
+        Ok(takes)
     }
 
-    /// Reads every live third-party plugin's state from the audio engine and stores it on its
-    /// insert (`mix.insert_state`), so saves and bounces include it.
+    /// Reads every live third-party plugin's state and stores it on its insert
+    /// (`mix.insert_state`), so saves and bounces include it.
     pub fn capture_plugin_states(&mut self) {
         let Some(p) = &self.player else { return };
         for (t, slot, data) in p.capture_states() {
@@ -544,14 +662,108 @@ impl SoundApp {
         }
         self.last_autosave = Some(std::time::Instant::now());
         self.capture_plugin_states();
-        let name = soundcraft_engine::io::sanitize_name(&self.engine.session().name);
-        let path = dir.join(&name).join(format!("{name}.scraft"));
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        self.autosave_to(&dir);
+    }
+
+    /// Autosave a modified session within a second of every change, also while recording. The
+    /// plugins' own state reaches the session every two minutes (`autosave`).
+    fn autosave_changes(&mut self) {
+        if let Some(e) = self.autosaver.as_ref().and_then(soundcraft_engine::autosave::Autosaver::failure) {
+            self.ui.status = format!("Autosave failed: {e}");
         }
-        match soundcraft_engine::io::save_copy(&self.engine, &path.to_string_lossy()) {
-            Ok(_) => log::info!("autosaved to {}", path.display()),
-            Err(e) => log::warn!("autosave failed: {e}"),
+        if self.autosave_dir.is_none() || self.engine.revision == self.autosaved_rev {
+            return;
+        }
+        self.autosaved_rev = self.engine.revision;
+        if !self.engine.is_dirty() {
+            self.release_autosave(false);
+        } else if let Some(root) = self.autosave_dir.clone() {
+            self.queue_autosave(root);
+        }
+    }
+
+    /// Hand the session to the autosaver for its folder under `root`.
+    fn queue_autosave(&mut self, root: std::path::PathBuf) {
+        self.autosaved_rev = self.engine.revision;
+        let w = self.autosaver.get_or_insert_with(|| soundcraft_engine::autosave::Autosaver::new(root));
+        w.write(self.engine.session_arc(), self.engine.path.clone(), self.take_plan.clone());
+    }
+
+    /// Write the session to its own folder under `root` and wait for it; false when that failed.
+    fn autosave_to(&mut self, root: &std::path::Path) -> bool {
+        self.queue_autosave(root.to_path_buf());
+        let Some(w) = &self.autosaver else { return false };
+        let written = w.flush();
+        if let Err(e) = &written {
+            self.ui.status = format!("Autosave failed: {e}");
+        }
+        written.is_ok()
+    }
+
+    /// Autosave now, if the app has an autosave folder.
+    fn write_autosave(&mut self) -> bool {
+        self.autosave_dir.clone().is_some_and(|root| self.autosave_to(&root))
+    }
+
+    /// Done with this session's autosave folder: keep it for the next launch, or delete it.
+    fn release_autosave(&mut self, keep: bool) {
+        if let Some(w) = &self.autosaver {
+            w.close(keep);
+        }
+    }
+
+    /// Done with the open session. Unsaved changes stay in its autosave folder for the next
+    /// launch, unless the user quit with SoundCraft's Quit; a take still recording is finished
+    /// and always stays.
+    pub fn close_autosave(&mut self) {
+        let recording = self.engine.transport.recording;
+        if recording {
+            self.stop_play();
+        }
+        let keep = self.engine.is_dirty() && (recording || !self.quit_requested);
+        if keep {
+            self.capture_plugin_states();
+            self.write_autosave();
+        }
+        self.release_autosave(keep);
+        if let Some(w) = &self.autosaver {
+            let _ = w.flush();
+        }
+    }
+
+    /// Run part of a frame. If it panics, the session is autosaved (once per change) and the app
+    /// carries on instead of quitting.
+    pub fn guarded(&mut self, f: impl FnOnce(&mut SoundApp)) {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))).is_ok() || self.panic_rev == self.engine.revision {
+            return;
+        }
+        self.panic_rev = self.engine.revision;
+        let saved = self.engine.is_dirty() && self.write_autosave();
+        self.ui.status = if saved {
+            "SoundCraft hit an internal error (see the log). Your changes were autosaved: save them, then restart SoundCraft.".into()
+        } else {
+            "SoundCraft hit an internal error (see the log). Restart SoundCraft to be safe.".into()
+        };
+    }
+
+    /// Replace the open session with unsaved work an earlier run left behind.
+    pub fn recover(&mut self, left: &soundcraft_engine::autosave::Leftover) {
+        if self.engine.transport.recording {
+            self.ui.status = "Stop recording before recovering other work.".into();
+            return;
+        }
+        self.close_autosave();
+        match soundcraft_engine::autosave::recover(&mut self.engine, left) {
+            Ok(missing) => {
+                if self.write_autosave() {
+                    soundcraft_engine::autosave::discard(left);
+                }
+                self.ui.status = match missing.len() {
+                    0 => format!("Recovered “{}”. Save it to keep the changes.", left.name),
+                    n => format!("Recovered “{}”, but {n} audio file(s) are missing. Save it to keep the changes.", left.name),
+                };
+            }
+            Err(e) => self.ui.status = format!("Couldn't recover “{}”: {e}", left.name),
         }
     }
 
@@ -579,12 +791,37 @@ impl SoundApp {
             || (self.recorder.is_some() && self.engine.session().tracks.iter().any(|t| t.mixer.input_monitor || t.mixer.record_arm))
     }
 
+    /// Reopens the audio devices with `cfg` (Setup › Playback Engine › Apply), keeping the
+    /// transport position, and keeps it as `ui.audio`. Plugin instances and their editors are
+    /// recreated with the new player. Refused while recording, which would lose the take; `ui.audio`
+    /// then stays the configuration of the open device.
+    pub fn apply_audio_config(&mut self, cfg: soundcraft_playback::AudioConfig) -> Result<(), String> {
+        if self.engine.transport.recording {
+            return Err("stop recording before changing the audio device".into());
+        }
+        self.ui.audio = cfg;
+        let at = self.position();
+        if let Some(p) = &self.player {
+            p.stop();
+            // The old player's plugin instances go away with it; their editor windows must be
+            // closed here, on the main thread, or they would stay on screen orphaned.
+            p.close_editors();
+        }
+        // The input reopens on the next record or monitor with the new choice.
+        self.recorder = None;
+        self.recorder_failed = false;
+        let player = soundcraft_playback::Player::with_config(self.engine.session_arc(), &self.ui.audio);
+        player.locate(at);
+        self.player = Some(player);
+        Ok(())
+    }
+
     /// Open the input device once (for recording and input monitoring) and feed the player.
     fn ensure_input(&mut self) {
         if self.recorder.is_some() || self.recorder_failed || self.player.is_none() {
             return;
         }
-        match soundcraft_playback::record::Recorder::open() {
+        match soundcraft_playback::record::Recorder::open_with(&self.ui.audio) {
             Ok(r) => {
                 if let Some(p) = &self.player {
                     p.set_input(std::sync::Arc::clone(&r.monitor));
@@ -598,28 +835,100 @@ impl SoundApp {
         }
     }
 
+    /// Stop the transport, keeping a take in progress, when the audio output fails.
+    fn watch_output(&mut self) {
+        let Some(p) = &self.player else { return };
+        let Some(trouble) = p.trouble() else { return };
+        let name = p.device_name.clone();
+        let (cause, then) = match trouble {
+            OutputTrouble::Bug => (
+                "the audio engine hit an internal error (see the log)".to_string(),
+                "Use Reconnect audio device in Setup ▸ Playback Engine, or restart SoundCraft.",
+            ),
+            OutputTrouble::Gone => {
+                (format!("“{name}” was disconnected"), "Plug it back in, then use Reconnect audio device in Setup ▸ Playback Engine.")
+            }
+            OutputTrouble::Stalled => (format!("“{name}” stopped asking for audio"), "Use Reconnect audio device in Setup ▸ Playback Engine."),
+        };
+        let (recording, playing) = (self.engine.transport.recording, self.engine.transport.playing);
+        if recording || playing {
+            self.stop_play();
+        }
+        self.ui.status = if recording {
+            format!("Recording stopped: {cause}. The take is kept up to there. {then}")
+        } else if playing {
+            format!("Playback stopped: {cause}. {then}")
+        } else {
+            format!("Audio output: {cause}. {then}")
+        };
+    }
+
+    /// Stop recording, keeping the take, when the input device or the disk fails, and say as soon
+    /// as a slow disk loses input.
+    fn watch_input(&mut self) {
+        let recording = self.engine.transport.recording;
+        let Some(r) = &mut self.recorder else { return };
+        let Some(trouble) = r.trouble() else {
+            let lost = r.lost_ms();
+            if recording && lost > self.lost_shown {
+                self.lost_shown = lost;
+                self.ui.status = format!("The disk is too slow: this take has lost {lost} ms of input so far.");
+            }
+            return;
+        };
+        if recording {
+            self.stop_play();
+        }
+        let (what, then) = match trouble {
+            Trouble::Device(what) => {
+                self.recorder = None;
+                self.recorder_failed = true;
+                (what, "Reconnect it, then use Reconnect audio device in Setup ▸ Playback Engine.")
+            }
+            Trouble::Disk(what) => (what, "Check the disk, then record again."),
+        };
+        self.ui.status = if recording {
+            format!("Recording stopped: {what}. The take is kept up to there. {then}")
+        } else {
+            format!("Audio input: {what}. {then}")
+        };
+    }
+
+    /// Reopen the audio devices, keeping a take in progress.
+    pub fn reconnect_audio(&mut self) {
+        if self.is_playing() || self.engine.transport.recording {
+            self.stop_play();
+        }
+        if let Some(p) = &self.player {
+            // Its plugin editors go with it; closed here, on the main thread (see `apply_audio_config`).
+            p.close_editors();
+        }
+        self.recorder = None;
+        self.recorder_failed = false;
+        self.player = Some(Player::with_config(self.engine.session_arc(), &self.ui.audio));
+    }
+
     fn finish_recording(&mut self) {
         self.engine.transport.recording = false;
         if let Some(p) = &self.player {
             p.set_recording(false);
         }
+        let plan = self.take_plan.take();
         let Some(r) = &mut self.recorder else { return };
         let (takes, problem) = r.finish();
         let tracks = takes.len().max(1);
-        let sel = self.engine.session().edit.selection;
-        let looped = self.engine.session().edit.loop_record && !sel.is_empty();
-        let (start, pass) = if looped { (sel.start, Some(sel.len())) } else { (self.record_start, None) };
-        let ids = soundcraft_engine::io::add_recording(&mut self.engine, start, takes, pass);
-        if let Some(p) = self.punch.take() {
-            // Keep only the punch range of each new take (merged into the Record undo step).
-            let clip_ids: Vec<u64> = ids.iter().map(|c| c.0).collect();
-            let _ = self.engine.execute_merged(
-                "edit.trim_to_fill_selection",
-                &serde_json::json!({"clips": clip_ids, "start": p.start, "end": p.end}),
-                "record",
-            );
-        }
-        self.ui.status = if looped { format!("Loop-recorded {} take(s)", ids.len() / tracks) } else { format!("Recorded {} clip(s)", ids.len()) };
+        let plan = plan.unwrap_or_else(|| soundcraft_engine::io::Recording {
+            start: self.record_start,
+            pass: None,
+            punch: self.punch,
+            rate: 0,
+            takes: Vec::new(),
+        });
+        self.punch = None;
+        self.autosaved_rev = 0;
+        let ids = soundcraft_engine::io::place_recording(&mut self.engine, &plan, takes);
+        self.ui.status =
+            if plan.pass.is_some() { format!("Loop-recorded {} take(s)", ids.len() / tracks) } else { format!("Recorded {} clip(s)", ids.len()) };
         if let Some(p) = problem {
             log::warn!("recording: {p}");
             self.ui.status = format!("{} ({p})", self.ui.status);
@@ -627,23 +936,26 @@ impl SoundApp {
     }
 
     /// While playing, record volume automation from fader positions for tracks in Write mode, and
-    /// for Touch/Latch tracks whose fader is (or, for Latch, was) being moved. One undo step per pass.
+    /// for Touch/Latch tracks whose fader is (or, for Latch, was) being moved. Each point replaces the
+    /// automation since the previous one, and Stop writes a last point. A pass and whatever is
+    /// dragged during it, its fader included, are one undo step.
     fn write_automation(&mut self, ctx: &egui::Context) {
         use soundcraft_model::AutomationMode as M;
-        if !self.is_playing() {
-            if !self.touched.is_empty() {
-                self.touched.clear();
-                self.engine.end_merge();
-            }
+        const PASS: &str = "automation_pass";
+        let playing = self.is_playing();
+        let may_write =
+            playing && self.engine.session().tracks.iter().any(|t| matches!(t.mixer.automation_mode, M::Write | M::Touch | M::Latch | M::TouchLatch));
+        self.engine.hold_merge(may_write.then_some(PASS));
+        if !playing && self.touched.is_empty() {
             self.last_write_at = i64::MIN;
             return;
         }
-        let pos = self.position();
+        let pos = self.engine.transport.position;
         let step = self.engine.session().sample_rate.samples(0.02);
-        if !automation_step_due(pos, self.last_write_at, step) {
+        if playing && !automation_step_due(pos, self.last_write_at, step) {
             return;
         }
-        self.last_write_at = pos;
+        let from = std::mem::replace(&mut self.last_write_at, if playing { pos } else { i64::MIN });
         let dragging = ctx.input(|i| i.pointer.any_down());
         let fader_track = match &self.gesture {
             Some(Gesture::Fader { track, .. }) => Some(*track),
@@ -668,11 +980,15 @@ impl SoundApp {
             .collect();
         for (t, v) in writes {
             self.touched.insert(t);
-            let _ = self.engine.execute_merged(
-                "automation.set_point",
-                &serde_json::json!({"track": t.0, "param": "volume", "at": pos, "value": v}),
-                "automation_pass",
-            );
+            let mut point = serde_json::json!({"track": t.0, "param": "volume", "at": pos, "value": v});
+            if from != i64::MIN {
+                point["from"] = from.into();
+            }
+            let _ = self.engine.execute_merged("automation.set_point", &point, PASS);
+        }
+        if !playing {
+            self.touched.clear();
+            self.engine.end_merge();
         }
     }
 
@@ -742,6 +1058,7 @@ impl SoundApp {
                         if let Some(sim) = &mut self.sim {
                             sim.0 = at;
                         }
+                        self.last_write_at = i64::MIN;
                     }
                     self.engine.transport.position = at;
                 }
@@ -779,6 +1096,12 @@ impl SoundApp {
             for (id, m) in &snap.tracks {
                 let d = self.meters.entry(*id).or_default();
                 feed_meter(d, m.peak, m.gain_reduction_db, dt);
+                if m.plugin_failures.count != d.plugin_failures {
+                    d.plugin_failures = m.plugin_failures.count;
+                    if let Some(msg) = failed_plugin_status(self.engine.session(), *id, m.plugin_failures.last) {
+                        self.ui.status = msg;
+                    }
+                }
             }
             let main = snap.main.peak;
             feed_meter(&mut self.main_meter, main, 0.0, dt);
@@ -853,7 +1176,9 @@ impl SoundApp {
             }
         }
         main_windows::process_requests(self, ctx);
+        self.note_recent_session();
         self.apply_editor_edits();
+        bounce::step(self, ctx);
         if !ctx.input(|i| i.pointer.any_down()) {
             if matches!(self.gesture, Some(Gesture::Fader { .. })) {
                 self.gesture = None;
@@ -863,6 +1188,8 @@ impl SoundApp {
                 self.engine.end_merge();
             }
         }
+        self.watch_output();
+        self.watch_input();
         // Stop the old playback before sending a replacement session to the audio thread.
         self.handle_transport(dt);
         if self.engine.revision != self.last_rev {
@@ -871,6 +1198,7 @@ impl SoundApp {
                 p.update_session(self.engine.session_arc());
             }
         }
+        self.autosave_changes();
         self.write_automation(ctx);
         self.autosave();
         if self.recorder.is_none()
@@ -932,9 +1260,19 @@ impl SoundApp {
             self.arrange_request = false;
             ctx.memory_mut(|m| m.reset_areas());
         }
-        main_windows::show(self, ui);
-        // Keep upstream's paced UI refresh; hidden native roots tick logic at
-        // the existing idle rate, without running an unpaced animation loop.
+        if self.ui.mix_separate {
+            shortcuts::handle(self, &ctx);
+            self.sample_drop_targets.clear();
+            if !self.native_menu_bar {
+                menus::menu_bar(self, ui);
+            }
+            edit_window::show(self, ui);
+            mix_window::show_separate(self, &ctx);
+            self.floating_ui(&ctx);
+        } else {
+            main_windows::show(self, ui);
+        }
+        // Hidden native roots tick logic at the existing idle rate.
         if self.meters_live() {
             let hz = if self.main_windows.primary(self) == MainWindow::Mix { 60 } else { 30 };
             ctx.request_repaint_after(std::time::Duration::from_millis(1000 / hz));
@@ -951,6 +1289,7 @@ impl SoundApp {
         video_window::show(self, ctx);
         ops_windows::show(self, ctx);
         extra_windows::show(self, ctx);
+        recovery::show(self, ctx);
         score_editor::show(self, ctx);
         palette::show(self, ctx);
         dialogs::show(self, ctx);
@@ -1000,6 +1339,15 @@ fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], gr: f32, dt: f32) {
     d.gr = if gr > d.gr { gr } else { d.gr * fall };
 }
 
+/// The status line naming the plugin in `slot` (an insert index or
+/// [`soundcraft_mix::INSTRUMENT_SLOT`]), which the engine took out of the signal path.
+fn failed_plugin_status(s: &soundcraft_model::Session, track: TrackId, slot: usize) -> Option<String> {
+    let t = s.track(track)?;
+    let ins = if slot == soundcraft_mix::INSTRUMENT_SLOT { t.instrument.as_ref() } else { t.mixer.inserts.get(slot)?.as_ref() }?;
+    let name = crate::mix_window::plugin_info(&ins.plugin).map_or(ins.plugin.as_str(), |p| p.name);
+    Some(format!("{name} on {} put out invalid audio, so it is bypassed until playback stops or starts again.", t.name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Services, SoundApp, automation_step_due};
@@ -1033,6 +1381,18 @@ mod tests {
     }
 
     #[test]
+    fn the_status_names_a_plugin_the_engine_took_out() {
+        use soundcraft_model::{ChannelFormat, Insert, TrackKind};
+        let mut s = soundcraft_model::Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Vox"));
+        s.track_mut(t).unwrap().mixer.inserts[3] = Some(Insert::new("gain"));
+        let msg = super::failed_plugin_status(&s, t, 3).unwrap();
+        assert!(msg.starts_with("Gain on Vox put out invalid audio"), "{msg}");
+        assert_eq!(super::failed_plugin_status(&s, t, 0), None);
+        assert_eq!(super::failed_plugin_status(&s, t, soundcraft_mix::INSTRUMENT_SLOT), None);
+    }
+
+    #[test]
     fn new_session_cancels_play_queued_before_the_next_frame() {
         let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
         app.run("transport.play", json!({})).unwrap();
@@ -1040,6 +1400,29 @@ mod tests {
         app.handle_transport(0.25);
         assert!(!app.is_playing());
         assert_eq!(app.engine.transport.position, 0);
+    }
+
+    #[test]
+    fn record_with_nothing_armed_says_what_to_do() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, Services::default());
+        app.run("transport.record", json!({})).unwrap();
+        app.handle_transport(0.25);
+        assert!(!app.is_playing() && !app.engine.transport.recording);
+        assert!(app.record_hint().is_some_and(|why| why.contains("Track › New")), "{:?}", app.record_hint());
+
+        app.run("track.new", json!({"count": 1, "format": "mono"})).unwrap();
+        app.run("transport.record", json!({})).unwrap();
+        app.handle_transport(0.25);
+        assert!(app.record_hint().is_some_and(|why| why.contains("R button")), "{:?}", app.record_hint());
+        assert_eq!(Some(app.ui.status.as_str()), app.record_hint());
+        app.last_frame = Some(5.0);
+        assert_eq!(app.record_hint(), None, "the hint shows for a few seconds");
+
+        app.last_frame = None;
+        app.run("transport.record", json!({})).unwrap();
+        app.handle_transport(0.25);
+        app.run("mix.record_arm", json!({})).unwrap();
+        assert_eq!(app.record_hint(), None, "arming a track answers the hint");
     }
 
     #[test]
@@ -1102,6 +1485,67 @@ mod tests {
     #[test]
     fn automation_write_fires_after_loop_wrap() {
         assert!(automation_step_due(0, 1_000_000, 960));
+    }
+
+    #[test]
+    fn a_write_pass_replaces_the_automation_it_plays_over() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        let fader = app.engine.session().track_by_name("Kick").unwrap().mixer.volume_db;
+        let q = i64::from(app.engine.session().sample_rate.hz()) / 4;
+        // The old ride: a point every 10 ms for 3 s.
+        for at in (0..12 * q).step_by(usize::try_from(q / 25).unwrap()) {
+            app.run("automation.set_point", json!({"track": "Kick", "at": at, "value": -30.0})).unwrap();
+        }
+        app.run("mix.automation_mode", json!({"tracks": ["Kick"], "mode": "write"})).unwrap();
+        app.run("transport.locate", json!({"at": 0})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        // Passes a quarter second apart, sparse like a covered window's.
+        let ctx = egui::Context::default();
+        let pass = |app: &mut SoundApp| {
+            app.handle_transport(0.25);
+            app.write_automation(&ctx);
+        };
+        pass(&mut app);
+        pass(&mut app);
+        // Two jumps: the stretches they skip keep the old ride.
+        app.run("transport.locate", json!({"at": 4 * q})).unwrap();
+        pass(&mut app);
+        app.run("edit.select", json!({"tracks": ["Kick"], "start": 7 * q, "end": 11 * q})).unwrap();
+        app.run("transport.play_selection", json!({})).unwrap();
+        pass(&mut app);
+        app.handle_transport(0.25);
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        app.write_automation(&ctx);
+        let lane = app.engine.session().track_by_name("Kick").unwrap().lane(&soundcraft_model::AutoParam::Volume).unwrap();
+        let values = |from, to| lane.points.iter().filter(|p| (from..=to).contains(&p.at)).map(|p| p.value).collect::<Vec<_>>();
+        assert_eq!(values(q, 2 * q), [fader; 2]);
+        assert_eq!(lane.value_at(3 * q, 0.0), -30.0);
+        assert_eq!(lane.value_at(6 * q, 0.0), -30.0);
+        // Stop writes the last point, at 9q.
+        assert_eq!(values(8 * q, 9 * q), [fader; 2]);
+        assert_eq!(lane.value_at(10 * q, 0.0), -30.0);
+    }
+
+    #[test]
+    fn a_pass_and_the_fader_ride_driving_it_are_one_undo_step() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        let kick = app.engine.session().track_by_name("Kick").unwrap().id;
+        app.run("mix.automation_mode", json!({"tracks": ["Kick"], "mode": "write"})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        let steps = app.engine.undo_history().len();
+        let ctx = egui::Context::default();
+        for frame in 0..60 {
+            app.handle_transport(1.0 / 60.0);
+            app.write_automation(&ctx);
+            // What the Mix window's fader sends while it is dragged.
+            let db = -10.0 + frame as f32 / 10.0;
+            app.engine.execute_merged("mix.volume", &json!({"track": kick.0, "db": db}), &format!("fader:{}", kick.0)).unwrap();
+        }
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        app.write_automation(&ctx);
+        assert_eq!(app.engine.undo_history().len(), steps + 1);
     }
 
     #[test]

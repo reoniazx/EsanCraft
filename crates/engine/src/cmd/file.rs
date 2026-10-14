@@ -66,7 +66,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("file.import_midi", "MIDI...", ["File", "Import"], Some("Cmd+Alt+I"), "{path, at?}", always, |e, p| {
             let path = str_param(p, "path").ok_or_else(|| bad("file.import_midi", "`path` required"))?.to_string();
             let at = position_param(e, "file.import_midi", p, "at")?.unwrap_or(0);
-            let bytes = std::fs::read(&path).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
+            let bytes = crate::io::read_file(&path)?;
             let tracks = crate::io::import_midi_bytes(e, &bytes, at, bool_or(p, "tempo_map", true))?;
             Ok(json!({"tracks": tracks}))
         }),
@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |e, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("file.import_video", "`path` required"))?.to_string();
                 let at = position_param(e, "file.import_video", p, "at")?.unwrap_or(0).max(0);
-                let bytes = std::fs::read(&path).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
+                let bytes = crate::io::read_file(&path)?;
                 crate::io::import_video_bytes(e, &path, bytes, at)
             }
         ),
@@ -122,6 +122,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let ids = clip_ids_param(e, p);
             if ids.is_empty() {
                 return Err(bad("file.export_clips", "no clips selected"));
+            }
+            for (t, c) in ids.iter().filter_map(|id| e.session().find_clip(*id)) {
+                let channels = e.session().track(t).map_or(1, |x| x.channels());
+                crate::io::refuse_longer(e.session(), "file.export_clips", &c.name, "export", c.length, crate::io::render_limit(channels))?;
             }
             let n = crate::io::export_clips(e, &ids, &dir)?;
             Ok(json!({"written": n, "dir": dir}))
@@ -194,6 +198,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Writing a session over an existing file needs `replace: true` (see `io::replaces`).
 fn refuse_replacing(e: &Engine, id: &str, file: &std::path::Path, p: &Value) -> Result<()> {
+    // First, so a path outside the write root is refused as such and never reported as existing.
+    crate::file_access::check_write(file).map_err(EngineError::Io)?;
     if crate::io::replaces(e, id, file) && !bool_or(p, "replace", false) {
         return Err(bad(id, format!("{} already exists: pass `replace: true` to replace it", file.display())));
     }
@@ -231,7 +237,7 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let target = import_audio_target(e, p)?;
     let mut out = Vec::new();
     for path in &paths {
-        let bytes = std::fs::read(path).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
+        let bytes = crate::io::read_file(path)?;
         let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("Audio").to_string();
         let r = crate::io::import_audio_bytes(e, &name, &bytes, Some(path.as_str()), target, at)?;
         out.push(r);
@@ -275,6 +281,21 @@ fn fold_down_param(p: &Value, id: &str) -> Result<bool> {
 }
 
 fn bounce(e: &mut Engine, p: &Value) -> Result<Value> {
+    let job = bounce_job(e, p)?;
+    let (path, seconds) = (job.path().to_string_lossy().into_owned(), e.session().sample_rate.seconds(job.range().len()));
+    let done = job.run()?;
+    Ok(json!({
+        "path": path,
+        "bytes": done.bytes,
+        "seconds": seconds,
+        "peak_db": done.peak_db,
+        "lufs": done.lufs,
+        "true_peak_db": done.true_peak_db,
+    }))
+}
+
+/// The bounce `file.bounce_mix` runs for `p`, not rendered yet.
+pub fn bounce_job(e: &Engine, p: &Value) -> Result<crate::io::Bounce> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.bounce_mix", "`path` required"))?.to_string();
     let r = range_param(e, "file.bounce_mix", p)?;
     let r = if r.is_empty() { soundcraft_time::Range::new(0, e.session().content_end().max(1)) } else { r };
@@ -292,11 +313,7 @@ fn bounce(e: &mut Engine, p: &Value) -> Result<Value> {
     let normalize = bool_or(p, "normalize", false);
     let fold = fold_down_param(p, "file.bounce_mix")?;
     let bus = bounce_bus(e, p)?;
-    let (bytes, stats) = crate::io::bounce_source(e, r, &opts, normalize, fold, bus)?;
-    crate::io::write_file(&path, &bytes)?;
-    Ok(
-        json!({"path": path, "bytes": bytes.len(), "seconds": e.session().sample_rate.seconds(r.len()), "peak_db": stats.0, "lufs": stats.1, "true_peak_db": stats.2}),
-    )
+    crate::io::Bounce::new(e.session_arc(), std::path::Path::new(&path), r, &opts, bus, normalize, fold)
 }
 
 /// Write the score of the chosen MIDI tracks as MusicXML (or SVG when `svg`).

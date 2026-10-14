@@ -158,7 +158,7 @@ fn ui_customization(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.add(egui::Slider::new(&mut app.extra.ui_scale, 0.75..=1.5).step_by(0.05).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
                 ui.end_row();
                 ui.label("Reduce motion");
-                ui.checkbox(&mut app.extra.reduce_motion, "");
+                crate::widgets::checkbox(ui, &mut app.extra.reduce_motion, "");
                 ui.end_row();
                 ui.label("Theme");
                 let mut chosen = None;
@@ -174,7 +174,7 @@ fn ui_customization(app: &mut SoundApp, ctx: &egui::Context) {
                 }
                 ui.end_row();
                 ui.label("Auto-update configuration");
-                ui.checkbox(&mut app.extra.auto_update_config, "");
+                crate::widgets::checkbox(ui, &mut app.extra.auto_update_config, "");
                 ui.end_row();
             });
             if ui.button("Reset").clicked() {

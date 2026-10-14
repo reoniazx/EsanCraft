@@ -10,6 +10,10 @@ default-run = "soundcraft"
 [lints]
 workspace = true
 
+[features]
+# ASIO audio devices on Windows (see soundcraft-playback's `asio` feature).
+asio = ["soundcraft-playback/asio"]
+
 [dependencies]
 soundcraft-engine.workspace = true
 soundcraft-ui-egui.workspace = true

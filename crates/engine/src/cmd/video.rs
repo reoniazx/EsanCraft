@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 .map(|v| {
                     let clips = s.tracks.iter().flat_map(|t| t.clips()).filter(|c| c.video_source() == Some(v.id)).count();
                     json!({"id": v.id, "name": v.name, "path": v.path, "width": v.width, "height": v.height, "frame_rate": v.frame_rate,
-                        "duration": v.duration, "codec": v.codec, "clips": clips, "file_found": std::path::Path::new(&v.path).is_file()})
+                        "duration": v.duration, "codec": v.codec, "clips": clips, "file_found": crate::io::file_found(&v.path)})
                 })
                 .collect();
             Ok(json!({"videos": rows, "online": !s.edit.flag(OFFLINE_FLAG)}))

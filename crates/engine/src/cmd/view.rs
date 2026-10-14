@@ -72,8 +72,8 @@ pub fn specs() -> Vec<CommandSpec> {
             e.session_mut().edit.sub_counter = f;
             Ok(json!({"format": f}))
         }),
-        cmd!(noundo "view.grid", "Grid Value", [], None, "{value: '1/16' | '1 bar' | '1/8t' | '1/4.' | {seconds} | {frames} | {samples}, lines?: bool}", always, |e, p| {
-            let g = grid_param(p, "value").ok_or_else(|| bad("view.grid", "unknown grid value"))?;
+        cmd!(noundo "view.grid", "Grid Value", [], Some("Shift+=/-"), "{value: '1/16' | '1 bar' | '1/8t' | '1/4.' | {seconds} | {frames} | {samples}, or step: ±n values larger or smaller; lines?: bool}", always, |e, p| {
+            let g = value_or_step(p, e.session().edit.grid).ok_or_else(|| bad("view.grid", "unknown grid value"))?;
             let lines = p.get("lines").and_then(Value::as_bool);
             let s = e.session_mut();
             s.edit.grid = g;
@@ -85,8 +85,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.edit.grid_lines = p.get("value").and_then(Value::as_bool).unwrap_or(!s.edit.grid_lines);
             Ok(json!({"value": s.edit.grid_lines}))
         }),
-        cmd!(noundo "view.nudge", "Nudge Value", [], None, "{value: like grid}", always, |e, p| {
-            let g = grid_param(p, "value").ok_or_else(|| bad("view.nudge", "unknown nudge value"))?;
+        cmd!(noundo "view.nudge", "Nudge Value", [], Some("Alt+Shift+=/-"), "{value or step: like grid}", always, |e, p| {
+            let g = value_or_step(p, e.session().edit.nudge).ok_or_else(|| bad("view.nudge", "unknown nudge value"))?;
             e.session_mut().edit.nudge = g;
             Ok(json!({"nudge": g.label()}))
         }),
@@ -120,6 +120,12 @@ fn ruler(e: &mut Engine, p: &Value) -> Result<Value> {
         s.edit.rulers.sort_by_key(|x| ALL.iter().position(|a| a == x));
     }
     Ok(json!({"ruler": r, "visible": vis}))
+}
+
+/// `value`, or the value `step` places larger (or smaller, when negative) than `current`.
+fn value_or_step(p: &Value, current: GridValue) -> Option<GridValue> {
+    let Some(step) = p.get("step").and_then(Value::as_i64) else { return grid_param(p, "value") };
+    Some((0..step.unsigned_abs().min(16)).fold(current, |g, _| g.stepped(step > 0)))
 }
 
 /// Parse grid/nudge values.
@@ -213,5 +219,27 @@ mod tests {
         e.execute("view.zoom_by", &json!({"factor": 2.0})).unwrap();
         e.execute("view.scroll", &json!({"by_px": 1.0})).unwrap();
         assert_eq!(state(&e), before);
+    }
+
+    #[test]
+    fn grid_and_nudge_values_step_and_nudges_can_use_the_next_value() {
+        let mut e = Engine::default();
+        e.execute("view.grid", &json!({"value": "1/16"})).unwrap();
+        e.execute("view.grid", &json!({"step": 2})).unwrap();
+        assert_eq!(e.session().edit.grid.label(), "1/4 note");
+        e.execute("view.grid", &json!({"step": -1})).unwrap();
+        assert_eq!(e.session().edit.grid.label(), "1/8 note");
+        e.execute("view.nudge", &json!({"value": {"seconds": 0.01}})).unwrap();
+        e.execute("view.nudge", &json!({"step": i64::MIN})).unwrap();
+        assert_eq!(e.session().edit.nudge, GridValue::Seconds(0.001));
+        assert!(e.execute("view.nudge", &json!({"step": "up"})).is_err());
+        let t = e.execute("track.new", &json!({})).unwrap()["tracks"][0].clone();
+        e.execute("view.nudge", &json!({"value": "1/16"})).unwrap();
+        e.execute("edit.select", &json!({"tracks": [t], "start": 0, "end": 1000})).unwrap();
+        e.execute("edit.nudge", &json!({"direction": 1, "next": true})).unwrap();
+        assert_eq!(e.session().edit.selection.start, 12_000);
+        e.execute("edit.nudge", &json!({"direction": -1})).unwrap();
+        assert_eq!(e.session().edit.selection.start, 6_000);
+        assert_eq!(e.session().edit.nudge.label(), "1/16 note");
     }
 }

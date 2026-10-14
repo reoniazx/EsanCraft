@@ -66,6 +66,21 @@ fn loudness_full_scale_mono_and_44k() {
 }
 
 #[test]
+fn loudness_stays_bounded_at_low_sample_rates() {
+    // The K-weighting shelf corner (~1.7 kHz) sits at or above Nyquist below ~3.4 kHz; the
+    // filter must stay stable there instead of reading hundreds of LUFS (issue #240).
+    for sr in [1000.0f32, 1200.0, 1600.0, 2000.0, 3000.0, 3400.0, 8000.0, 48_000.0] {
+        let len = sr as usize;
+        let mut m = LoudnessMeter::new(sr, 1);
+        assert_eq!(m.sample_rate(), sr);
+        m.process(&[sine(100.0, 0.5, sr, len)], len);
+        for level in [m.integrated_lufs(), m.momentary_lufs(), m.short_term_lufs()] {
+            assert!(level.is_finite() && (-30.0..=0.0).contains(&level), "{sr}: {level}");
+        }
+    }
+}
+
+#[test]
 fn loudness_gating_ignores_silence() {
     let sr = 48_000.0;
     let mut x = sine(997.0, db_to_gain(-20.0), sr, 48_000 * 5);
@@ -156,6 +171,19 @@ fn pitch_shift_preserves_length_and_shifts() {
 }
 
 #[test]
+fn pitch_shift_reaches_the_ends_of_its_range() {
+    let sr = 48_000.0;
+    let x = sine(440.0, 0.5, sr, 48_000);
+    for st in [40.0f32, 48.0, -40.0, -48.0] {
+        let out = offline::pitch_shift(std::slice::from_ref(&x), st, sr);
+        assert_eq!(out[0].len(), x.len());
+        let f = dominant_hz(&out[0], sr);
+        let want = 440.0 * 2f32.powf(st / 12.0);
+        assert!((f / want - 1.0).abs() < 0.002, "{st} semitones: {f} vs {want}");
+    }
+}
+
+#[test]
 fn normalize_hits_target_peak() {
     let mut ch = vec![sine(100.0, 0.2, 48_000.0, 4800), sine(100.0, 0.05, 48_000.0, 4800)];
     offline::normalize(&mut ch, -1.0, false);
@@ -201,12 +229,32 @@ fn non_silent_ranges_finds_bursts() {
 }
 
 #[test]
+fn silence_scan_in_blocks_finds_what_one_pass_finds() {
+    let mut x = vec![0.0f32; 48_000];
+    for (i, v) in sine(500.0, 0.5, 48_000.0, 4800).into_iter().enumerate() {
+        x[10_000 + i] = v;
+        x[30_000 + i] = v;
+    }
+    let whole: Vec<(u64, u64)> =
+        offline::non_silent_ranges(std::slice::from_ref(&x), -40.0, 480, 100, 200).into_iter().map(|(a, b)| (a as u64, b as u64)).collect();
+    let mut blocks = offline::SilenceScan::new(-40.0, 480);
+    x.chunks(1000).for_each(|b| blocks.push(&[b.to_vec()]));
+    assert_eq!(blocks.finish(100, 200), whole);
+    // Skipping the silence between the bursts counts its length like scanning it.
+    let mut skipped = offline::SilenceScan::new(-40.0, 480);
+    skipped.push(&[x[..20_000].to_vec()]);
+    skipped.skip(10_000);
+    skipped.push(&[x[30_000..].to_vec()]);
+    assert_eq!(skipped.finish(100, 200), whole);
+}
+
+#[test]
 fn transients_detected_near_onsets() {
     let sr = 48_000.0;
     let mut x = vec![0.0f32; 48_000 * 2];
     let onsets = [9_600usize, 33_600, 60_000, 81_000];
     for &o in &onsets {
-        for i in 0..6000 {
+        for i in 0..15000 {
             x[o + i] += 0.8 * (-(i as f32) / 1500.0).exp() * (TAU * 180.0 * i as f32 / sr).sin();
         }
     }

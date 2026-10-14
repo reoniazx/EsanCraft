@@ -105,6 +105,9 @@ fn synth_plays_notes_at_their_offsets() {
     p.all_notes_off();
     p.process(&mut io, 64);
     assert!(io[0].iter().all(|x| x.abs() < 1e-6));
+    p.midi(20, [0xB0, 7, 64]);
+    p.process(&mut io, 64);
+    assert!(io[0][19].abs() < 1e-6 && (io[0][20] - 64.0 / 127.0).abs() < 1e-6, "controllers arrive as MIDI at their offset");
 }
 
 #[test]
@@ -146,9 +149,34 @@ fn state_saves_and_restores_into_a_new_instance() {
     // Plugins without clap.state.
     let mut s = soundcraft_clap_host::create(SYNTH).unwrap();
     assert!(s.save_state().is_none());
+    assert!(s.state_reader().is_none());
     assert!(!s.load_state(&blob));
     assert!(s.editor().is_none(), "the synth has no GUI");
     assert!(s.open_editor().is_err());
+}
+
+#[test]
+fn state_reader_reads_while_another_thread_processes() {
+    fixture_dir();
+    let mut p = soundcraft_clap_host::create(GAIN).unwrap();
+    p.prepare(48_000.0, 64, 2);
+    assert!(p.set_param("7", 1.5));
+    p.process(&mut vec![vec![0.5f32; 64]; 2], 64);
+    let mut reader = p.state_reader().expect("the gain fixture has clap.state");
+    let blob = p.save_state().unwrap();
+    let audio = std::thread::spawn(move || {
+        for _ in 0..2_000 {
+            p.process(&mut vec![vec![0.5f32; 64]; 2], 64);
+        }
+        p
+    });
+    while !audio.is_finished() {
+        assert_eq!(reader.save_state().as_ref(), Some(&blob));
+    }
+    let p = audio.join().unwrap();
+    assert_eq!(reader.save_state(), Some(blob));
+    drop(p);
+    assert_eq!(reader.save_state(), None);
 }
 
 #[test]

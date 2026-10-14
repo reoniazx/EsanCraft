@@ -226,6 +226,7 @@ fn view_commands_bound_extremes_reject_bad_input_and_fit_the_clip() {
 #[test]
 fn adding_and_selecting_notes_after_panning_uses_the_visible_tick_and_pitch() {
     let mut h = harness();
+    h.state_mut().run("edit.tool", json!({"tool": "pencil"})).unwrap();
     let p = point(&h);
     pinch(&mut h, p, 4.0);
     h.state_mut().run("ui.midi_scroll", json!({"by_px": 75, "by_y_px": 3.25})).unwrap();

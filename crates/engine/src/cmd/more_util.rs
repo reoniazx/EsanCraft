@@ -132,9 +132,10 @@ pub fn set_clip_env(c: &mut Clip, mut pts: Vec<(Samples, f32)>) {
     }
 }
 
-/// Longest audio we render in one stretch (one hour at the session rate).
+/// Longest audio we render in one stretch: one hour at the session rate, and no more than
+/// `time_stretch` makes.
 fn max_render(s: &Session) -> Samples {
-    s.sample_rate.samples(3600.0)
+    s.sample_rate.samples(3600.0).min(soundcraft_dsp::offline::MAX_OFFLINE_SAMPLES as Samples)
 }
 
 /// Render the audio a clip plays, time-stretched (pitch preserved) to `out_len` samples, into a new
@@ -142,8 +143,10 @@ fn max_render(s: &Session) -> Samples {
 pub fn render_stretched(s: &mut Session, cmd: &str, c: &Clip, out_len: Samples) -> Result<Option<SourceId>> {
     let ClipContent::Audio { source, offset } = c.content else { return Ok(None) };
     let Some(audio) = s.pool.get(source).cloned() else { return Ok(None) };
-    if out_len <= 0 || out_len > max_render(s) {
-        return Err(bad(cmd, "the target length must be between 1 sample and one hour"));
+    let max = max_render(s);
+    if out_len <= 0 || out_len > max {
+        let secs = max as f64 / s.sample_rate.as_f64();
+        return Err(bad(cmd, format!("the target length must be between 1 sample and {secs:.0} s")));
     }
     let stretch = if c.stretch.is_finite() && c.stretch > 0.0 { c.stretch } else { 1.0 };
     let src_len = ((c.length as f64) / stretch).round().max(1.0);
@@ -201,5 +204,13 @@ mod tests {
         assert!((env_db(&env, 50) + 5.0).abs() < 1e-6);
         assert_eq!(env_db(&[], 50), 0.0);
         assert_eq!(env_db(&env, 500), -10.0);
+    }
+
+    #[test]
+    fn stretches_are_no_longer_than_time_stretch_makes() {
+        let mut s = Session::default();
+        assert_eq!(max_render(&s), s.sample_rate.samples(3600.0));
+        s.sample_rate = soundcraft_time::SampleRate::new(96_000).unwrap();
+        assert_eq!(max_render(&s), soundcraft_dsp::offline::MAX_OFFLINE_SAMPLES as Samples);
     }
 }

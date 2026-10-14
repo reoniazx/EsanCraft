@@ -26,6 +26,43 @@ fn demo_json() -> Value {
     serde_json::to_value(e.session()).unwrap()
 }
 
+#[test]
+fn positions_at_the_ends_of_the_range_do_not_overflow_commands() {
+    let (max, min) = (serde_json::json!(i64::MAX), serde_json::json!(i64::MIN));
+    let kick = "/tracks/0/playlists/0/clips/0";
+    let cases = [
+        (format!("{kick}/start"), &max, "edit.duplicate"),
+        (format!("{kick}/start"), &max, "edit.insert_silence"),
+        (format!("{kick}/length"), &max, "edit.heal"),
+        (format!("{kick}/length"), &max, "edit.trim_to_file_boundaries"),
+        (format!("{kick}/content/Audio/offset"), &min, "edit.trim_to_file_boundaries"),
+        (format!("{kick}/sync_point"), &max, "clip.quantize_to_grid"),
+        (format!("{kick}/gain_env"), &serde_json::json!([[i64::MIN, 0.0]]), "edit.separate_on_grid"),
+        ("/tracks/4/automation/0/points/0/at".into(), &min, "automation.thin_all"),
+        ("/tracks/5/playlists/0/clips/0/content/Midi/sequence/notes/0/start".into(), &max, "event.extract_chords"),
+        ("/markers/0/start".into(), &max, "event.insert_time"),
+        ("/markers/1/end".into(), &min, "edit.copy"),
+        ("/edit/selection/start".into(), &min, "edit.move_selection_left"),
+    ];
+    let (demo, base) = (soundcraft_engine::demo::demo_engine(), demo_json());
+    let failed: Vec<String> = cases
+        .into_iter()
+        .filter_map(|(path, value, cmd)| {
+            let mut v = base.clone();
+            *v.pointer_mut(&path).unwrap() = value.clone();
+            let mut s = soundcraft_model::Session::from_json(&v.to_string()).unwrap();
+            s.pool = demo.session().pool.clone();
+            let mut e = soundcraft_engine::Engine::new(s);
+            if !path.starts_with("/edit") {
+                e.execute("edit.select_all", &serde_json::json!({})).unwrap();
+            }
+            let r = e.execute(cmd, &serde_json::json!({}));
+            matches!(r, Err(soundcraft_engine::EngineError::Internal(..))).then(|| format!("{path} = {value}, {cmd}: {r:?}"))
+        })
+        .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 96, .. ProptestConfig::default() })]
     #[test]

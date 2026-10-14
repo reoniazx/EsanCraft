@@ -13,7 +13,14 @@ pub(crate) enum EventKind {
     On(u8, u8),
     Off(u8),
     AllOff,
+    Sustain(bool),
+    /// Pitch bend as a frequency ratio.
+    Bend(f32),
+    ResetControllers,
 }
+
+/// Pitch bend range, semitones each way.
+const BEND_RANGE: f32 = 2.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Event {
@@ -212,6 +219,8 @@ struct Voice {
     svf: Svf,
     age: u64,
     held: bool,
+    /// Released while the sustain pedal was down.
+    sustained: bool,
 }
 
 impl Voice {
@@ -228,6 +237,7 @@ impl Voice {
             svf: Svf::default(),
             age: 0,
             held: false,
+            sustained: false,
         }
     }
 
@@ -250,6 +260,8 @@ pub struct SubtractiveSynth {
     counter: u64,
     level: Smoother,
     cutoff: Smoother,
+    sustain: bool,
+    bend: f32,
 }
 
 impl Default for SubtractiveSynth {
@@ -277,6 +289,8 @@ impl SubtractiveSynth {
             counter: 0,
             level: Smoother::new(0.5),
             cutoff: Smoother::new(2000.0),
+            sustain: false,
+            bend: 1.0,
         };
         s.update();
         s
@@ -337,15 +351,32 @@ impl SubtractiveSynth {
             v.filt.gate_on();
             v.age = counter;
             v.held = true;
+            v.sustained = false;
         }
         self.last_freq = Some(freq);
     }
 
     fn stop_note(&mut self, note: u8) {
+        let sustain = self.sustain;
         for v in self.voices.iter_mut().filter(|v| v.held && v.note == note) {
             v.held = false;
-            v.amp.gate_off();
-            v.filt.gate_off();
+            if sustain {
+                v.sustained = true;
+            } else {
+                v.amp.gate_off();
+                v.filt.gate_off();
+            }
+        }
+    }
+
+    fn set_sustain(&mut self, on: bool) {
+        self.sustain = on;
+        if !on {
+            for v in self.voices.iter_mut().filter(|v| v.sustained) {
+                v.sustained = false;
+                v.amp.gate_off();
+                v.filt.gate_off();
+            }
         }
     }
 
@@ -356,9 +387,16 @@ impl SubtractiveSynth {
             EventKind::AllOff => {
                 for v in &mut self.voices {
                     v.held = false;
+                    v.sustained = false;
                     v.amp.gate_off();
                     v.filt.gate_off();
                 }
+            }
+            EventKind::Sustain(on) => self.set_sustain(on),
+            EventKind::Bend(ratio) => self.bend = ratio,
+            EventKind::ResetControllers => {
+                self.set_sustain(false);
+                self.bend = 1.0;
             }
         }
     }
@@ -374,6 +412,7 @@ impl SubtractiveSynth {
         let env_oct = self.p.v(7) / 100.0 * 6.0;
         let cutoff = self.cutoff.next();
         let nyq = sr * 0.45;
+        let bend = self.bend;
         let mut out = 0.0;
         for v in &mut self.voices {
             if !v.active() {
@@ -386,8 +425,8 @@ impl SubtractiveSynth {
             }
             let a = v.amp.next(&self.amp_rates);
             let fe = v.filt.next(&self.filt_rates);
-            let s1 = v.osc1.next(w1, v.freq / sr);
-            let s2 = v.osc2.next(w2, v.freq * ratio2 / sr);
+            let s1 = v.osc1.next(w1, v.freq * bend / sr);
+            let s2 = v.osc2.next(w2, v.freq * bend * ratio2 / sr);
             let raw = s1 * (1.0 - mix) + s2 * mix;
             let fc = (cutoff * 2f32.powf(env_oct * fe)).clamp(20.0, nyq);
             let g = (std::f32::consts::PI * fc / sr).tan();
@@ -418,6 +457,8 @@ impl Plugin for SubtractiveSynth {
         self.last_freq = None;
         self.level.snap();
         self.cutoff.snap();
+        self.sustain = false;
+        self.bend = 1.0;
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -465,6 +506,21 @@ impl Plugin for SubtractiveSynth {
 
     fn note_off(&mut self, offset: usize, note: u8) {
         self.events.push(offset, EventKind::Off(note));
+    }
+
+    fn midi(&mut self, offset: usize, msg: [u8; 3]) {
+        let [status, d1, d2] = msg;
+        let kind = match (status & 0xF0, d1) {
+            (0xB0, 64) => EventKind::Sustain(d2 >= 64),
+            (0xB0, 120 | 123) => EventKind::AllOff,
+            (0xB0, 121) => EventKind::ResetControllers,
+            (0xE0, _) => {
+                let v = (i32::from(d2 & 0x7F) << 7 | i32::from(d1 & 0x7F)) - 8192;
+                EventKind::Bend(2f32.powf(v as f32 / 8192.0 * BEND_RANGE / 12.0))
+            }
+            _ => return,
+        };
+        self.events.push(offset, kind);
     }
 
     fn all_notes_off(&mut self) {

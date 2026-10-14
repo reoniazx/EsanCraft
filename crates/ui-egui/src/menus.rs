@@ -12,6 +12,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
     ("window.toggle_mix_edit", "Toggle Mix/Edit", "", Some("Cmd+=")),
+    ("window.mix_separate", "Mix in Separate Window", "", None),
     ("window.transport", "Transport", "Window > Transport", Some("Cmd+1")),
     ("window.big_counter", "Big Counter", "Window > Big Counter", Some("Cmd+3")),
     ("window.memory_locations", "Memory Locations", "Window > Memory Locations", Some("Cmd+5")),
@@ -29,23 +30,23 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.midi_scroll", "Scroll MIDI Editor", "", None),
     ("ui.midi_zoom_at", "Zoom MIDI Editor at Cursor", "", None),
     ("ui.midi_fit", "Fit MIDI Clip", "", None),
-    ("window.universe", "Universe", "View > Other Displays > Universe", None),
+    ("window.universe", "Universe", "View > Other Displays > Universe", Some("Alt+7")),
     ("window.video", "Video", "Window > Video", Some("Cmd+9")),
     ("window.video_universe", "Video Universe", "Window > Video Universe", None),
     ("window.automation", "Automation", "Window > Automation", Some("Cmd+4")),
     ("window.color_palette", "Color Palette", "Window > Color Palette", None),
     ("window.disk_usage", "Disk Usage", "Window > Disk Usage", None),
     ("window.system_usage", "System Usage", "Window > System Usage", None),
-    ("window.task_manager", "Task Manager", "Window > Task Manager", None),
+    ("window.task_manager", "Task Manager", "Window > Task Manager", Some("Alt+'")),
     ("window.metadata", "Metadata Inspector", "Window > Metadata Inspector", None),
-    ("window.event_list", "MIDI Event List", "Window > MIDI Event List", None),
-    ("window.midi_keyboard", "MIDI Keyboard", "Window > MIDI Keyboard", None),
-    ("window.workspace", "Workspace", "Window > New Workspace > Default", None),
+    ("window.event_list", "MIDI Event List", "Window > MIDI Event List", Some("Alt+=")),
+    ("window.midi_keyboard", "MIDI Keyboard", "Window > MIDI Keyboard", Some("Shift+K")),
+    ("window.workspace", "Workspace", "Window > New Workspace > Default", Some("Alt+I")),
     ("window.workspace_presets", "Workspace", "Window > New Workspace > Track Presets", None),
     ("window.workspace_sounds", "Workspace", "Window > New Workspace > Soundbase", None),
-    ("window.workspace_front", "Workspaces to Front", "Window > Workspaces > Bring to Front", None),
+    ("window.workspace_front", "Workspaces to Front", "Window > Workspaces > Bring to Front", Some("Alt+J")),
     ("window.workspace_close", "Close All Workspaces", "Window > Workspaces > Close All Workspaces", None),
-    ("window.configurations", "Window Configuration List", "Window > Configurations > Window Configuration List", None),
+    ("window.configurations", "Window Configuration List", "Window > Configurations > Window Configuration List", Some("Cmd+Alt+J")),
     ("window.config_new", "New Configuration", "Window > Configurations > New Configuration...", None),
     ("window.config_update", "Update Active Configuration", "Window > Configurations > Update Active Configuration", None),
     ("window.config_auto_update", "Auto-Update Active Configuration", "Window > Configurations > Auto-Update Active Configuration", None),
@@ -58,7 +59,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.midi_front", "MIDI Editors to Front", "Window > MIDI Editors > Bring to Front", None),
     ("window.midi_back", "MIDI Editors to Back", "Window > MIDI Editors > Send to Back", None),
     ("window.clip_effects", "Clip Effects", "Window > Clip Effects", None),
-    ("window.clip_effects_dock", "Clip Effects", "View > Other Displays > Lower Dock > Clip Effects", None),
+    ("window.clip_effects_dock", "Clip Effects", "View > Other Displays > Lower Dock > Clip Effects", Some("Alt+6")),
     ("window.search", "Search", "Window > Pro Tools Search", Some("Cmd+Ctrl+S")),
     ("window.score", "Score Editor", "Window > Score Editor", Some("Cmd+Ctrl+=")),
     ("window.beat_detective", "Beat Detective", "", None),
@@ -67,6 +68,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.midi_ops", "MIDI Operations", "", None),
     ("window.rtp", "MIDI Real-Time Properties", "", None),
     ("window.playback_engine", "Playback Engine", "", None),
+    ("ui.audio_device", "Audio Device", "", None),
     ("window.io_setup", "I/O Setup", "", None),
     ("window.shortcuts", "Keyboard Shortcuts", "", None),
     ("view.mix_section", "Mix Window View", "", None),
@@ -203,6 +205,12 @@ pub fn tree() -> Vec<MenuNode> {
         insert_path(&mut roots, line);
     }
     insert_path(&mut roots, "Window > Reset Panel Layout");
+    // Not in the incumbent catalog, but the only UI path to an empty MIDI clip (#282).
+    // It creates a clip rather than acting on the selected ones, so it leads the Clip menu.
+    insert_path(&mut roots, "Clip > New MIDI Clip");
+    if let Some(clip) = roots.iter_mut().find(|n| n.label == "Clip") {
+        clip.children.rotate_right(1);
+    }
     for (path, _) in MENU_WINDOWS {
         insert_path(&mut roots, path);
     }
@@ -235,10 +243,25 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     ui.menu_button(&root.label, |ui| {
                         for c in &root.children {
                             menu_node(app, ui, c, &extra);
+                            if c.path == "File > Open" {
+                                crate::recent::menu(app, ui);
+                            }
                         }
                         if root.label == "AudioSuite" {
                             ui.separator();
                             ui.label(egui::RichText::new("Processes selected clips offline").small().color(t.text_dim));
+                        }
+                        if root.label == "Window" {
+                            ui.separator();
+                            let mut separate = app.ui.mix_separate;
+                            if ui
+                                .checkbox(&mut separate, "Mix in Separate Window")
+                                .on_hover_text("Show Edit and Mix at once, e.g. one per monitor")
+                                .changed()
+                            {
+                                let _ = run_ui_command(app, "window.mix_separate", &json!({"value": separate}));
+                                ui.close();
+                            }
                         }
                     });
                 }
@@ -246,7 +269,7 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     "{}{}  —  {}",
                     app.engine.session().name,
                     if app.engine.is_dirty() { " *" } else { "" },
-                    if app.ui.window == MainWindow::Edit { "Edit" } else { "Mix" }
+                    if app.ui.window == MainWindow::Edit || app.ui.mix_separate { "Edit" } else { "Mix" }
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new(title).color(t.text_dim));
@@ -292,7 +315,7 @@ pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) 
         {
             true
         }
-        Some(i) => soundcraft_engine::find_command(i).is_some_and(|c| (c.enabled)(&app.engine).is_ok()),
+        Some(i) => soundcraft_engine::find_command(i).is_some_and(|c| (c.enabled)(&app.engine).is_ok() && !app.engine.blocked_while_recording(i)),
         None => false,
     };
     (enabled, checked_state(app, path, id))
@@ -466,21 +489,42 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if let Some(v) = crate::extra_windows::run(app, id, p) {
         return Some(Ok(v));
     }
+    if id == "ui.audio_device" {
+        return Some(crate::windows::audio_device_command(app, p));
+    }
     let toggle = |v: &mut bool| {
         *v = p.get("value").and_then(Value::as_bool).unwrap_or(!*v);
         json!({"value": *v})
     };
     let r = match id {
         "window.mix" => {
-            crate::main_windows::activate(app, MainWindow::Mix);
+            if app.ui.mix_separate {
+                app.focus_mix = true;
+            } else {
+                crate::main_windows::activate(app, MainWindow::Mix);
+            }
             json!({"window": "mix"})
+        }
+        "window.mix_separate" => {
+            let v = toggle(&mut app.ui.mix_separate);
+            if app.ui.mix_separate {
+                app.ui.both_windows = false;
+                app.ui.window = MainWindow::Edit;
+            }
+            app.focus_mix = app.ui.mix_separate;
+            v
         }
         "window.edit" => {
             crate::main_windows::activate(app, MainWindow::Edit);
             json!({"window": "edit"})
         }
         "window.toggle_mix_edit" => {
-            crate::main_windows::activate(app, app.ui.window.other());
+            if app.ui.mix_separate {
+                // Both are on screen: bring the Mix window forward instead.
+                app.focus_mix = true;
+            } else {
+                crate::main_windows::activate(app, app.ui.window.other());
+            }
             json!({"window": app.ui.window})
         }
         "window.transport" => toggle(&mut app.ui.show_transport),
@@ -496,7 +540,11 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             toggle(&mut app.ui.show_audio_health)
         }
         "window.about" => toggle(&mut app.ui.show_about),
-        "window.midi_editor" | "window.midi_front" => toggle(&mut app.ui.show_midi_editor),
+        "window.midi_editor" => toggle(&mut app.ui.show_midi_editor),
+        "window.midi_front" => {
+            app.ui.show_midi_editor = true;
+            json!({"value": true})
+        }
         "window.midi_back" => {
             app.ui.show_midi_editor = false;
             json!({})
@@ -575,6 +623,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             app.ui.show_undo_history = false;
             app.ui.show_session_info = false;
             app.ui.show_audio_health = false;
+            app.ui.show_automation = false;
             app.ui.plugin_windows.clear();
             app.ui.audiosuite = None;
             json!({})

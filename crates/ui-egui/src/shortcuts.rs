@@ -86,6 +86,8 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
             let _ = app.run(c.0, json!({}));
         }
     }
+    // Tab moves the insertion point here, so egui must not also hand focus to the first widget: that would block every shortcut.
+    ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
 }
 
 fn command_for(key: Key, mods: Modifiers, mac: bool) -> Option<&'static str> {
@@ -120,14 +122,32 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers, mac: bool) -> bool {
             let _ = app.run("markers.add", json!({}));
             true
         }
+        // Shift+=/- step the Grid value and Alt+Shift+=/- the Nudge value; macOS sends Alt+Shift+= as =, not +.
+        Key::Plus | Key::Equals | Key::Minus if m.shift && !m.command && !m.ctrl && app.ui.window == MainWindow::Edit => {
+            let step = if key == Key::Minus { -1 } else { 1 };
+            let _ = app.run(if m.alt { "view.nudge" } else { "view.grid" }, json!({"step": step}));
+            true
+        }
+        Key::F12 if plain => {
+            let _ = app.run("transport.record", json!({}));
+            true
+        }
         Key::F1 | Key::F2 | Key::F3 | Key::F4 if plain => {
-            let mode = match key {
-                Key::F1 => "shuffle",
-                Key::F2 => "slip",
-                Key::F3 => "spot",
-                _ => "grid",
+            edit_mode_key(app, key);
+            true
+        }
+        Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 if m.alt && !m.command && !m.ctrl && !m.shift => {
+            let f = match key {
+                Key::Num1 => Key::F1,
+                Key::Num2 => Key::F2,
+                Key::Num3 => Key::F3,
+                _ => Key::F4,
             };
-            let _ = app.run("edit.mode", json!({"mode": mode}));
+            edit_mode_key(app, f);
+            true
+        }
+        Key::Backtick if plain => {
+            cycle_edit_mode(app);
             true
         }
         Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 if plain => {
@@ -147,37 +167,37 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers, mac: bool) -> bool {
             let _ = app.run("edit.nudge", json!({"direction": dir}));
             true
         }
-        Key::Tab if plain || m.alt => {
-            // Tab to next clip boundary (or transient when enabled).
-            let s = app.engine.session();
-            let at = s.edit.selection.start;
-            let back = m.alt;
-            if s.edit.tab_to_transient
-                && !back
-                && let Some(t) = s.edit.selected_tracks.first().copied()
-            {
-                let r = soundcraft_time::Range::new(at + 1, s.content_end());
-                if let Some(n) = soundcraft_engine::io::transients_in(s, t, r, 0.5).into_iter().find(|x| *x > at + 64) {
-                    let _ = app.run("transport.locate", json!({"at": n}));
-                    return true;
-                }
-            }
-            let mut edges: Vec<i64> = s
-                .tracks
-                .iter()
-                .filter(|t| s.edit.selected_tracks.contains(&t.id))
-                .flat_map(|t| t.clips().iter().flat_map(|c| [c.start, c.end()]))
-                .collect();
-            edges.sort_unstable();
-            let next = if back { edges.iter().rev().find(|e| **e < at).copied() } else { edges.iter().find(|e| **e > at).copied() };
-            if let Some(n) = next {
-                let _ = app.run("transport.locate", json!({"at": n}));
-            }
+        // Alt+Tab goes back (off macOS the desktop takes Alt+Tab, so Ctrl+Tab does) and Shift extends the selection.
+        // Cmd+Alt+Tab is Tab to Transient, and the Mac's Control+Tab is Pro Tools' Go to Next Clip.
+        Key::Tab if !(m.command && (mac || m.alt)) && !(mac && m.ctrl) => {
+            let _ = app.run("edit.tab", json!({"back": m.alt || (!mac && m.ctrl), "extend": m.shift}));
             true
         }
-        Key::ArrowUp | Key::ArrowDown if m.ctrl && !m.shift => {
-            let id = if key == Key::ArrowUp { "edit.extend_selection_up" } else { "edit.extend_selection_down" };
-            let _ = app.run(id, json!({}));
+        // The registry's key families "Cmd+Alt+[ / ]", "Cmd+Alt+0-5" and "Cmd+Ctrl+1-5", which `parse` can't read.
+        Key::OpenBracket | Key::CloseBracket if mods_match(Modifiers::COMMAND | Modifiers::ALT, m, mac) => {
+            let factor = if key == Key::CloseBracket { 2.0 } else { 0.5 };
+            let _ = app.run("view.waveform_zoom", json!({"factor": factor}));
+            true
+        }
+        Key::Num0 | Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 if mods_match(Modifiers::COMMAND | Modifiers::ALT, m, mac) => {
+            let _ = app.run("clip.rating", json!({"rating": digit(key)}));
+            true
+        }
+        Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 if mods_match(Modifiers::COMMAND | Modifiers::CTRL, m, mac) => {
+            let _ = app.run("view.zoom_preset", json!({"preset": digit(key)}));
+            true
+        }
+        // Pro Tools' Control+Up/Down track height, on Ctrl off macOS too (its Start key isn't available there).
+        Key::ArrowUp | Key::ArrowDown if m.ctrl && (m.alt || !m.shift) => {
+            let s = app.engine.session();
+            let tracks = crate::edit_window::height_targets(s, m, &s.edit.selected_tracks);
+            let id = if key == Key::ArrowUp { "track.height_up" } else { "track.height_down" };
+            let _ = app.run(id, if tracks.is_empty() { json!({}) } else { json!({"tracks": tracks}) });
+            true
+        }
+        // Extend Edit Down is Control+Shift+;, which macOS sends as Control+:.
+        Key::Semicolon | Key::Colon if mac && m.ctrl && m.shift && !m.alt && !m.command => {
+            let _ = app.run("edit.extend_selection_down", json!({}));
             true
         }
         // Ctrl+Shift+Up/Down nudge clip gain off macOS too (the registry's Ctrl is the Mac Control key).
@@ -187,7 +207,15 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers, mac: bool) -> bool {
             true
         }
         // Commands Keyboard Focus: single-key editing (Edit window only).
-        k if plain && app.ui.window == MainWindow::Edit && app.engine.session().edit.keyboard_focus == "commands" && commands_focus(app, k) => true,
+        k if !m.command
+            && !m.alt
+            && !m.ctrl
+            && app.ui.window == MainWindow::Edit
+            && app.engine.session().edit.keyboard_focus == "commands"
+            && commands_focus(app, k, m.shift) =>
+        {
+            true
+        }
         Key::R | Key::T if plain => {
             // Zoom out / in on the timeline (Commands Focus style).
             let id = if key == Key::T { "view.zoom_in" } else { "view.zoom_out" };
@@ -198,19 +226,99 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers, mac: bool) -> bool {
     }
 }
 
+/// F1–F4 (and Alt+1–4) choose Shuffle, Slip, Spot and Grid; F4 in Grid switches between Absolute and
+/// Relative unless Edit/Tool Mode Keyboard Lock is on. Holding F4 with F1–F3, in either order, adds Snap to Grid.
+fn edit_mode_key(app: &mut SoundApp, pressed: Key) {
+    let ctx = app.docking_context.clone();
+    let held = |k: Key| ctx.as_ref().is_some_and(|c| c.input(|i| i.key_down(k)));
+    let (key, snap) = match [Key::F1, Key::F2, Key::F3].into_iter().find(|k| *k != pressed && held(*k)) {
+        Some(k) if pressed == Key::F4 => (k, true),
+        _ => (pressed, pressed != Key::F4 && held(Key::F4)),
+    };
+    let ed = &app.engine.session().edit;
+    let keep_grid = ed.edit_mode.is_grid() && ed.flag("options.edit_tool_mode_keyboard_lock");
+    // F4 pressed first in an F4+F1–F3 chord switched the Grid mode on its own; put that back.
+    let flipped = egui::Id::new("edit_mode_key_grid_before_f4");
+    let before =
+        (ed.edit_mode.is_grid() && !keep_grid).then(|| if ed.flag(soundcraft_engine::edit::RELATIVE_GRID) { "relative_grid" } else { "grid" });
+    let restore = match &ctx {
+        Some(c) if pressed == Key::F4 => {
+            c.data_mut(|d| d.insert_temp(flipped, before));
+            None
+        }
+        Some(c) if snap => c.data_mut(|d| d.remove_temp::<Option<&'static str>>(flipped)).flatten(),
+        _ => None,
+    };
+    let mode = match key {
+        Key::F1 => "shuffle",
+        Key::F2 => "slip",
+        Key::F3 => "spot",
+        _ if keep_grid => return,
+        _ => grid_mode(app),
+    };
+    if let Some(grid) = restore {
+        let _ = app.run("edit.mode", json!({"mode": grid}));
+    }
+    let _ = app.run("edit.mode", json!({"mode": mode, "snap_to_grid": snap}));
+}
+
+/// What choosing Grid picks: in Grid the other Grid mode, from another mode the one used last.
+pub(crate) fn grid_mode(app: &SoundApp) -> &'static str {
+    use soundcraft_model::EditMode;
+    let ed = &app.engine.session().edit;
+    match ed.edit_mode {
+        EditMode::Grid => "relative_grid",
+        EditMode::GridRelative => "grid",
+        _ if ed.flag(soundcraft_engine::edit::RELATIVE_GRID) => "relative_grid",
+        _ => "grid",
+    }
+}
+
+/// ` steps through the Edit modes in F-key order, past a locked Shuffle.
+fn cycle_edit_mode(app: &mut SoundApp) {
+    use soundcraft_model::EditMode;
+    let ed = &app.engine.session().edit;
+    let mode = match ed.edit_mode {
+        EditMode::Shuffle => "slip",
+        EditMode::Slip => "spot",
+        EditMode::Spot => grid_mode(app),
+        _ if ed.flag(soundcraft_engine::edit::SHUFFLE_LOCK) => "slip",
+        _ => "shuffle",
+    };
+    let _ = app.run("edit.mode", json!({"mode": mode}));
+}
+
 /// Single-key commands. Returns true when `key` was handled.
-fn commands_focus(app: &mut SoundApp, key: Key) -> bool {
+fn commands_focus(app: &mut SoundApp, key: Key, shift: bool) -> bool {
     let id = match key {
+        Key::Z if shift => "edit.redo",
+        Key::P if shift => "edit.extend_selection_up",
+        Key::Semicolon | Key::Colon if shift => "edit.extend_selection_down",
+        _ if shift => return false,
         Key::A => "edit.trim_start_to_insertion",
         Key::S => "edit.trim_end_to_insertion",
         Key::D => "edit.fade_to_start",
         Key::G => "edit.fade_to_end",
         Key::F => "edit.fades_create",
+        Key::Comma | Key::Period | Key::M | Key::Slash => {
+            let direction = if matches!(key, Key::Period | Key::Slash) { 1 } else { -1 };
+            let _ = app.run("edit.nudge", json!({"direction": direction, "next": matches!(key, Key::M | Key::Slash)}));
+            return true;
+        }
+        Key::Num0 => "edit.timeline_to_selection",
+        Key::O => "edit.selection_to_timeline",
+        Key::OpenBracket => "transport.play_selection",
+        Key::CloseBracket => "edit.play_timeline",
         Key::B => "edit.separate",
         Key::X => "edit.cut",
         Key::C => "edit.copy",
         Key::V => "edit.paste",
         Key::Z => "edit.undo",
+        Key::N => "options.insertion_follows_playback",
+        Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 => {
+            let _ = app.run("view.zoom_preset", json!({"preset": digit(key)}));
+            return true;
+        }
         Key::P => {
             move_selection_track(app, -1);
             return true;
@@ -221,6 +329,10 @@ fn commands_focus(app: &mut SoundApp, key: Key) -> bool {
         }
         Key::L | Key::Quote => {
             tab_clip(app, key == Key::L);
+            return true;
+        }
+        Key::E => {
+            crate::edit_window::zoom_toggle(app);
             return true;
         }
         _ => return false,
@@ -255,17 +367,25 @@ fn tab_clip(app: &mut SoundApp, back: bool) {
     }
 }
 
+fn digit(key: Key) -> u8 {
+    key.name().parse().unwrap_or(0)
+}
+
 /// Shortcut text for display. The registry stores macOS-style strings ("Cmd+N"); off macOS the Cmd
 /// modifier is the Ctrl key. Mac-only Control chords ("Cmd+Ctrl+S") have no key there, so they show nothing.
 pub fn shortcut_label(s: &str, mac: bool) -> String {
-    if mac || !s.split('+').any(|p| p == "Cmd") {
+    let has = |m: &str| s.split('+').any(|p| p == m);
+    if mac || (!has("Cmd") && !has("Ctrl")) || PC_CTRL_CHORDS.contains(&s) {
         return s.to_string();
     }
-    if s.split('+').any(|p| p == "Ctrl") {
+    if has("Ctrl") {
         return String::new();
     }
     s.split('+').map(|p| if p == "Cmd" { "Ctrl" } else { p }).collect::<Vec<_>>().join("+")
 }
+
+/// Mac Control chords that `fixed` also maps to Ctrl off macOS.
+const PC_CTRL_CHORDS: [&str; 4] = ["Ctrl+Up", "Ctrl+Down", "Ctrl+Shift+Up", "Ctrl+Shift+Down"];
 
 #[cfg(test)]
 mod label_tests {
@@ -280,6 +400,10 @@ mod label_tests {
         assert_eq!(shortcut_label("Shift+R", false), "Shift+R");
         assert_eq!(shortcut_label("Cmd+Ctrl+S", false), "");
         assert_eq!(shortcut_label("", false), "");
+        assert_eq!(shortcut_label("Ctrl+Up", false), "Ctrl+Up");
+        assert_eq!(shortcut_label("Ctrl+Shift+Down", false), "Ctrl+Shift+Down");
+        assert_eq!(shortcut_label("Ctrl+Shift+P", false), "");
+        assert_eq!(shortcut_label("Ctrl+Alt+L", false), "");
     }
 
     #[test]

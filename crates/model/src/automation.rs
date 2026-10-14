@@ -204,21 +204,28 @@ impl AutomationLane {
 
     /// Thin: remove points whose removal changes the curve by less than `tolerance`.
     pub fn thin(&mut self, tolerance: f32) -> usize {
-        if self.points.len() < 3 {
+        if self.points.len() < 3 || tolerance.is_nan() {
             return 0;
         }
+        let tolerance = f64::from(tolerance);
         let mut keep = vec![true; self.points.len()];
         let mut last = 0usize;
+        // Slopes from the last kept point that keep every point removed since then within `tolerance`.
+        let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
         for i in 1..self.points.len() - 1 {
             let (Some(a), Some(b), Some(c)) = (self.points.get(last), self.points.get(i), self.points.get(i + 1)) else { continue };
-            let span = (c.at - a.at) as f32;
-            let interp = if span > 0.0 { a.value + (c.value - a.value) * ((b.at - a.at) as f32 / span) } else { a.value };
-            if (interp - b.value).abs() <= tolerance {
+            let dt = b.at.saturating_sub(a.at) as f64;
+            let rise = f64::from(b.value) - f64::from(a.value);
+            lo = lo.max((rise - tolerance) / dt);
+            hi = hi.min((rise + tolerance) / dt);
+            let slope = (f64::from(c.value) - f64::from(a.value)) / c.at.saturating_sub(a.at) as f64;
+            if (lo..=hi).contains(&slope) {
                 if let Some(k) = keep.get_mut(i) {
                     *k = false;
                 }
             } else {
                 last = i;
+                (lo, hi) = (f64::NEG_INFINITY, f64::INFINITY);
             }
         }
         let before = self.points.len();
@@ -277,6 +284,23 @@ mod tests {
         }
         assert_eq!(l.thin(0.01), 9);
         assert_eq!(l.points.len(), 2);
+    }
+
+    #[test]
+    fn thin_keeps_removed_points_within_tolerance() {
+        for direction in [1.0, -1.0] {
+            let mut lane = AutomationLane::new(AutoParam::Volume);
+            for (at, value) in [(0, 0.0), (100, 0.0), (200, 0.0), (300, 0.12), (400, 0.26)] {
+                lane.set_point(at, value * direction);
+            }
+            let original = lane.points.clone();
+            let tolerance = 0.1;
+            assert!(lane.thin(tolerance) > 0);
+            for point in original {
+                let error = (lane.value_at(point.at, 0.0) - point.value).abs();
+                assert!(error <= tolerance, "at {}: error {error} exceeds {tolerance}", point.at);
+            }
+        }
     }
 
     #[test]

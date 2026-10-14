@@ -1,6 +1,6 @@
 //! Third-party plugin state in the session (`mix.insert_state`): the UI reads each live plugin's
-//! state from the audio engine right before saving and stores it on its insert (base64), from
-//! where the mixer restores it into new instances.
+//! state right before saving and stores it on its insert (base64), from where the mixer restores
+//! it into new instances.
 
 use super::*;
 use serde_json::json;
