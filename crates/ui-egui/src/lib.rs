@@ -1189,6 +1189,7 @@ impl SoundApp {
         if !self.ui.show_midi_editor {
             midi_playback::release_transport(self);
             self.midi.velocity_drag = None;
+            self.midi.velocity_note = None;
         }
         // A parked root may not receive another raw-input pass promptly. Apply
         // queued global focus keys now, using the same dispatch as native input.

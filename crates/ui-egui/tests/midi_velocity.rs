@@ -214,3 +214,118 @@ fn velocity_editing_uses_the_resized_lane() {
         }
     }
 }
+
+fn overlapping_stems() -> (egui::Context, SoundApp) {
+    let (ctx, mut app) = setup();
+    let cid = app.midi.clip.unwrap();
+    let count = notes(&app).len();
+    app.run("midi.note_delete", json!({"clip":cid.0, "indices": (0..count).collect::<Vec<_>>()})).unwrap();
+    for (pitch, start, velocity) in [(48, 0, 92), (52, 0, 120), (55, 480, 75)] {
+        app.run("midi.note_add", json!({"clip":cid.0, "pitch":pitch, "start_ticks":start, "velocity":velocity})).unwrap();
+    }
+    app.engine.mark_clean();
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    (ctx, app)
+}
+
+fn notes(app: &SoundApp) -> Vec<soundcraft_midi::Note> {
+    match &app.engine.session().find_clip(app.midi.clip.unwrap()).unwrap().1.content {
+        soundcraft_model::ClipContent::Midi { sequence } => sequence.notes.clone(),
+        _ => panic!("expected MIDI"),
+    }
+}
+
+fn stem_at(app: &SoundApp, index: usize, velocity: u8) -> Pos2 {
+    let note = notes(app)[index];
+    let x = app.midi.roll[0]
+        + ((note.start as f64 - app.midi.scroll_ticks) / app.midi.len_ticks * f64::from(app.midi.roll[2] - app.midi.roll[0]) * app.midi.zoom) as f32;
+    pos2(x + 1.0, app.midi.velocity[3] - 2.0 - (height(app) - 4.0) * f32::from(velocity) / 127.0)
+}
+
+fn double_click(ctx: &egui::Context, app: &mut SoundApp, pos: Pos2) {
+    frame(ctx, app, vec![Event::PointerMoved(pos)]);
+    for _ in 0..2 {
+        frame(ctx, app, vec![button(pos, true)]);
+        frame(ctx, app, vec![button(pos, false)]);
+    }
+}
+
+#[test]
+fn double_click_resets_the_overlapping_stem_under_the_pointer_and_undo_restores_it() {
+    for requested in [24.0, 160.0] {
+        let (ctx, mut app) = overlapping_stems();
+        if requested == 160.0 {
+            app.run("ui.dock", json!({"operation":"float", "panel":"midi", "rect":[120,160,900,560]})).unwrap();
+        }
+        app.run("ui.midi_velocity_height", json!({"height":requested})).unwrap();
+        for _ in 0..4 {
+            frame(&ctx, &mut app, vec![]);
+        }
+        let before = app.engine.session().clone();
+        let undo = app.engine.undo_history().len();
+        let pos = stem_at(&app, 1, 120);
+        double_click(&ctx, &mut app, pos);
+        let mut expected = before.clone();
+        match &mut expected.find_clip_mut(app.midi.clip.unwrap()).unwrap().content {
+            soundcraft_model::ClipContent::Midi { sequence } => sequence.notes[1].velocity = 100,
+            _ => panic!("expected MIDI"),
+        }
+        assert_eq!(app.engine.session(), &expected);
+        assert_eq!(app.engine.undo_history().len(), undo + 1);
+        assert_eq!(app.ui.midi_velocity_height, requested);
+        assert!(app.engine.undo());
+        assert_eq!(app.engine.session(), &before);
+        assert!(app.engine.redo());
+        assert_eq!(app.engine.session(), &expected);
+    }
+}
+
+#[test]
+fn dragging_an_overlapping_stem_keeps_its_note_when_crossing_another_handle() {
+    let (ctx, mut app) = overlapping_stems();
+    let start = stem_at(&app, 1, 120);
+    frame(&ctx, &mut app, vec![Event::PointerMoved(start)]);
+    frame(&ctx, &mut app, vec![button(start, true)]);
+    for velocity in [100, 92, 80, 60] {
+        let pos = stem_at(&app, 1, velocity);
+        frame(&ctx, &mut app, vec![Event::PointerMoved(pos)]);
+    }
+    let end = stem_at(&app, 1, 60);
+    frame(&ctx, &mut app, vec![button(end, false)]);
+    assert_eq!(notes(&app).iter().map(|n| n.velocity).collect::<Vec<_>>(), vec![92, 60, 75]);
+}
+
+#[test]
+fn double_click_in_empty_velocity_space_keeps_notes_and_undo_unchanged() {
+    let (ctx, mut app) = overlapping_stems();
+    let before = app.engine.session().clone();
+    let undo = app.engine.undo_history().len();
+    let pos = pos2(app.midi.velocity[2] - 20.0, app.midi.velocity[1] + 10.0);
+    double_click(&ctx, &mut app, pos);
+    assert_eq!(app.engine.session(), &before);
+    assert_eq!(app.engine.undo_history().len(), undo);
+}
+
+#[test]
+fn dragging_duplicate_notes_follows_the_edited_note_after_sorting_and_undoes_once() {
+    let (ctx, mut app) = overlapping_stems();
+    app.run("midi.note_edit", json!({"clip":app.midi.clip.unwrap().0,"index":1,"pitch":48})).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    let before = app.engine.session().clone();
+    let undo = app.engine.undo_history().len();
+    let start = stem_at(&app, 1, 120);
+    frame(&ctx, &mut app, vec![Event::PointerMoved(start)]);
+    frame(&ctx, &mut app, vec![button(start, true)]);
+    for velocity in [100, 92, 80, 60] {
+        let pos = stem_at(&app, 1, velocity);
+        frame(&ctx, &mut app, vec![Event::PointerMoved(pos)]);
+    }
+    let end = stem_at(&app, 0, 60);
+    frame(&ctx, &mut app, vec![button(end, false)]);
+    assert_eq!(notes(&app).iter().map(|n| n.velocity).collect::<Vec<_>>(), vec![60, 92, 75]);
+    assert_eq!(app.engine.undo_history().len(), undo + 1);
+    assert!(app.engine.undo());
+    assert_eq!(app.engine.session(), &before);
+}

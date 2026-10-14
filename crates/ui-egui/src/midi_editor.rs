@@ -28,6 +28,8 @@ pub struct MidiEditorState {
     pub velocity: [f32; 4],
     pub velocity_divider: [f32; 4],
     pub(crate) velocity_drag: Option<VelocityDrag>,
+    /// Keep the same note while dragging overlapping velocity stems.
+    pub(crate) velocity_note: Option<(ClipId, usize)>,
     pub clip: Option<ClipId>,
     /// Rubber-band selection start (screen position).
     pub band: Option<egui::Pos2>,
@@ -271,6 +273,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         app.midi.velocity = [0.0; 4];
         app.midi.velocity_divider = [0.0; 4];
         app.midi.velocity_drag = None;
+        app.midi.velocity_note = None;
         midi_playback::release_transport(app);
         let track = {
             let s = app.engine.session();
@@ -386,6 +389,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         app.midi.scroll_ticks = 0.0;
         app.midi.selected.clear();
         app.midi.drag = None;
+        app.midi.velocity_note = None;
         app.midi.band = None;
         app.midi.clip = Some(cid);
     }
@@ -614,8 +618,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     // Velocity lane.
     ui.painter().rect_filled(vel, 0.0, Color32::from_rgb(28, 28, 30));
     ui.painter().text(pos2(full.min.x + 6.0, vel.center().y), Align2::LEFT_CENTER, "Velocity", regular(10.0), t.text_dim);
-    let vresp = ui.interact(vel, ui.id().with(("vel", cid.0)), Sense::click_and_drag());
+    let vresp = ui
+        .interact(vel, ui.id().with(("vel", cid.0)), Sense::click_and_drag())
+        .on_hover_text("Drag to change velocity · Double-click a stem to reset to 100");
     let velocity_painter = ui.painter().with_clip_rect(vel);
+    let velocity_y = |velocity: u8| vel.max.y - 2.0 - (vel.height() - 4.0).max(0.0) * f32::from(velocity) / 127.0;
     for (i, n) in sequence.notes.iter().enumerate() {
         let x = x_of(n.start);
         let h = (vel.height() - 4.0).max(0.0) * f32::from(n.velocity) / 127.0;
@@ -623,13 +630,47 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         velocity_painter.line_segment([pos2(x + 1.0, vel.max.y - 2.0), pos2(x + 1.0, vel.max.y - 2.0 - h)], Stroke::new(3.0, col));
         velocity_painter.circle_filled(pos2(x + 1.0, vel.max.y - 2.0 - h), 2.5, col);
     }
-    if (vresp.clicked() || vresp.dragged())
-        && let Some(p) = vresp.interact_pointer_pos()
-        && let Some((i, n)) = sequence.notes.iter().enumerate().min_by_key(|(_, n)| ((x_of(n.start) - p.x).abs() * 10.0) as i64)
-        && (x_of(n.start) - p.x).abs() < 8.0
-    {
-        let v = (((vel.max.y - 2.0 - p.y) / (vel.height() - 4.0).max(1.0)) * 127.0).round().clamp(1.0, 127.0) as i64;
-        let _ = app.engine.execute_merged("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}), &format!("vel:{}", cid.0));
+    if let Some(p) = vresp.interact_pointer_pos() {
+        let hit = sequence
+            .notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| (x_of(n.start) + 1.0 - p.x).abs() < 8.0)
+            .min_by(|(_, a), (_, b)| {
+                (x_of(a.start) + 1.0 - p.x)
+                    .abs()
+                    .total_cmp(&(x_of(b.start) + 1.0 - p.x).abs())
+                    .then_with(|| (velocity_y(a.velocity) - p.y).abs().total_cmp(&(velocity_y(b.velocity) - p.y).abs()))
+            })
+            .map(|(index, _)| index);
+        if vresp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) {
+            app.midi.velocity_note = hit.map(|index| (cid, index));
+        }
+        let target = app.midi.velocity_note.filter(|(clip, _)| *clip == cid).map(|(_, index)| index).or(hit);
+        if (vresp.clicked() || vresp.dragged())
+            && let Some(index) = target
+            && let Some(note) = sequence.notes.get(index)
+        {
+            let velocity = if vresp.double_clicked() {
+                100
+            } else {
+                (((vel.max.y - 2.0 - p.y) / (vel.height() - 4.0).max(1.0)) * 127.0).round().clamp(1.0, 127.0) as u8
+            };
+            if velocity != note.velocity
+                && let Ok(result) = app.engine.execute_merged(
+                    "midi.note_edit",
+                    &json!({"clip": cid.0, "index": index, "velocity": velocity}),
+                    &format!("vel:{}", cid.0),
+                )
+                && let Some(index) = result.get("index").and_then(serde_json::Value::as_u64).and_then(|index| usize::try_from(index).ok())
+            {
+                // Editing can reorder duplicate notes; follow the returned index.
+                app.midi.velocity_note = Some((cid, index));
+            }
+        }
+    }
+    if !ui.input(|i| i.pointer.primary_down()) {
+        app.midi.velocity_note = None;
     }
     // Paint last over the notes, clipped to the piano roll, without claiming input.
     let at = s.tempo.samples_to_ticks_f(midi_playback::display_position(app), sr) - base_tick as f64;
