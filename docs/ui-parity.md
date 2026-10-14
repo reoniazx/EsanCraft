@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (Velocity stem double-click reset) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (note-length Velocity tails) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 How SoundCraft feels in the hands of a Pro Tools user: tools, modes, modifiers, shortcuts,
 windows, meters. Measured from `crates/model/src/session.rs` (tools, modes), the command
@@ -45,7 +45,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 | Edit window: rulers, track headers, view columns, Clip List, Groups, Tracks list | ✅ | Track Pin (new in 2026.4) ✅ (`track.pin`) |
 | Mix window: strips, views (inserts, sends, I/O, comments, EQ curve, preamps, instruments, object) | ✅ | Narrow Mix ✅; Mix and Edit on screen at once (Window › Mix in Separate Window, its own native window) ✅; Delay Compensation view and HEAT missing |
 | MIDI Editor, Score Editor, Event List | 🟡 | Dock height bug fixed (#113); notation editing shallow |
-| MIDI Velocity lane | ✅ | Draggable inner divider in docked/floating editors, focused Up/Down height adjustment and divider double-click reset. Saved UI height with viewport limits. Stem double-click restores that note's velocity to 100; overlapping handles resolve by proximity and dragging retains its note, with Undo |
+| MIDI Velocity lane | ✅ | Saved height with draggable divider, focused Up/Down adjustment and divider double-click reset. Each stem has a note-length tail that follows zoom/pan; both stem and tail support velocity dragging and double-click reset to 100. Selected handles draw last in white and win equal-distance hits. Drag retains its note, with Undo |
 | MIDI Editor playback cursor and scrolling | ✅ | Cursor is clipped to the piano roll above Velocity, aligned through the tempo map and clip offset. Independent No Scrolling, After Playback, Page (default), Continuous, Center Playhead and Follow Edit Window. Center's stopped pan sets a separate play cue without replacing selections; explicit playback starts and selection playback take precedence. Manual browsing pauses follow; six-mode preference persists |
 | Transport, Big Counter, Memory Locations, Automation, Video, Universe, Renderer, UI Customization | ✅ present | |
 | Workspace / sound browser with previews | ❌ | G-16 |
@@ -70,6 +70,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Note-length Velocity tails enlarge the drag/reset target; nearby stems, zoom/pan, viewport clipping and selection visibility covered |
 | 2026-10-14 | minor | Velocity stems reset to 100 on double-click; overlapping handles, continuous drag targeting, Undo and empty-space clicks covered |
 | 2026-10-14 | minor | Velocity lane height adjusts independently inside the MIDI Editor; saved preference, divider/keyboard input and document isolation tested |
 | 2026-10-14 | minor | MIDI playback cursor ends at the piano-roll boundary, keeping Velocity clear; rendered-shape coverage checks both the endpoint and clip rectangle |

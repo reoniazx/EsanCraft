@@ -4,6 +4,10 @@ use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::json;
 use soundcraft_ui_egui::{Services, SoundApp, midi_playback::MidiScrollingMode, theme::ThemeMode};
 
+// Tokens use a process-wide palette. Separate test apps must not switch it
+// while another test is rendering or comparing cursor colors.
+static THEME_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn harness(rate: u32, tempo_change: bool) -> Harness<'static, SoundApp> {
     let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, Services::default());
     app.engine.session_mut().sample_rate = soundcraft_time::SampleRate::new(rate).unwrap();
@@ -58,6 +62,7 @@ fn expected_x(h: &Harness<'_, SoundApp>, sample: i64) -> f32 {
 
 #[test]
 fn playback_line_matches_clip_offset_tempo_zoom_and_pan_in_both_themes() {
+    let _theme = THEME_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for rate in [44_100, 48_000, 96_000] {
         for change in [false, true] {
             let mut h = harness(rate, change);
@@ -82,6 +87,7 @@ fn playback_line_matches_clip_offset_tempo_zoom_and_pan_in_both_themes() {
 
 #[test]
 fn page_follows_skips_and_loop_wraps_without_mutating_notes() {
+    let _theme = THEME_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut h = harness(48_000, false);
     assert_eq!(h.state().ui.midi_scrolling, MidiScrollingMode::Page);
     h.state_mut().run("ui.midi_zoom_at", json!({"factor": 4, "anchor_px": 0})).unwrap();
@@ -99,6 +105,7 @@ fn page_follows_skips_and_loop_wraps_without_mutating_notes() {
 
 #[test]
 fn centered_modes_use_blank_time_and_follow_edit_resolves_live() {
+    let _theme = THEME_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut h = harness(48_000, true);
     h.state_mut().run("ui.midi_scrolling", json!({"mode": "continuous"})).unwrap();
     set_position(&mut h, 0);
@@ -116,6 +123,7 @@ fn centered_modes_use_blank_time_and_follow_edit_resolves_live() {
 
 #[test]
 fn hidden_cursor_is_not_pinned_to_the_edge_and_manual_pan_holds_follow() {
+    let _theme = THEME_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut h = harness(48_000, false);
     h.state_mut().run("ui.midi_scrolling", json!({"mode": "none"})).unwrap();
     set_position(&mut h, 0);
@@ -144,6 +152,7 @@ fn hidden_cursor_is_not_pinned_to_the_edge_and_manual_pan_holds_follow() {
 
 #[test]
 fn scrolling_menu_and_old_preferences_are_compatible_and_invalid_modes_are_atomic() {
+    let _theme = THEME_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let old: soundcraft_ui_egui::UiState = serde_json::from_str("{}").unwrap();
     assert_eq!(old.midi_scrolling, MidiScrollingMode::Page);
     let mut h = harness(48_000, false);
@@ -166,6 +175,7 @@ fn scrolling_menu_and_old_preferences_are_compatible_and_invalid_modes_are_atomi
 
 #[test]
 fn high_zoom_center_pan_keeps_fractional_ticks_and_space_plays_from_the_cue() {
+    let _theme = THEME_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut h = harness(48_000, false);
     h.state_mut().run("ui.midi_scrolling", json!({"mode": "center"})).unwrap();
     h.step();
@@ -202,6 +212,7 @@ fn high_zoom_center_pan_keeps_fractional_ticks_and_space_plays_from_the_cue() {
 
 #[test]
 fn centered_record_cursor_is_red_without_opening_an_input_device() {
+    let _theme = THEME_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut h = harness(48_000, false);
     h.state_mut().run("ui.midi_scrolling", json!({"mode": "center"})).unwrap();
     set_position(&mut h, 96_000);

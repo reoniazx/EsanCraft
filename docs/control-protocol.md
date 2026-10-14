@@ -178,13 +178,20 @@ selections, undo history or transport cues. The playback cursor still ends at th
 
 **2026-10-14:** Added resizable Velocity with saved height, keyboard input and shared UI command.
 
-Double-click a Velocity stem to reset that note to 100 (the default for new notes).
-Stems that share a start time are distinguished by the closest circular handle.
+Each Velocity stem has a horizontal tail that spans the note's duration. Tails track the
+current time zoom and pan, and are clipped to the lane. Grab any part of a tail and drag
+vertically to change that note's velocity; grabbing near a tail retains the pointer offset
+so the value does not jump. Selected notes are drawn last in white; when
+handles coincide, the selected note takes precedence.
+
+Double-click a Velocity stem or tail to reset that note to 100 (the default for new notes).
+Stems that share a start time are distinguished by the closest handle or tail.
 Dragging keeps its original target when crossing another handle. Both gestures dispatch
 `midi.note_edit`, preserving the note's pitch, timing and the lane height; Undo restores
 the edited velocity. Double-clicking empty space does not edit notes.
 
 **2026-10-14:** Added Velocity stem double-click reset and stable overlapping-stem targeting.
+**2026-10-14:** Added note-length Velocity tails with direct drag/reset input and selection visibility.
 
 - Tracks: id (number) or name (`"Kick"`).
 - Clips: id (from `session.inspect`).

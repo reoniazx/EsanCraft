@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (G-19: MIDI Velocity resizing addressed) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (G-19: Velocity note-length handles added) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -180,7 +180,8 @@ settings command only. Needs an openly licensed local speech model. ≈ 30–50 
 
 **Done (2026-10-14):** MIDI Editor playback cursor within the piano roll, six independent
 scrolling modes, a stopped Center Playhead cue without replacing selections, and a resizable
-Velocity lane with saved height, keyboard adjustment and reset. Generic plugin
+Velocity lane with saved height, keyboard adjustment, reset and note-length tails for
+direct velocity editing. Generic plugin
 windows, shortcut collisions, meter depth and other UI fidelity work remain; estimates unchanged.
 
 See [`ui-parity.md`](ui-parity.md). ≈ 60–100 h.
@@ -204,6 +205,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | G-19 shrunk: note-length Velocity tails provide larger drag/reset targets; estimates unchanged |
 | 2026-10-14 | minor | G-19 shrunk: MIDI Velocity lane resizes independently with saved preferences; estimates unchanged |
 | 2026-10-14 | minor | MIDI cursor limited to the piano roll, keeping Velocity clear |
 | 2026-10-14 | minor | G-19 shrunk: MIDI playback cursor, independent scrolling and centered play cue |

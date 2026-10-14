@@ -4,12 +4,14 @@ use serde_json::json;
 use soundcraft_ui_egui::{Services, SoundApp, UiState, midi_editor::DEFAULT_VELOCITY_HEIGHT};
 
 fn frame(ctx: &egui::Context, app: &mut SoundApp, events: Vec<Event>) {
+    render(ctx, app, events).textures_delta.clear();
+}
+
+fn render(ctx: &egui::Context, app: &mut SoundApp, events: Vec<Event>) -> egui::FullOutput {
     ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0))), events, ..Default::default() }, |ui| {
         app.logic(ui.ctx());
         app.ui(ui);
     })
-    .textures_delta
-    .clear();
 }
 
 fn setup() -> (egui::Context, SoundApp) {
@@ -328,4 +330,76 @@ fn dragging_duplicate_notes_follows_the_edited_note_after_sorting_and_undoes_onc
     assert_eq!(app.engine.undo_history().len(), undo + 1);
     assert!(app.engine.undo());
     assert_eq!(app.engine.session(), &before);
+}
+
+#[test]
+fn grabbing_a_tail_beside_another_stem_edits_its_own_note_and_supports_reset_and_undo() {
+    let (ctx, mut app) = overlapping_stems();
+    let cid = app.midi.clip.unwrap();
+    app.run("midi.note_edit", json!({"clip":cid.0,"index":0,"length_ticks":3840})).unwrap();
+    app.run("midi.note_edit", json!({"clip":cid.0,"index":2,"start_ticks":1920})).unwrap();
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    let before = app.engine.session().clone();
+    let undo = app.engine.undo_history().len();
+    let mut start = stem_at(&app, 0, 92);
+    start.x = stem_at(&app, 2, 75).x;
+    start.y += 3.0; // Grab inside the expanded target, just below the visible tail.
+    assert!(start.x - stem_at(&app, 0, 92).x > 8.0, "the tail must work beyond the old stem hit area");
+    frame(&ctx, &mut app, vec![Event::PointerMoved(start)]);
+    frame(&ctx, &mut app, vec![button(start, true)]);
+    for velocity in [80, 75, 60] {
+        let mut pos = stem_at(&app, 0, velocity);
+        pos.x = start.x;
+        pos.y += 3.0;
+        frame(&ctx, &mut app, vec![Event::PointerMoved(pos)]);
+    }
+    let end = pos2(start.x, stem_at(&app, 0, 60).y);
+    frame(&ctx, &mut app, vec![button(end, false)]);
+    assert_eq!(notes(&app).iter().map(|n| n.velocity).collect::<Vec<_>>(), vec![60, 120, 75]);
+    assert_eq!(app.engine.undo_history().len(), undo + 1);
+    assert!(app.engine.undo());
+    assert_eq!(app.engine.session(), &before);
+    double_click(&ctx, &mut app, start);
+    assert_eq!(notes(&app).iter().map(|n| n.velocity).collect::<Vec<_>>(), vec![100, 120, 75]);
+    assert!(app.engine.undo());
+    assert_eq!(app.engine.session(), &before);
+}
+
+#[test]
+fn rendered_tails_show_note_length_follow_zoom_and_pan_and_clip_to_the_lane() {
+    let (ctx, mut app) = overlapping_stems();
+    app.run("midi.note_edit", json!({"clip":app.midi.clip.unwrap().0,"index":0,"length_ticks":3840})).unwrap();
+    app.run("ui.midi_scrolling", json!({"mode":"none"})).unwrap();
+    app.run("ui.midi_zoom_at", json!({"factor":16,"anchor_px":0})).unwrap();
+    let pixels_per_tick = f64::from(app.midi.roll[2] - app.midi.roll[0]) * app.midi.zoom / app.midi.len_ticks;
+    app.run("ui.midi_scroll", json!({"by_px":960.0*pixels_per_tick})).unwrap();
+    app.midi.selected = vec![0];
+    let before = app.engine.session().clone();
+    let undo = app.engine.undo_history().len();
+    let mut output = render(&ctx, &mut app, vec![]);
+    output.textures_delta.clear();
+    let m = &app.midi;
+    let end = m.roll[0] + ((3840.0 - m.scroll_ticks) * f64::from(m.roll[2] - m.roll[0]) * m.zoom / m.len_ticks) as f32;
+    let tail = output
+        .shapes
+        .iter()
+        .find(|shape| {
+            matches!(&shape.shape,
+                egui::Shape::LineSegment { points: [a,b], stroke }
+                if a.y == b.y && a.y >= m.velocity[1] && a.y <= m.velocity[3] && stroke.width == 2.0 && stroke.color == egui::Color32::WHITE
+            )
+        })
+        .expect("the offscreen note's visible tail must still be drawn");
+    if let egui::Shape::LineSegment { points: [a, b], .. } = &tail.shape {
+        assert_eq!(a.x, m.velocity[0]);
+        assert!((b.x - end).abs() < 0.01, "the tail ends at the note's timeline end");
+        assert!(tail.clip_rect.min.x >= m.velocity[0]);
+        assert!(tail.clip_rect.min.y >= m.velocity[1]);
+        assert!(tail.clip_rect.max.x <= m.velocity[2]);
+        assert!(tail.clip_rect.max.y <= m.velocity[3]);
+    }
+    assert_eq!(app.engine.session(), &before);
+    assert_eq!(app.engine.undo_history().len(), undo);
 }

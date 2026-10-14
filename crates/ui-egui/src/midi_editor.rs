@@ -29,7 +29,7 @@ pub struct MidiEditorState {
     pub velocity_divider: [f32; 4],
     pub(crate) velocity_drag: Option<VelocityDrag>,
     /// Keep the same note while dragging overlapping velocity stems.
-    pub(crate) velocity_note: Option<(ClipId, usize)>,
+    pub(crate) velocity_note: Option<VelocityNoteDrag>,
     pub clip: Option<ClipId>,
     /// Rubber-band selection start (screen position).
     pub band: Option<egui::Pos2>,
@@ -43,6 +43,13 @@ pub(crate) struct VelocityDrag {
     height: f32,
     full: Rect,
     clip: ClipId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VelocityNoteDrag {
+    clip: ClipId,
+    index: usize,
+    offset_y: f32,
 }
 
 /// A UI preference: resizing never changes notes, selections or transport cues.
@@ -620,41 +627,90 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     ui.painter().text(pos2(full.min.x + 6.0, vel.center().y), Align2::LEFT_CENTER, "Velocity", regular(10.0), t.text_dim);
     let vresp = ui
         .interact(vel, ui.id().with(("vel", cid.0)), Sense::click_and_drag())
-        .on_hover_text("Drag to change velocity · Double-click a stem to reset to 100");
-    let velocity_painter = ui.painter().with_clip_rect(vel);
+        .on_hover_text("Drag a stem or its note-length tail to change velocity · Double-click to reset to 100");
+    let velocity_painter = ui.painter().with_clip_rect(vel.intersect(ui.clip_rect()));
     let velocity_y = |velocity: u8| vel.max.y - 2.0 - (vel.height() - 4.0).max(0.0) * f32::from(velocity) / 127.0;
-    for (i, n) in sequence.notes.iter().enumerate() {
+    let tail = |note: &soundcraft_midi::Note| {
+        let start = x_of(note.start) + 1.0;
+        let end = x_of(note.start.saturating_add(note.length.max(0))).max(start);
+        let y = velocity_y(note.velocity);
+        (start <= vel.max.x && end >= vel.min.x).then(|| [pos2(start.max(vel.min.x), y), pos2(end.min(vel.max.x), y)])
+    };
+    let hit_at = |p: egui::Pos2| {
+        // Prefer the visible horizontal handle to a nearby note's vertical stem.
+        // Stem clicks retain the existing direct-to-value editing behavior.
+        let handle = sequence
+            .notes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, note)| {
+                let [a, b] = tail(note)?;
+                let dx = (a.x - p.x).max(p.x - b.x).max(0.0);
+                let dy = (a.y - p.y).abs();
+                (dx < 6.0 && dy < 6.0).then_some((index, dx * dx + dy * dy))
+            })
+            .min_by(|(a, da), (b, db)| da.total_cmp(db).then_with(|| app.midi.selected.contains(b).cmp(&app.midi.selected.contains(a))))
+            .map(|(index, _)| (index, true));
+        handle.or_else(|| {
+            sequence
+                .notes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| (x_of(n.start) + 1.0 - p.x).abs() < 8.0)
+                .min_by(|(_, a), (_, b)| {
+                    (x_of(a.start) + 1.0 - p.x)
+                        .abs()
+                        .total_cmp(&(x_of(b.start) + 1.0 - p.x).abs())
+                        .then_with(|| (velocity_y(a.velocity) - p.y).abs().total_cmp(&(velocity_y(b.velocity) - p.y).abs()))
+                })
+                .map(|(index, _)| (index, false))
+        })
+    };
+    let hit = vresp.interact_pointer_pos().and_then(hit_at);
+    let hovered = vresp.hover_pos().and_then(hit_at);
+    if hovered.is_some() || vresp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    // Paint selected notes last so their handles remain visible in chords.
+    let stems = sequence.notes.iter().enumerate();
+    for (i, n) in stems.clone().filter(|(i, _)| !app.midi.selected.contains(i)).chain(stems.filter(|(i, _)| app.midi.selected.contains(i))) {
         let x = x_of(n.start);
         let h = (vel.height() - 4.0).max(0.0) * f32::from(n.velocity) / 127.0;
         let col = if app.midi.selected.contains(&i) { Color32::WHITE } else { base };
         velocity_painter.line_segment([pos2(x + 1.0, vel.max.y - 2.0), pos2(x + 1.0, vel.max.y - 2.0 - h)], Stroke::new(3.0, col));
         velocity_painter.circle_filled(pos2(x + 1.0, vel.max.y - 2.0 - h), 2.5, col);
+        if let Some(points) = tail(n) {
+            velocity_painter.line_segment(points, Stroke::new(2.0, col));
+        }
     }
     if let Some(p) = vresp.interact_pointer_pos() {
-        let hit = sequence
-            .notes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| (x_of(n.start) + 1.0 - p.x).abs() < 8.0)
-            .min_by(|(_, a), (_, b)| {
-                (x_of(a.start) + 1.0 - p.x)
-                    .abs()
-                    .total_cmp(&(x_of(b.start) + 1.0 - p.x).abs())
-                    .then_with(|| (velocity_y(a.velocity) - p.y).abs().total_cmp(&(velocity_y(b.velocity) - p.y).abs()))
-            })
-            .map(|(index, _)| index);
         if vresp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) {
-            app.midi.velocity_note = hit.map(|index| (cid, index));
+            app.midi.velocity_note = hit.map(|(index, on_handle)| VelocityNoteDrag {
+                clip: cid,
+                index,
+                // The vertical stem keeps click-to-value editing. A tail grab
+                // preserves its offset so the wider handle does not cause a jump.
+                offset_y: sequence
+                    .notes
+                    .get(index)
+                    .filter(|note| on_handle && (x_of(note.start) + 1.0 - p.x).abs() >= 8.0)
+                    .map_or(0.0, |note| p.y - velocity_y(note.velocity)),
+            });
         }
-        let target = app.midi.velocity_note.filter(|(clip, _)| *clip == cid).map(|(_, index)| index).or(hit);
+        let target = app
+            .midi
+            .velocity_note
+            .filter(|grab| grab.clip == cid)
+            .map(|grab| (grab.index, grab.offset_y))
+            .or_else(|| hit.map(|(index, _)| (index, 0.0)));
         if (vresp.clicked() || vresp.dragged())
-            && let Some(index) = target
+            && let Some((index, offset_y)) = target
             && let Some(note) = sequence.notes.get(index)
         {
             let velocity = if vresp.double_clicked() {
                 100
             } else {
-                (((vel.max.y - 2.0 - p.y) / (vel.height() - 4.0).max(1.0)) * 127.0).round().clamp(1.0, 127.0) as u8
+                (((vel.max.y - 2.0 - (p.y - offset_y)) / (vel.height() - 4.0).max(1.0)) * 127.0).round().clamp(1.0, 127.0) as u8
             };
             if velocity != note.velocity
                 && let Ok(result) = app.engine.execute_merged(
@@ -665,7 +721,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 && let Some(index) = result.get("index").and_then(serde_json::Value::as_u64).and_then(|index| usize::try_from(index).ok())
             {
                 // Editing can reorder duplicate notes; follow the returned index.
-                app.midi.velocity_note = Some((cid, index));
+                app.midi.velocity_note = Some(VelocityNoteDrag { clip: cid, index, offset_y });
             }
         }
     }
