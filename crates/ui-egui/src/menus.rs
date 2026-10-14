@@ -31,6 +31,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.midi_zoom_at", "Zoom MIDI Editor at Cursor", "", None),
     ("ui.midi_fit", "Fit MIDI Clip", "", None),
     ("ui.midi_scrolling", "MIDI Editor Scrolling", "", None),
+    ("ui.midi_velocity_height", "MIDI Velocity Lane Height", "", None),
     ("window.universe", "Universe", "View > Other Displays > Universe", Some("Alt+7")),
     ("window.video", "Video", "Window > Video", Some("Cmd+9")),
     ("window.video_universe", "Video Universe", "Window > Video Universe", None),
@@ -481,6 +482,9 @@ fn wants_dialog(id: &str) -> bool {
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
 pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if id == "ui.midi_velocity_height" {
+        return Some(crate::midi_editor::velocity_height_command(app, p));
+    }
     if id == "ui.midi_scrolling" {
         return Some(crate::midi_playback::scrolling_command(app, p));
     }

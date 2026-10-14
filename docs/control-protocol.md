@@ -159,6 +159,25 @@ does not seek running playback; use `transport.locate` for that. `ui.inspect.mid
 **2026-10-14:** Added MIDI playback cursor, six independent scrolling modes and Center Playhead cue control.
 **2026-10-14:** Restricted the cursor to the piano roll so it does not extend into the Velocity lane.
 
+### MIDI Velocity lane height
+
+Drag the horizontal divider between the piano roll and Velocity to change the lane height.
+Dragging upward enlarges Velocity; dragging downward gives more space to the notes.
+Double-click the divider to restore 64 points. When the divider has keyboard focus,
+Up/Down adjusts its height by 8 points. The same control works in docked and floating editors.
+
+`ui.midi_velocity_height {"height":120}` sets the preferred height in logical window points;
+omit `height` to inspect it. Finite values clamp to 24–4096 points. The displayed height also
+fits the editor, reserving at least 72 points for notes when space permits. Shrinking the editor
+does not overwrite the preference. UI preferences retain the height across editor closure,
+clip changes and app restarts; old preferences default to 64. Resizing does not edit notes,
+selections, undo history or transport cues. The playback cursor still ends at the piano roll.
+
+`ui.inspect.midi_layout` includes `velocity_divider` (the draggable rectangle) and
+`velocity_height` (the preferred height), alongside the actual `velocity` rectangle.
+
+**2026-10-14:** Added resizable Velocity with saved height, keyboard input and shared UI command.
+
 - Tracks: id (number) or name (`"Kick"`).
 - Clips: id (from `session.inspect`).
 - Positions: samples (`96000`), seconds (`{"seconds": 2.5}`), or a time string in any timebase,

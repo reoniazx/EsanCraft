@@ -95,6 +95,8 @@ pub struct UiState {
     pub show_midi_editor: bool,
     /// Independent scrolling for the MIDI Editor; restored from UI preferences.
     pub midi_scrolling: midi_playback::MidiScrollingMode,
+    /// Preferred Velocity lane height in logical points; constrained by the current editor size.
+    pub midi_velocity_height: f32,
     pub show_universe: bool,
     pub narrow_mix: bool,
     /// Mix window sections: inserts_ae, inserts_fj, sends_ae, sends_fj, io, comments, eq_curve, color.
@@ -170,6 +172,7 @@ impl Default for UiState {
             show_about: false,
             show_midi_editor: false,
             midi_scrolling: midi_playback::MidiScrollingMode::default(),
+            midi_velocity_height: midi_editor::DEFAULT_VELOCITY_HEIGHT,
             show_universe: false,
             narrow_mix: false,
             mix_views: vec!["inserts_ae".into(), "sends_ae".into(), "io".into(), "color".into()],
@@ -1185,6 +1188,7 @@ impl SoundApp {
         control::drain(self, ctx);
         if !self.ui.show_midi_editor {
             midi_playback::release_transport(self);
+            self.midi.velocity_drag = None;
         }
         // A parked root may not receive another raw-input pass promptly. Apply
         // queued global focus keys now, using the same dispatch as native input.

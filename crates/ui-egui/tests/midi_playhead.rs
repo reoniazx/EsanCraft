@@ -66,8 +66,9 @@ fn playback_line_matches_clip_offset_tempo_zoom_and_pan_in_both_themes() {
             h.state_mut().run("ui.midi_scroll", json!({"by_px": 80})).unwrap();
             let before = h.state().engine.session().clone();
             let undo = h.state().engine.undo_history().len();
-            for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            for (mode, height) in [(ThemeMode::Dark, 32.0), (ThemeMode::Light, 120.0)] {
                 h.state_mut().run("ui.theme", json!({"mode": mode.id()})).unwrap();
+                h.state_mut().run("ui.midi_velocity_height", json!({"height": height})).unwrap();
                 set_position(&mut h, i64::from(rate) * 2);
                 let line = cursor(&h, soundcraft_ui_egui::theme::Tokens::current().playhead).unwrap();
                 assert!((line - expected_x(&h, i64::from(rate) * 2)).abs() < 0.01);

@@ -10,7 +10,10 @@ use soundcraft_time::TICKS_PER_QUARTER;
 
 const KEY_W: f32 = 48.0;
 const ROW_H: f32 = 9.0;
-const VEL_H: f32 = 64.0;
+pub const DEFAULT_VELOCITY_HEIGHT: f32 = 64.0;
+const MIN_VELOCITY_HEIGHT: f32 = 24.0;
+const MIN_ROLL_HEIGHT: f32 = 72.0;
+const DIVIDER_H: f32 = 6.0;
 
 #[derive(Debug, Clone, Default)]
 pub struct MidiEditorState {
@@ -23,11 +26,102 @@ pub struct MidiEditorState {
     pub len_ticks: f64,
     pub roll: [f32; 4],
     pub velocity: [f32; 4],
+    pub velocity_divider: [f32; 4],
+    pub(crate) velocity_drag: Option<VelocityDrag>,
     pub clip: Option<ClipId>,
     /// Rubber-band selection start (screen position).
     pub band: Option<egui::Pos2>,
     /// Runtime follow/transport ownership is never serialized into a session.
     pub follow: FollowState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VelocityDrag {
+    origin_y: f32,
+    height: f32,
+    full: Rect,
+    clip: ClipId,
+}
+
+/// A UI preference: resizing never changes notes, selections or transport cues.
+pub fn velocity_height_command(app: &mut SoundApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    if p.get("height").is_some() {
+        let height = finite_param(p, "height", f64::from(DEFAULT_VELOCITY_HEIGHT))?;
+        app.ui.midi_velocity_height = height.clamp(f64::from(MIN_VELOCITY_HEIGHT), 4096.0) as f32;
+        app.midi.velocity_drag = None;
+    }
+    Ok(json!({"height": app.ui.midi_velocity_height}))
+}
+
+fn lane_layout(full: Rect, preferred: f32) -> (Rect, Rect, Rect) {
+    let top = (full.min.y + 22.0).min(full.max.y);
+    let bottom = (full.max.y - 2.0).max(top);
+    let divider_h = DIVIDER_H.min(bottom - top);
+    let available = (bottom - top - divider_h).max(0.0);
+    let min_velocity = MIN_VELOCITY_HEIGHT.min(available * 0.25);
+    let max_velocity = (available - MIN_ROLL_HEIGHT.min(available * 0.75)).max(min_velocity);
+    let preferred = if preferred.is_finite() { preferred } else { DEFAULT_VELOCITY_HEIGHT };
+    let height = preferred.clamp(min_velocity, max_velocity);
+    let right = (full.max.x - 4.0).max(full.min.x);
+    let left = (full.min.x + KEY_W).min(right);
+    let roll = Rect::from_min_max(pos2(left, top), pos2(right, bottom - height - divider_h));
+    let divider = Rect::from_min_max(pos2(full.min.x, roll.max.y), pos2(right, roll.max.y + divider_h));
+    let velocity = Rect::from_min_max(pos2(left, divider.max.y), pos2(right, bottom));
+    (roll, velocity, divider)
+}
+
+fn resize_velocity(app: &mut SoundApp, ui: &mut Ui, full: Rect, cid: ClipId) -> (Rect, Rect, Rect) {
+    let (_, velocity, divider) = lane_layout(full, app.ui.midi_velocity_height);
+    let response = ui.interact(divider, ui.id().with("velocity_divider"), Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Velocity lane height"));
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+        .on_hover_text("Drag to resize Velocity · Double-click to reset · Up/Down when focused");
+    if response.clicked() || response.drag_started() {
+        response.request_focus();
+    }
+    if response.has_focus() {
+        ui.memory_mut(|memory| memory.set_focus_lock_filter(response.id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
+    }
+    if app.midi.velocity_drag.is_some_and(|drag| drag.full != full || drag.clip != cid) || !ui.input(|i| i.pointer.primary_down()) {
+        app.midi.velocity_drag = None;
+    }
+    if response.drag_started()
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+    {
+        app.midi.velocity_drag = Some(VelocityDrag { origin_y: origin.y, height: velocity.height(), full, clip: cid });
+    }
+    if response.dragged()
+        && let (Some(drag), Some(pointer)) = (app.midi.velocity_drag, response.interact_pointer_pos())
+    {
+        // Clamp to the displayed bounds so reversing at a limit responds immediately.
+        let requested = drag.height + drag.origin_y - pointer.y;
+        let (_, resized, _) = lane_layout(full, requested);
+        let _ = app.run("ui.midi_velocity_height", json!({"height": resized.height()}));
+        app.midi.velocity_drag = Some(VelocityDrag { origin_y: pointer.y, height: resized.height(), ..drag });
+    }
+    if response.double_clicked() {
+        let _ = app.run("ui.midi_velocity_height", json!({"height": DEFAULT_VELOCITY_HEIGHT}));
+    } else if response.has_focus() {
+        let delta = ui.input_mut(|i| {
+            let up = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+            let down = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+            (i32::from(up) - i32::from(down)) as f32 * 8.0
+        });
+        if delta != 0.0 {
+            // The first key can arrive immediately after click focus, before egui
+            // has retained its filter. Keep that key from navigating to a note.
+            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            let (_, resized, _) = lane_layout(full, velocity.height() + delta);
+            let _ = app.run("ui.midi_velocity_height", json!({"height": resized.height()}));
+        }
+    }
+    let layout = lane_layout(full, app.ui.midi_velocity_height);
+    let color = if response.hovered() || response.dragged() || response.has_focus() { Tokens::current().accent } else { Tokens::current().text_dim };
+    ui.painter().rect_filled(layout.2, 0.0, Tokens::current().panel_bg2);
+    let center = layout.2.center();
+    ui.painter().line_segment([center - vec2(14.0, 0.0), center + vec2(14.0, 0.0)], Stroke::new(1.0, color));
+    layout
 }
 
 #[derive(Debug, Clone)]
@@ -159,7 +253,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     ui.take_available_space();
     let t = Tokens::current();
     let full = ui.max_rect();
-    if ui.input(|i| i.pointer.any_pressed()) && ui.rect_contains_pointer(full) {
+    let (_, _, divider) = lane_layout(full, app.ui.midi_velocity_height);
+    if ui.input(|i| i.pointer.any_pressed()) && ui.rect_contains_pointer(full) && !ui.rect_contains_pointer(divider) {
         app.midi.follow.owns_transport = true;
         if midi_playback::effective(app) == MidiScrollingMode::Center && !app.midi.follow.cue_ready {
             midi_playback::initialize_cue(app);
@@ -174,6 +269,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let Some(cid) = target_clip(app) else {
         app.midi.roll = [0.0; 4];
         app.midi.velocity = [0.0; 4];
+        app.midi.velocity_divider = [0.0; 4];
+        app.midi.velocity_drag = None;
         midi_playback::release_transport(app);
         let track = {
             let s = app.engine.session();
@@ -272,9 +369,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let sr = s.sample_rate;
     let base_tick = s.tempo.samples_to_ticks(clip.start, sr);
     let len_ticks = s.tempo.samples_to_ticks(clip.end(), sr).saturating_sub(base_tick).max(1);
-    let roll = Rect::from_min_max(pos2(full.min.x + KEY_W, header.max.y), pos2(full.max.x - 4.0, full.max.y - VEL_H - 4.0));
+    let (roll, vel, divider) = resize_velocity(app, ui, full, cid);
     let keys = Rect::from_min_max(pos2(full.min.x, roll.min.y), pos2(roll.min.x, roll.max.y));
-    let vel = Rect::from_min_max(pos2(roll.min.x, roll.max.y + 4.0), pos2(roll.max.x, full.max.y - 2.0));
     // Vertical range: centre on the notes the first time.
     let rows = (roll.height() / ROW_H).floor() as i32;
     if app.midi.clip != Some(cid) {
@@ -295,6 +391,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     app.midi.roll = [roll.min.x, roll.min.y, roll.max.x, roll.max.y];
     app.midi.velocity = [vel.min.x, vel.min.y, vel.max.x, vel.max.y];
+    app.midi.velocity_divider = [divider.min.x, divider.min.y, divider.max.x, divider.max.y];
     app.midi.len_ticks = len_ticks as f64;
     app.midi.top_pitch = app.midi.top_pitch.clamp((f64::from(roll.height() / ROW_H) - 1.0).clamp(0.0, 127.0), 127.0);
     if roll.width() <= 0.0 || roll.height() <= 0.0 {
@@ -521,7 +618,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let velocity_painter = ui.painter().with_clip_rect(vel);
     for (i, n) in sequence.notes.iter().enumerate() {
         let x = x_of(n.start);
-        let h = (vel.height() - 4.0) * f32::from(n.velocity) / 127.0;
+        let h = (vel.height() - 4.0).max(0.0) * f32::from(n.velocity) / 127.0;
         let col = if app.midi.selected.contains(&i) { Color32::WHITE } else { base };
         velocity_painter.line_segment([pos2(x + 1.0, vel.max.y - 2.0), pos2(x + 1.0, vel.max.y - 2.0 - h)], Stroke::new(3.0, col));
         velocity_painter.circle_filled(pos2(x + 1.0, vel.max.y - 2.0 - h), 2.5, col);
@@ -531,7 +628,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         && let Some((i, n)) = sequence.notes.iter().enumerate().min_by_key(|(_, n)| ((x_of(n.start) - p.x).abs() * 10.0) as i64)
         && (x_of(n.start) - p.x).abs() < 8.0
     {
-        let v = (((vel.max.y - 2.0 - p.y) / (vel.height() - 4.0)) * 127.0).round().clamp(1.0, 127.0) as i64;
+        let v = (((vel.max.y - 2.0 - p.y) / (vel.height() - 4.0).max(1.0)) * 127.0).round().clamp(1.0, 127.0) as i64;
         let _ = app.engine.execute_merged("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}), &format!("vel:{}", cid.0));
     }
     // Paint last over the notes, clipped to the piano roll, without claiming input.
