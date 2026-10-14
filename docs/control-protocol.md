@@ -127,7 +127,7 @@ starts with that clip fitted and its notes centred vertically.
 
 ### MIDI Editor playback and scrolling
 
-The playback cursor spans the piano roll and Velocity lane and uses the shared transport position,
+The playback cursor is clipped to the piano roll and stops above the Velocity lane. It uses the shared transport position,
 converted through the session tempo map into the clip's tick coordinates. `ui.midi_scrolling {}`
 inspects the current choice and effective mode; pass `{"mode":"page"}` to change it. The same
 command backs the MIDI Editor's **Scrolling** menu. It is UI preference state, independent of
@@ -157,6 +157,7 @@ does not seek running playback; use `transport.locate` for that. `ui.inspect.mid
 `scrolling`, `effective_scrolling`, `follow_hold`, `owns_transport`, `play_start` and `playhead_sample`.
 
 **2026-10-14:** Added MIDI playback cursor, six independent scrolling modes and Center Playhead cue control.
+**2026-10-14:** Restricted the cursor to the piano roll so it does not extend into the Velocity lane.
 
 - Tracks: id (number) or name (`"Kick"`).
 - Clips: id (from `session.inspect`).

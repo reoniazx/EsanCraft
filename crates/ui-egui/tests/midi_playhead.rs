@@ -38,9 +38,9 @@ fn set_position(h: &mut Harness<'_, SoundApp>, sample: i64) {
 fn cursor(h: &Harness<'_, SoundApp>, color: Color32) -> Option<f32> {
     let m = &h.state().midi;
     h.output().shapes.iter().find_map(|shape| match &shape.shape {
-        Shape::LineSegment { points: [a, b], stroke }
-            if a.x == b.x && a.y == m.roll[1] && b.y == m.velocity[3] && stroke.width == 1.5 && stroke.color == color =>
-        {
+        Shape::LineSegment { points: [a, b], stroke } if a.x == b.x && a.y == m.roll[1] && stroke.width == 1.5 && stroke.color == color => {
+            assert_eq!(b.y, m.roll[3], "the cursor must stop at the bottom of the piano roll");
+            assert!(shape.clip_rect.max.y <= m.roll[3], "the cursor must not paint into the Velocity lane");
             Some(a.x)
         }
         _ => None,

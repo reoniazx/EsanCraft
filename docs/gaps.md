@@ -178,7 +178,7 @@ settings command only. Needs an openly licensed local speech model. ≈ 30–50 
 
 ### G-19. UI feel
 
-**Done (2026-10-14):** MIDI Editor playback cursor across notes and Velocity, six independent
+**Done (2026-10-14):** MIDI Editor playback cursor within the piano roll, six independent
 scrolling modes, and a stopped Center Playhead cue without replacing selections. Generic plugin
 windows, shortcut collisions, meter depth and other UI fidelity work remain; estimates unchanged.
 
@@ -203,6 +203,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | MIDI cursor limited to the piano roll, keeping Velocity clear |
 | 2026-10-14 | minor | G-19 shrunk: MIDI playback cursor, independent scrolling and centered play cue |
 | 2026-10-12 | minor | G-01 shrunk: audio device, rate and buffer choice; opt-in ASIO |
 | 2026-10-10 | minor | Marked the alpha blockers (G-01, G-02, G-03; parts of G-05 and G-06) from the core-workflow gate |

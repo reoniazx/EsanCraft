@@ -534,13 +534,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         let v = (((vel.max.y - 2.0 - p.y) / (vel.height() - 4.0)) * 127.0).round().clamp(1.0, 127.0) as i64;
         let _ = app.engine.execute_merged("midi.note_edit", &json!({"clip": cid.0, "index": i, "velocity": v}), &format!("vel:{}", cid.0));
     }
-    // Paint last, over notes and controllers, without claiming pointer or keyboard input.
+    // Paint last over the notes, clipped to the piano roll, without claiming input.
     let at = s.tempo.samples_to_ticks_f(midi_playback::display_position(app), sr) - base_tick as f64;
     let x = roll.min.x + ((at - scroll) * px_per_tick) as f32;
     if x.is_finite() && x >= roll.min.x && x <= roll.max.x {
         let color = if midi_playback::effective(app) == MidiScrollingMode::Center && !app.engine.transport.recording { t.accent } else { t.playhead };
-        ui.painter()
-            .with_clip_rect(roll.union(vel).intersect(ui.clip_rect()))
-            .line_segment([pos2(x, roll.min.y), pos2(x, vel.max.y)], Stroke::new(1.5, color));
+        ui.painter().with_clip_rect(roll.intersect(ui.clip_rect())).line_segment([pos2(x, roll.min.y), pos2(x, roll.max.y)], Stroke::new(1.5, color));
     }
 }
