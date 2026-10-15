@@ -161,6 +161,8 @@ struct AudioState {
     looped: Option<Range>,
     /// Rendered frames waiting to be consumed (planar, main channels) and the fractional read index.
     pending: Vec<Vec<f32>>,
+    /// Last sample of the block before `pending`, for interpolating across the block boundary.
+    carry: Vec<f32>,
     /// Stereo fold-down gains per main channel (used when the device has fewer channels).
     fold: [(f32, f32); MAX_CHANNELS],
     pending_len: usize,
@@ -197,6 +199,7 @@ impl AudioState {
             end: None,
             looped: None,
             pending: vec![vec![0.0; BLOCK]; nch],
+            carry: vec![0.0; nch],
             pending_len: 0,
             read: 0.0,
             device_rate,
@@ -222,6 +225,7 @@ impl AudioState {
                     let nch = main_channels(&s);
                     if self.pending.len() != nch {
                         self.pending = vec![vec![0.0; BLOCK]; nch];
+                        self.carry = vec![0.0; nch];
                         self.pending_len = 0;
                         self.read = 0.0;
                     }
@@ -345,8 +349,20 @@ impl AudioState {
         let callback_frames = out.len() / channels;
         let quantum = ((callback_frames as f64 * step).ceil() as usize).clamp(1, BLOCK);
         for frame in out.chunks_mut(channels) {
-            while self.read >= self.pending_len as f64 {
-                self.read -= self.pending_len as f64;
+            // Refill once the read position passes the second-to-last sample: the frame being
+            // read may then interpolate between this block's last sample (kept in `carry`) and
+            // the next block's first one. Holding the last sample instead would put a
+            // one-sample error at every block boundary whenever `step` is fractional
+            // (half-speed playback, or a device rate other than the session rate).
+            while self.read > self.pending_len as f64 - 1.0 {
+                if self.pending_len > 0 {
+                    for (c, ch) in self.pending.iter().enumerate() {
+                        if let (Some(d), Some(v)) = (self.carry.get_mut(c), ch.get(self.pending_len - 1)) {
+                            *d = *v;
+                        }
+                    }
+                    self.read -= self.pending_len as f64;
+                }
                 if !self.playing && !monitoring {
                     break;
                 }
@@ -360,10 +376,18 @@ impl AudioState {
             let sounding = self.playing || monitoring;
             let nch = self.pending.len();
             let sample = |c: usize| {
-                let ch = self.pending.get(c);
-                let a = ch.and_then(|v| v.get(i0)).copied().unwrap_or(0.0);
-                let b = ch.and_then(|v| v.get(i0 + 1)).copied().unwrap_or(a);
-                a + (b - a) * fr
+                if self.read < 0.0 {
+                    // A frame between the previous block's last sample and this block's first
+                    // one; `read` is in [-1, 0), so `read + 1` is the fraction past `carry`.
+                    let a = self.carry.get(c).copied().unwrap_or(0.0);
+                    let b = self.pending.get(c).and_then(|v| v.first()).copied().unwrap_or(a);
+                    a + (b - a) * (self.read + 1.0) as f32
+                } else {
+                    let ch = self.pending.get(c);
+                    let a = ch.and_then(|v| v.get(i0)).copied().unwrap_or(0.0);
+                    let b = ch.and_then(|v| v.get(i0 + 1)).copied().unwrap_or(a);
+                    a + (b - a) * fr
+                }
             };
             if nch > 2 && channels < nch {
                 // Fewer device channels than the main mix: ITU fold-down to stereo.
@@ -1236,6 +1260,46 @@ mod tests {
         let p = shared.position.load(Ordering::Relaxed);
         assert!(p <= 1000, "position {p} should stay inside the loop");
         assert!(shared.playing.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn fractional_reads_interpolate_across_render_blocks() {
+        use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
+        let mut s = soundcraft_model::Session::default();
+        s.edit.click = false;
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        // A ramp: source sample n is n/16384, so the mix at position p is p/16384·gain (well
+        // below the output clamp across this test's window).
+        const S: f32 = 1.0 / 16_384.0;
+        let ramp: Vec<f32> = (0..48_000).map(|i| i as f32 * S).collect();
+        s.pool.insert(SourceId(6), Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![ramp] })));
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "ramp", SourceId(6), 0, 0, 48_000));
+        let shared = Arc::new(Shared {
+            position: AtomicI64::new(0),
+            playing: AtomicBool::new(false),
+            speed: AtomicU32::new(1000),
+            meters: Mutex::new(MeterSnapshot::default()),
+        });
+        let (tx, rx) = channel();
+        let mut st = AudioState::new(rx, Arc::clone(&shared), Arc::new(s), 48_000.0, channel().0);
+        tx.send(Cmd::Play { from: 0, end: None, looped: None }).unwrap();
+        // Full speed: frame n is the ramp at n; that gives the constant gain of the signal path.
+        let mut out = vec![0.0f32; 2 * 4096];
+        st.fill(&mut out, 2);
+        let g = out[2 * 400] / (400.0 * S);
+        assert!(g > 0.0 && g.is_finite(), "gain {g}");
+        // Half speed (the Half-Speed transport): frame n reads position n/2, so frames near a
+        // render-block boundary must interpolate into the next block. Holding the last sample
+        // there leaves a one-sample error at every boundary, heard as a periodic buzz.
+        tx.send(Cmd::Locate(0)).unwrap();
+        shared.speed.store(500, Ordering::Relaxed);
+        st.fill(&mut out, 2);
+        for n in 0..4096 {
+            let want = n as f32 * 0.5 * S * g;
+            let got = out[2 * n];
+            assert!((got - want).abs() < 1e-6, "frame {n}: got {got}, want {want}");
+        }
     }
 
     #[test]
