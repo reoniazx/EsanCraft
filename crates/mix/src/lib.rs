@@ -1485,7 +1485,11 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
         if !clip.range().overlaps(&Range { start: pos, end }) {
             continue;
         }
-        let base = s.tempo.samples_to_ticks(clip.start, sr);
+        // Fractional ticks relative to the clip start, not integer ones: a clip start in samples
+        // is not usually tick-aligned (e.g. sample 512 at 120 BPM / 48 kHz is tick 20.48), and
+        // rounding the start to tick 20 moves a note-on at the clip start to sample 500 — before
+        // the clip — where no block renders it, so the note is silently dropped.
+        let base = s.tempo.samples_to_ticks_f(clip.start, sr);
         // MIDI Real-Time Properties (non-destructive velocity/transpose/duration/delay).
         let rtp = |name: &str, d: f64| Key::new(format_args!("rtp.{}.{name}", t.id.0)).map_or(d, |k| s.edit.value(k.as_str(), d));
         let (dv, dp, dur, delay) = if s.edit.values.is_empty() {
@@ -1504,8 +1508,9 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
             n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
             n.length = ((n.length as f64 * dur) as i64).max(1);
             n.start = n.start.saturating_add(delay).max(0);
-            let on = s.tempo.tick_to_samples(base.saturating_add(n.start), sr);
-            let off = s.tempo.tick_to_samples(base.saturating_add(n.start).saturating_add(n.length), sr).min(clip.end());
+            // The fractional roundtrip can land one sample before the clip start; clamp it.
+            let on = s.tempo.fractional_tick_to_samples(base + n.start as f64, sr).max(clip.start);
+            let off = s.tempo.fractional_tick_to_samples(base + n.start as f64 + n.length as f64, sr).min(clip.end());
             if on >= clip.end() {
                 continue;
             }
@@ -1520,15 +1525,16 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
                 held.retain(|p| *p != n.pitch);
             }
         }
-        let near = s.tempo.samples_to_ticks(pos, sr).saturating_sub(base).saturating_sub(1)
-            ..=s.tempo.samples_to_ticks(end, sr).saturating_sub(base).saturating_add(1);
+        let lo = (s.tempo.samples_to_ticks_f(pos, sr) - base).floor() as i64;
+        let hi = (s.tempo.samples_to_ticks_f(end, sr) - base).ceil() as i64;
+        let near = lo.saturating_sub(1)..=hi.saturating_add(1);
         // Events before tick 0 are what a start trim hid: they don't play.
         for c in sequence.ctrls.iter().filter(|c| c.tick >= 0) {
             let tick = c.tick.saturating_add(delay).max(0);
             if !near.contains(&tick) {
                 continue;
             }
-            let at = s.tempo.tick_to_samples(base.saturating_add(tick), sr);
+            let at = s.tempo.fractional_tick_to_samples(base + tick as f64, sr).max(clip.start);
             if at >= pos && at < end && at < clip.end() {
                 inst.plugin.midi(usize::try_from(at - pos).unwrap_or(0), ctrl_message(c.kind, c.value, dp));
             }
