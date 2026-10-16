@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** trivial (G-04: Split into Mono channel fix) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** trivial (G-04: master fader automation block boundaries) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -79,6 +79,11 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
   black-box format study is in the clean-room rules; not included in the estimate.
 
 ### G-04. Correctness bugs in "done" features
+
+**Fixed (2026-10-16):** Master fader volume automation uses the first and last samples of each
+render block, matching track faders. A breakpoint at the next block no longer ramps the preceding
+block, and ramps reach their last-sample value. Regression tests cover nonzero render starts,
+one-sample callbacks and several block sizes. Interior automation breakpoints remain block-dependent.
 
 **Fixed (2026-10-16):** Split into Mono now gives each output track its own source channel,
 including surround channels, instead of repeating channel zero. Clip edits, source timestamps,
@@ -209,6 +214,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | G-04: master volume automation block boundaries fixed and regression-tested; estimates unchanged |
 | 2026-10-16 | trivial | G-04: Split into Mono channel preservation fixed and regression-tested; estimates unchanged |
 | 2026-10-14 | minor | G-19 shrunk: note-length Velocity tails provide larger drag/reset targets; estimates unchanged |
 | 2026-10-14 | minor | G-19 shrunk: MIDI Velocity lane resizes independently with saved preferences; estimates unchanged |
