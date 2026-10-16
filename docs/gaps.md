@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (G-19: Velocity note-length handles added) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** trivial (G-04: Split into Mono channel fix) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -79,6 +79,10 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
   black-box format study is in the clean-room rules; not included in the estimate.
 
 ### G-04. Correctness bugs in "done" features
+
+**Fixed (2026-10-16):** Split into Mono now gives each output track its own source channel,
+including surround channels, instead of repeating channel zero. Clip edits, source timestamps,
+Undo/Redo and save/reopen are covered by regression tests; missing or empty media fails atomically.
 
 Open on 2026-10-10 (several have PRs open):
 editing #3, #5, #140, #144; clip/session #86 (PR #123), #88 (PR #130), #91 (PR #124), #92 (PR #132);
@@ -205,6 +209,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | G-04: Split into Mono channel preservation fixed and regression-tested; estimates unchanged |
 | 2026-10-14 | minor | G-19 shrunk: note-length Velocity tails provide larger drag/reset targets; estimates unchanged |
 | 2026-10-14 | minor | G-19 shrunk: MIDI Velocity lane resizes independently with saved preferences; estimates unchanged |
 | 2026-10-14 | minor | MIDI cursor limited to the piano roll, keeping Velocity clear |

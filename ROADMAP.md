@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (note-length Velocity tails) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** trivial (Split into Mono channel preservation) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -122,6 +122,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 ## Progress log
 
+- **2026-10-16:** Split into Mono extracts the correct source channel for each mono track instead of playing channel zero on every track. Clip offsets, gain, fades and stretch, source timestamps, Undo/Redo and saved audio are preserved; repeated clips share each extracted mono source. Unavailable media returns an error without partial edits. No readiness percentage change.
 - **2026-10-14 (MIDI Velocity tails):** Each Velocity stem has a horizontal tail spanning its note's duration. Tails follow zoom/pan and support velocity dragging and double-click reset to 100; selected handles stay visible in white. Nearby stems, Undo and viewport clipping are tested. No readiness percentage change.
 - **2026-10-14 (MIDI Velocity sizing):** The divider above Velocity adjusts its height inside docked and floating MIDI Editors. UI preferences retain the height; keyboard adjustment and double-click reset share the UI command. Viewport bounds keep notes visible without modifying the session or playback cue. No readiness percentage change.
 - **2026-10-14 (MIDI playback visibility):** MIDI Editor displays the transport cursor within the piano roll, with six independent scrolling modes (Page by default). Center Playhead supports a stopped playback cue without replacing selections; explicit starts, loop and punch ranges retain their behavior. Tempo changes, zoom/pan, loop wraps, stops, natural completion and preference compatibility are tested. No readiness percentage change.
@@ -158,6 +159,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Split into Mono preserves each source channel, clip edits and saved audio; readiness estimates unchanged |
 | 2026-10-14 | minor | MIDI Velocity tails show note duration and accept drag/reset input; readiness estimates unchanged |
 | 2026-10-14 | minor | Resizable MIDI Velocity lane with saved height, keyboard adjustment and reset; readiness estimates unchanged |
 | 2026-10-14 | minor | MIDI playback cursor stops above Velocity |
