@@ -104,7 +104,7 @@ fn channel_levels(ui: &Ui, key: (&str, u64), peaks: &[f32], n: usize) -> Vec<f32
     lv
 }
 
-/// Pro Tools' names for sections in strips too narrow for the full ones.
+/// Pro Tools' names for sections in narrow strips, and in any strip too narrow for the full ones.
 fn short_label(text: &str) -> &str {
     match text {
         "INSERTS A-E" => "I A-E",
@@ -116,9 +116,14 @@ fn short_label(text: &str) -> &str {
     }
 }
 
-fn section_label(ui: &Ui, r: Rect, text: &str) {
+/// A section's caption. Narrow strips always use the short names, as Pro Tools' Narrow Mix does, so
+/// every narrow strip reads the same whatever the UI font: measuring alone left the full name in
+/// place wherever a narrower font (egui's built-in face on a system with no fonts) happened to fit.
+/// Other strips shorten a name only when it doesn't fit with 4 pt to spare on each side.
+fn section_label(ui: &Ui, r: Rect, text: &str, narrow: bool) {
     let p = ui.painter();
     let color = Tokens::current().section_label;
+    let text = if narrow { short_label(text) } else { text };
     let mut galley = p.layout_no_wrap(text.to_owned(), bold(10.0), color);
     if galley.size().x > r.width() - 8.0 {
         galley = p.layout_no_wrap(short_label(text).to_owned(), bold(10.0), color);
@@ -176,7 +181,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         // Input gain stage ahead of the inserts (the track's trim).
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 34.0));
         inset(ui.painter(), sec, t.strip_section);
-        section_label(ui, sec, "PREAMP");
+        section_label(ui, sec, "PREAMP", narrow);
         if has_input {
             let kr = Rect::from_min_size(pos2(x0 + 6.0, sec.min.y + 15.0), vec2(inner_w - 12.0, 16.0));
             let mut db = track.mixer.trim_db;
@@ -194,7 +199,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     if all || has("instruments") {
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 34.0));
         inset(ui.painter(), sec, t.strip_section);
-        section_label(ui, sec, "INSTRUMENT");
+        section_label(ui, sec, "INSTRUMENT", narrow);
         let sr = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 16.0), vec2(inner_w - 4.0, 15.0));
         let slot = track.mixer.inserts.iter().position(|i| i.as_ref().is_some_and(|i| plugin_info(&i.plugin).is_some_and(|p| p.is_instrument)));
         match slot {
@@ -230,7 +235,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         }
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 16.0 + 5.0 * 17.0));
         inset(ui.painter(), sec, t.strip_section);
-        section_label(ui, sec, title);
+        section_label(ui, sec, title, narrow);
         for k in 0..5 {
             let sr = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 15.0 + k as f32 * 17.0), vec2(inner_w - 4.0, 15.0));
             if is_send {
@@ -283,7 +288,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     if all || has("io") {
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 16.0 + 2.0 * 18.0 + 30.0));
         inset(ui.painter(), sec, t.strip_section);
-        section_label(ui, sec, "I / O");
+        section_label(ui, sec, "I / O", narrow);
         let in_r = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 15.0), vec2(inner_w - 4.0, 16.0));
         let out_r = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 33.0), vec2(inner_w - 4.0, 16.0));
         let mut c = ui.new_child(egui::UiBuilder::new().id_salt(("mix-input", id.0)).max_rect(in_r));

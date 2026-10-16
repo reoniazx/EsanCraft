@@ -398,7 +398,7 @@ mod tests {
     fn windows_ignores_case_and_refuses_devices() {
         let (base, roots) = folders("case");
         let upper = s(base.join("IN/a.scraft"));
-        assert_eq!(roots.check(upper, Access::Read), Ok(()), "{upper}");
+        assert_eq!(roots.check(&upper, Access::Read), Ok(()), "{upper}");
         assert_eq!(roots.check(s(base.join("In/Sub/New.scraft")), Access::Read), Ok(()));
         let e = roots.check(s(base.join("out/NUL")), Access::Write).unwrap_err();
         assert!(e.contains("reserved device names"), "{e}");

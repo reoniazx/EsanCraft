@@ -557,6 +557,8 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, bytes).unwrap();
         }
+        // Only the symlink case below adds to it, and symlinks are a Unix-only part of the test.
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut paths: Vec<PathBuf> = files.iter().map(|(p, _)| p.clone()).collect();
         #[cfg(unix)]
         {

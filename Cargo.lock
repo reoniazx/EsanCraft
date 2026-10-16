@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3585,7 +3585,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-au-host"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "log",
  "serde",
@@ -3595,7 +3595,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-audio-io"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "log",
  "proptest",
@@ -3607,7 +3607,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-automation"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "log",
  "serde_json",
@@ -3617,7 +3617,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-clap-host"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "clap-sys",
  "libloading",
@@ -3630,7 +3630,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-cli"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "serde_json",
  "soundcraft-audio-io",
@@ -3641,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-dsp"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "log",
  "proptest",
@@ -3652,7 +3652,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-engine"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "log",
  "proptest",
@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-midi"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "proptest",
  "serde",
@@ -3684,7 +3684,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-mix"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "log",
  "rayon",
@@ -3700,7 +3700,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-model"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "proptest",
  "serde",
@@ -3713,7 +3713,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-playback"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "cpal",
  "log",
@@ -3728,7 +3728,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-time"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "proptest",
  "serde",
@@ -3738,7 +3738,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-ui-egui"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "craft-ui",
  "egui",
@@ -3764,7 +3764,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-video"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "image",
  "proptest",
@@ -3775,7 +3775,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-vst3-host"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "libloading",
  "log",
@@ -3791,7 +3791,7 @@ dependencies = [
 
 [[package]]
 name = "soundcraft-web"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "eframe",
  "egui",
@@ -5348,7 +5348,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "serde_json",
 ]
