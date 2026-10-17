@@ -6,6 +6,10 @@ use crate::icons;
 use crate::theme::{Tokens, bold, regular};
 use egui::{Align2, Color32, CornerRadius, Mesh, Painter, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
+#[cfg(test)]
+#[path = "widgets/meter_tests.rs"]
+mod meter_tests;
+
 /// `c` moved towards white (`k > 0`) or black (`k < 0`).
 pub fn shade(c: Color32, k: f32) -> Color32 {
     if k >= 0.0 { c.lerp_to_gamma(Color32::WHITE, k) } else { c.lerp_to_gamma(Color32::BLACK, -k) }
@@ -225,11 +229,23 @@ fn meter_bar(r: Rect) -> Rect {
     Rect::from_min_max(pos2(r.min.x + 1.0, r.min.y + 5.0), pos2(r.max.x - 1.0, r.max.y - 1.0))
 }
 
+/// Keep fills, rules and scale ticks on the same physical pixels, without moving the endpoints.
+fn meter_y(p: &Painter, bar: Rect, pos: f32) -> f32 {
+    if pos <= 0.0 {
+        return bar.max.y;
+    }
+    if pos >= 1.0 {
+        return bar.min.y;
+    }
+    let y = bar.max.y - bar.height() * pos;
+    p.round_to_pixel_center(y).clamp(bar.min.y, bar.max.y)
+}
+
 /// The marks that fit on `bar`, at least 9 pt apart from the top down, with their heights.
-fn meter_marks(bar: Rect) -> impl Iterator<Item = (f32, f32)> {
+fn meter_marks(p: &Painter, bar: Rect) -> impl Iterator<Item = (f32, f32)> + '_ {
     let mut last = f32::NEG_INFINITY;
     METER_MARKS.into_iter().filter_map(move |db| {
-        let y = bar.max.y - bar.height() * meter_pos(db);
+        let y = meter_y(p, bar, meter_pos(db));
         (y - last >= 9.0).then(|| {
             last = y;
             (db, y)
@@ -240,13 +256,28 @@ fn meter_marks(bar: Rect) -> impl Iterator<Item = (f32, f32)> {
 /// Vertical peak meter as Pro Tools draws it: a clip light above a bar that lights green, yellow
 /// and red over dark tints of those zones, ruled at the scale's marks. Values are linear peaks.
 pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
+    let bar = meter_bar(r);
+    if !bar.is_finite() || !bar.is_positive() {
+        return;
+    }
     let t = Tokens::current();
     let p = ui.painter();
-    p.rect_filled(Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + 3.0)), 1.0, if clip { t.meter_red } else { t.meter_clip_off });
-    p.rect_filled(Rect::from_min_max(pos2(r.min.x, r.min.y + 4.0), r.max), 0.0, t.meter_bg);
-    let bar = meter_bar(r);
-    let y = |pos: f32| bar.max.y - bar.height() * pos;
-    let (amber, red) = (meter_pos(-12.0), meter_pos(-3.0));
+    p.rect_filled(r, 0.0, t.meter_bg);
+    let clip_light = Rect::from_x_y_ranges(bar.x_range(), r.min.y + 1.0..=r.min.y + 4.0);
+    p.rect_filled(clip_light, 1.0, if clip { t.meter_red } else { t.meter_clip_off });
+    paint_meter_bar(p, bar, level, hold, true);
+}
+
+/// Shared by Mix, the output meter and Edit's compact headers: green below -10 dB, yellow
+/// from -10 to -5 dB, then red. Peak holds and antialiased rules stay inside the bar.
+pub(crate) fn paint_meter_bar(p: &Painter, bar: Rect, level: f32, hold: f32, ruled: bool) {
+    if !bar.is_finite() || !bar.is_positive() {
+        return;
+    }
+    let t = Tokens::current();
+    let p = p.with_clip_rect(bar);
+    let y = |pos: f32| meter_y(&p, bar, pos);
+    let (amber, red) = (meter_pos(-10.0), meter_pos(-5.0));
     let zones = [(0.0, amber, t.meter_green), (amber, red, t.meter_yellow), (red, 1.0, t.meter_red)];
     let lit = level_pos(level);
     let unlit = if t.meter_bg.intensity() > 0.5 { 0.08 } else { 0.18 };
@@ -257,20 +288,27 @@ pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
         quad(&mut mesh, Rect::from_x_y_ranges(bar.x_range(), y(hi)..=y(top)), [color.gamma_multiply(unlit); 4]);
     }
     p.add(mesh);
-    for (_, at) in meter_marks(bar).skip(1) {
-        p.hline(bar.x_range(), p.round_to_pixel_center(at), Stroke::new(1.0, Color32::from_black_alpha(90)));
+    if ruled {
+        for (_, at) in meter_marks(&p, bar).skip(1) {
+            p.hline(bar.x_range(), at, Stroke::new(1.0, Color32::from_black_alpha(90)));
+        }
     }
     let held = level_pos(hold);
     if held > 0.01 {
-        let color = zones.iter().find(|z| held <= z.1).map_or(t.meter_red, |z| z.2);
-        p.rect_filled(Rect::from_x_y_ranges(bar.x_range(), y(held) - 1.0..=y(held) + 1.0), 0.0, color);
+        let color = zones.iter().rev().find(|z| held >= z.0).map_or(t.meter_green, |z| z.2);
+        let mark = Rect::from_x_y_ranges(bar.x_range(), y(held) - 1.0..=y(held) + 1.0).intersect(bar);
+        p.rect_filled(mark, 0.0, color);
     }
 }
 
 /// The dB scale of a [`meter`] drawn in `r`, its numbers ending at `x`.
 pub fn meter_scale(p: &Painter, r: Rect, x: f32) {
+    let bar = meter_bar(r);
+    if !bar.is_finite() || !bar.is_positive() {
+        return;
+    }
     let t = Tokens::current();
-    for (db, y) in meter_marks(meter_bar(r)) {
+    for (db, y) in meter_marks(p, bar) {
         p.text(pos2(x - 3.0, y), Align2::RIGHT_CENTER, format!("{}", db.abs()), regular(8.0), t.text_dim);
         p.hline(x - 2.0..=x, y, Stroke::new(1.0, t.text_dim.gamma_multiply(0.7)));
     }

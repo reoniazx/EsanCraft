@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (G-04: mono device playback fold-down) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (G-19: meter colour boundaries and containment) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -197,6 +197,11 @@ settings command only. Needs an openly licensed local speech model. ≈ 30–50 
 
 ### G-19. UI feel
 
+**Fixed (2026-10-18):** Meter colour boundaries align with the -10 and -5 dB rules and scale
+ticks, including fractional display scales. Clip lights sit inside their wells; full-scale peak
+holds stay inside the bars. Edit headers share the Mix/output band renderer. Other meter types
+and ballistics remain partial; estimates unchanged.
+
 **Done (2026-10-14):** MIDI Editor playback cursor within the piano roll, six independent
 scrolling modes, a stopped Center Playhead cue without replacing selections, and a resizable
 Velocity lane with saved height, keyboard adjustment, reset and note-length tails for
@@ -224,6 +229,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | trivial | G-19 shrunk: meter colours align with -10/-5 dB rules, clip lights sit inside the wells and peak holds stay inside the bars; estimates unchanged |
 | 2026-10-18 | trivial | G-04: mono device stereo/surround fold-down fixed and regression-tested; estimates unchanged |
 | 2026-10-16 | trivial | G-04: failed aux/folder/master inserts excluded from latency compensation after containment; estimates unchanged |
 | 2026-10-16 | trivial | G-04: master volume automation block boundaries fixed and regression-tested; estimates unchanged |

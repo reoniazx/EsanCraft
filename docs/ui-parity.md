@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (note-length Velocity tails) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (meter colour boundaries and containment) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 How SoundCraft feels in the hands of a Pro Tools user: tools, modes, modifiers, shortcuts,
 windows, meters. Measured from `crates/model/src/session.rs` (tools, modes), the command
@@ -62,6 +62,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 | Dark theme close to Pro Tools' | ✅ | Light theme (#32) and live system appearance (#85) beyond Pro Tools |
 | Interface scaling | 🟡 | Slider in PR #147 |
 | Meter types and ballistics (peak, RMS, VU, K-scales, gain reduction) | 🟡 | Peak/RMS; meter type choice and GR meters partial |
+| Meter colour bands and bounds | ✅ | Shared Edit/Mix/output bands change at -10 and -5 dB. Mix rules, ticks and labels share the bands' pixel positions; clip lights sit inside their wells and peak holds remain inside the bars, including at full scale |
 | Clip indicators, track colours, waveform views (peak/power/rectified/outlines) | ✅ | |
 | Fader resolution, fine adjust, numeric entry | 🟡 | |
 | macOS system menu bar | ✅ | #10 |
@@ -70,6 +71,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | trivial | Meter bands align with -10/-5 dB rules and scale ticks, clip lights sit inside the wells, and peak holds stay inside the bars. Edit shares the Mix/output renderer; mono/stereo/multichannel, themes and fractional display scales covered. Readiness estimate unchanged |
 | 2026-10-14 | minor | Note-length Velocity tails enlarge the drag/reset target; nearby stems, zoom/pan, viewport clipping and selection visibility covered |
 | 2026-10-14 | minor | Velocity stems reset to 100 on double-click; overlapping handles, continuous drag targeting, Undo and empty-space clicks covered |
 | 2026-10-14 | minor | Velocity lane height adjusts independently inside the MIDI Editor; saved preference, divider/keyboard input and document isolation tested |

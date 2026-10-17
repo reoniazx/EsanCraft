@@ -3,7 +3,7 @@
 use crate::dialogs::Dialog;
 use crate::spot::Spot;
 use crate::theme::{Tokens, bold, clip_colors, regular, rgb};
-use crate::widgets::{groove, level_pos, meter_pos, raised_key, shade};
+use crate::widgets::{groove, paint_meter_bar, raised_key, shade};
 use crate::{Gesture, SoundApp, toolbar};
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
@@ -1291,20 +1291,47 @@ fn header_meter(ui: &Ui, r: Rect, md: &crate::MeterDisplay, stereo: bool) {
     let body = inner.with_min_y(clip.max.y + 1.0);
     let n = if stereo { 2 } else { 1 };
     let w = (body.width() - (n - 1) as f32) / n as f32;
-    let (amber, red) = (meter_pos(-12.0), meter_pos(-3.0));
     for ch in 0..n {
         let bar = Rect::from_min_size(pos2(body.min.x + ch as f32 * (w + 1.0), body.min.y), vec2(w, body.height()));
-        let y = |f: f32| bar.max.y - bar.height() * f;
-        let lv = level_pos(md.level[ch]);
-        for (lo, hi, col) in [(0.0, amber, t.meter_green), (amber, red, t.meter_yellow), (red, 1.0, t.meter_red)] {
-            p.rect_filled(Rect::from_x_y_ranges(bar.x_range(), y(hi)..=y(lo)), 0.0, col.gamma_multiply(0.18));
-            if lv > lo {
-                p.rect_filled(Rect::from_x_y_ranges(bar.x_range(), y(lv.min(hi))..=y(lo)), 0.0, col);
+        paint_meter_bar(p, bar, md.level[ch], md.hold[ch], false);
+    }
+}
+
+#[cfg(test)]
+mod meter_regressions {
+    use super::*;
+
+    #[test]
+    fn compact_headers_use_the_shared_bands_and_contain_full_scale_holds() {
+        let _palette = crate::theme::lock_test_palette();
+        let ctx = egui::Context::default();
+        for light in [false, true] {
+            crate::theme::apply(&ctx, light);
+            for stereo in [false, true] {
+                for height in [36.0, 96.0] {
+                    let r = Rect::from_min_size(pos2(20.2, 20.3), vec2(8.0, height));
+                    let md = crate::MeterDisplay { level: [0.4, 4.0], hold: [0.4, 4.0], clip: true, ..Default::default() };
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| header_meter(ui, r, &md, stereo));
+                    output.textures_delta.clear();
+                    let bars: Vec<_> = output.shapes.iter().filter(|s| matches!(&s.shape, Shape::Mesh(_))).collect();
+                    assert_eq!(bars.len(), if stereo { 2 } else { 1 });
+                    let colors: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            Shape::Rect(mark) if bars.iter().any(|bar| bar.clip_rect == s.clip_rect) => {
+                                assert!(s.clip_rect.contains_rect(mark.rect));
+                                Some(mark.fill)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(colors.first(), Some(&Tokens::current().meter_yellow));
+                    if stereo {
+                        assert_eq!(colors.last(), Some(&Tokens::current().meter_red));
+                    }
+                }
             }
-        }
-        let hv = level_pos(md.hold[ch]);
-        if hv > 0.01 {
-            p.hline(bar.x_range(), y(hv), Stroke::new(1.0, if hv > red { t.meter_red } else { t.meter_yellow }));
         }
     }
 }
