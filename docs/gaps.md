@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** trivial (G-04: failed insert latency compensation) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (G-04: mono device playback fold-down) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -79,6 +79,11 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
   black-box format study is in the clean-room rules; not included in the estimate.
 
 ### G-04. Correctness bugs in "done" features
+
+**Fixed (2026-10-18):** Mono device playback averages the stereo channels before output clipping,
+instead of discarding the right side. Surround mixes average both sides of the ITU stereo
+fold-down. Regression tests cover right-only and left-only audio, equal and opposite-polarity
+channels, clipping order, centered mono tracks, each 5.1 channel and 1-, 37- and 512-frame callbacks.
 
 **Fixed (2026-10-16):** Aux, folder and master latency calculations now skip inserts already
 disabled for producing NaN or infinity. Subsequent blocks compensate only for healthy inserts;
@@ -219,6 +224,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | trivial | G-04: mono device stereo/surround fold-down fixed and regression-tested; estimates unchanged |
 | 2026-10-16 | trivial | G-04: failed aux/folder/master inserts excluded from latency compensation after containment; estimates unchanged |
 | 2026-10-16 | trivial | G-04: master volume automation block boundaries fixed and regression-tested; estimates unchanged |
 | 2026-10-16 | trivial | G-04: Split into Mono channel preservation fixed and regression-tested; estimates unchanged |

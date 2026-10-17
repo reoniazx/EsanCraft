@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** trivial (failed insert latency compensation) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (mono device playback fold-down) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -122,6 +122,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 ## Progress log
 
+- **2026-10-18:** Mono audio devices receive the average of the stereo channels before output clipping, retaining right-only audio. Surround mixes use the same average after their ITU stereo fold-down. Regression tests cover channel balance, polarity cancellation, clipping, centered mono tracks, each 5.1 channel and several callback sizes. No readiness percentage change.
 - **2026-10-16:** Aux, folder and master latency calculations exclude inserts already taken out for producing NaN or infinity, matching audio tracks. Subsequent blocks no longer compensate for an insert that is bypassed after failure. Regression tests check impulse timing, healthy insert latency and reset/retry at 64- and 512-sample blocks. No readiness percentage change.
 - **2026-10-16:** Master fader volume automation uses each render block's actual last sample, matching track faders. Breakpoints in the next block no longer pull the preceding block's level toward them, and ramps reach their last-sample value. Regression tests cover nonzero starts, one-sample callbacks and several block sizes. No readiness percentage change.
 - **2026-10-16:** Split into Mono extracts the correct source channel for each mono track instead of playing channel zero on every track. Clip offsets, gain, fades and stretch, source timestamps, Undo/Redo and saved audio are preserved; repeated clips share each extracted mono source. Unavailable media returns an error without partial edits. No readiness percentage change.
@@ -161,6 +162,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | trivial | Mono device playback retains both stereo sides and surround fold-down channels; readiness estimates unchanged |
 | 2026-10-16 | trivial | Failed inserts no longer contribute aux, folder or master latency after containment; readiness estimates unchanged |
 | 2026-10-16 | trivial | Master volume automation block boundaries corrected; readiness estimates unchanged |
 | 2026-10-16 | trivial | Split into Mono preserves each source channel, clip edits and saved audio; readiness estimates unchanged |
