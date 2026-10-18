@@ -695,6 +695,7 @@ mod tests {
             frame_rate: 23.976,
             duration: 12.5,
             codec: "prores".into(),
+            offline: None,
         });
         let cid = s.new_clip_id();
         if let Some(p) = s.track_mut(t).and_then(Track::playlist_mut) {

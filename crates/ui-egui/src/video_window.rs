@@ -24,7 +24,7 @@ fn video(app: &mut SoundApp, ctx: &egui::Context) {
     let s = app.engine.session_arc();
     let pic = picture_at(&s, pos);
     let on = online(&s);
-    if on && let Some((key, path, secs, fps)) = &pic {
+    if on && let Some((key, Ok(path), secs, fps)) = &pic {
         app.video.request_frame(ctx, *key, path, *secs, *fps);
     }
     let aspect = pic
@@ -39,6 +39,7 @@ fn video(app: &mut SoundApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             crate::widgets::checkbox(ui, &mut burn, "Timecode burn-in");
             let text = match &pic {
+                Some((_, Err(why), ..)) => why.clone(),
                 Some((k, ..)) => match app.video.info(*k) {
                     Some(Ok(i)) => format!("{}x{}  {:.3} fps  {}", i.width, i.height, i.frame_rate, i.codec_detail),
                     Some(Err(e)) => e.clone(),
@@ -64,6 +65,7 @@ fn video(app: &mut SoundApp, ctx: &egui::Context) {
         } else {
             match &pic {
                 None => None,
+                Some((_, Err(why), ..)) => Some(why.clone()),
                 Some((k, ..)) => match (app.video.current(*k), app.video.current_error(*k)) {
                     (Some(tex), _) => {
                         painter.image(tex.id(), img, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -130,7 +132,7 @@ fn universe(app: &mut SoundApp, ctx: &egui::Context) {
             let key = MovieKey::new(source, &v.path);
             let cr = Rect::from_min_max(pos2(x_at(c.start), r.min.y + 4.0), pos2(x_at(c.end()).max(x_at(c.start) + 2.0), r.max.y - 4.0));
             painter.rect_filled(cr, 0.0, Color32::from_rgb(30, 30, 34));
-            if !on {
+            if !on || v.offline.is_some() {
                 continue;
             }
             let tw = (cr.height() * v.aspect() as f32).max(8.0);

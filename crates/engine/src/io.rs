@@ -60,6 +60,23 @@ pub fn file_found(path: impl AsRef<Path>) -> bool {
     crate::file_access::check_read(path).is_ok() && path.is_file()
 }
 
+/// The file a path stored in the session file `session` refers to, or why it is not opened.
+///
+/// Every path a session names (audio sources, movies) goes through here before it reaches the
+/// file system. A relative path is taken from the session's folder, and only files on this
+/// computer or on the network share the session itself is on are opened (`craft_docpath`).
+/// Paths the person picks in this session (imports) are not stored paths and skip this.
+pub fn stored_path(stored: &str, session: &Path) -> std::result::Result<PathBuf, String> {
+    let session = std::path::absolute(session).unwrap_or_else(|_| session.to_path_buf());
+    let path = craft_docpath::resolve(stored, Some(&session)).map_err(|why| format!("not opened: {why}"))?;
+    // A path that is still relative would be taken from the working directory, which the session
+    // does not choose.
+    if path.is_relative() {
+        return Err("not opened: the path is not absolute".into());
+    }
+    Ok(path)
+}
+
 /// Create `dir` and its parents, inside the automation write root when there is one.
 pub(crate) fn make_dir(dir: impl AsRef<Path>) -> Result<()> {
     let dir = dir.as_ref();
@@ -206,6 +223,7 @@ pub fn import_video_bytes(e: &mut Engine, path: &str, bytes: Vec<u8>, at: Sample
         frame_rate: info.frame_rate,
         duration: info.duration,
         codec: info.codec.clone(),
+        offline: None,
     });
     // Reuse the first Video track when the new clip does not overlap its clips; else add one at the top.
     let range = Range::new(at, at.saturating_add(len));
@@ -235,22 +253,35 @@ pub fn import_video_bytes(e: &mut Engine, path: &str, bytes: Vec<u8>, at: Sample
     }))
 }
 
-/// Resolve each referenced movie: keep it when its path exists, else look for a file of the same
-/// name next to the session (moved projects) and relink. Returns the movies still missing.
-pub fn relink_videos(s: &mut Session, session_dir: &Path) -> Vec<String> {
+/// Resolve each movie referenced by the session file `session` ([`stored_path`]): keep the
+/// resolved path when its file exists, else look for a file of the same name next to the session
+/// (moved projects) and relink. A movie whose stored path is refused and has no such copy is
+/// marked offline. Returns the movies still missing.
+pub fn relink_videos(s: &mut Session, session: &Path) -> Vec<String> {
+    let session_dir = session.parent().unwrap_or(Path::new(""));
     let mut missing = Vec::new();
     for v in &mut s.videos {
-        let p = if Path::new(&v.path).is_absolute() { PathBuf::from(&v.path) } else { session_dir.join(&v.path) };
-        if file_found(&p) {
+        v.offline = None;
+        let p = stored_path(&v.path, session);
+        // The UI opens `path` as it is: keep the checked path, not one relative to the working
+        // directory.
+        if let Ok(found) = &p
+            && file_found(found)
+        {
+            v.path = found.to_string_lossy().into_owned();
             continue;
         }
         let name = Path::new(&v.path).file_name().map(PathBuf::from).unwrap_or_default();
         let near = [session_dir.join(&name), session_dir.join("Video Files").join(&name)]
             .into_iter()
             .find(|c| !name.as_os_str().is_empty() && file_found(c));
-        match near {
-            Some(c) => v.path = c.to_string_lossy().into_owned(),
-            None => missing.push(format!("{} (video)", p.display())),
+        match (near, p) {
+            (Some(c), _) => v.path = c.to_string_lossy().into_owned(),
+            (None, Ok(p)) => missing.push(format!("{} (video)", p.display())),
+            (None, Err(why)) => {
+                missing.push(format!("{} (video): {why}", v.path));
+                v.offline = Some(why);
+            }
         }
     }
     missing
@@ -1096,19 +1127,26 @@ fn store_wav(dir: &Path, stem: &str, bytes: &[u8]) -> Result<(String, bool)> {
 
 /// Open a `.scraft` session and decode its audio files (missing files are reported, not fatal).
 pub fn open_session(e: &mut Engine, path: &str) -> Result<Vec<String>> {
+    open_session_linked(e, path, Path::new(path))
+}
+
+/// [`open_session`], following the media paths in it as if they were stored in the session file
+/// `links` (crash recovery: the session written beside the autosave, its paths from the original).
+pub(crate) fn open_session_linked(e: &mut Engine, path: &str, links: &Path) -> Result<Vec<String>> {
     let text = read_text(path)?;
     let mut s = Session::from_json(&text).map_err(|err| EngineError::Io(err.to_string()))?;
     let dir = Path::new(path).parent().map(Path::to_path_buf).unwrap_or_default();
     let mut missing = Vec::new();
     let mut files = DecodedFiles::new();
     for src in &s.sources {
-        let p = if Path::new(&src.path).is_absolute() { PathBuf::from(&src.path) } else { dir.join(&src.path) };
-        match decode_file(&mut files, &p, s.sample_rate.hz()) {
+        let decoded =
+            stored_path(&src.path, links).map_err(|why| format!("{}: {why}", src.path)).and_then(|p| decode_file(&mut files, &p, s.sample_rate.hz()));
+        match decoded {
             Ok(audio) => s.pool.insert(src.id, audio),
             Err(err) => missing.push(err),
         }
     }
-    missing.extend(relink_videos(&mut s, &dir));
+    missing.extend(relink_videos(&mut s, links));
     s.folder = Some(dir);
     e.replace_session(s);
     e.path = Some(path.to_string());
@@ -1729,6 +1767,60 @@ mod open_tests {
         assert!(e.session().sources.iter().all(|src| src.path == "Audio Files/k.wav"));
         assert_eq!(save_copy(&e, &dir.join("copy/Song.scraft").to_string_lossy()).unwrap(), 1);
         assert_eq!(std::fs::read_dir(dir.join("copy/Audio Files")).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn stored_media_paths_are_followed_only_on_this_computer() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-stored-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.25; 480]] };
+        std::fs::write(dir.join("k.wav"), soundcraft_audio_io::encode(&audio, &EncodeOptions::default()).unwrap()).unwrap();
+        let mut saved = Session::default();
+        let t = saved.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let src = add_source(&mut saved, "k", audio, Some("../k.wav"), FileFormat::Wav);
+        let id = saved.new_clip_id();
+        crate::edit::place_clip(&mut saved, t, Clip::audio(id, "k", src, 0, 0, 480));
+        // In a folder of its own, so a movie named `k.wav` is not relinked to a file beside it.
+        std::fs::create_dir_all(dir.join("s")).unwrap();
+        let path = dir.join("s").join("Song.scraft").to_string_lossy().into_owned();
+        let mut stored = vec![r"\\192.0.2.1\share\x.wav".to_string(), "file://192.0.2.1/s/x.wav".to_string()];
+        // Linux reads `//tmp/…` as the local `/tmp/…`, so only the path check keeps it from being read.
+        if cfg!(unix) {
+            stored.push(format!("/{}", dir.join("k.wav").display()));
+        }
+        let refused = |m: &str| m.contains("not opened: the path is on another computer");
+        for p in stored {
+            let mut s = saved.clone();
+            s.sources[0].path.clone_from(&p);
+            let id = SourceId(s.alloc());
+            s.videos.push(soundcraft_model::VideoSource {
+                id,
+                name: "x".into(),
+                path: p.clone(),
+                width: 0,
+                height: 0,
+                frame_rate: 0.0,
+                duration: 0.0,
+                codec: String::new(),
+                offline: None,
+            });
+            std::fs::write(&path, s.to_json().unwrap()).unwrap();
+            let mut r = Engine::default();
+            let missing = open_session(&mut r, &path).unwrap();
+            assert_eq!(missing.iter().filter(|m| refused(m)).count(), 2, "{p}: {missing:?}");
+            assert!(r.session().pool.get(r.session().sources[0].id).is_none(), "{p}");
+            assert!(r.session().videos[0].offline.is_some(), "{p}");
+            let mut into = Engine::default();
+            let imported = into.execute("file.import_session_data", &json!({"path": path})).unwrap();
+            assert!(imported["missing"].as_array().unwrap().iter().any(|m| m.as_str().is_some_and(refused)), "{p}: {imported}");
+            assert!(into.session().pool.get(into.session().sources[0].id).is_none(), "{p}");
+        }
+        // A path relative to the session opens.
+        std::fs::write(&path, saved.to_json().unwrap()).unwrap();
+        let mut r = Engine::default();
+        assert!(open_session(&mut r, &path).unwrap().is_empty());
+        assert!(r.session().pool.get(r.session().sources[0].id).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

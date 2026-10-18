@@ -109,6 +109,10 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
 /// a sequence). On error the contents of `out` are unspecified.
 pub fn decode_frame_into(data: &[u8], opts: &DecodeOptions, out: &mut Frame) -> Result<()> {
     let (hdr, mut off, frame_size) = FrameHeader::parse(data)?;
+    // The planes are sized from the header: refuse a size no movie may have before allocating.
+    if u64::from(hdr.width) * u64::from(hdr.height) > crate::movie::MAX_PIXELS {
+        return Err(Error::Unsupported("frame size"));
+    }
     let data = &data[..frame_size];
     let depth = opts.bit_depth.unwrap_or(match hdr.chroma {
         ChromaFormat::Yuv422 => 10,

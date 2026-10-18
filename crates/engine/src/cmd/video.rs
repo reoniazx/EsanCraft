@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             offset
         ),
-        cmd!(query "video.list", "Movies", [], None, "{} — movies used by Video tracks (path, size, rate, codec, online file)", always, |e, _| {
+        cmd!(query "video.list", "Movies", [], None, "{} — movies used by Video tracks (path, size, rate, codec, online file, why it is offline)", always, |e, _| {
             let s = e.session();
             let rows: Vec<Value> = s
                 .videos
@@ -36,7 +36,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 .map(|v| {
                     let clips = s.tracks.iter().flat_map(|t| t.clips()).filter(|c| c.video_source() == Some(v.id)).count();
                     json!({"id": v.id, "name": v.name, "path": v.path, "width": v.width, "height": v.height, "frame_rate": v.frame_rate,
-                        "duration": v.duration, "codec": v.codec, "clips": clips, "file_found": crate::io::file_found(&v.path)})
+                        "duration": v.duration, "codec": v.codec, "clips": clips,
+                        "file_found": v.offline.is_none() && crate::io::file_found(&v.path), "offline": v.offline})
                 })
                 .collect();
             Ok(json!({"videos": rows, "online": !s.edit.flag(OFFLINE_FLAG)}))
@@ -92,6 +93,7 @@ mod tests {
             frame_rate: 24.0,
             duration: 2.0,
             codec: "h264".into(),
+            offline: None,
         });
         let c = s.new_clip_id();
         crate::edit::place_clip(s, t, Clip::video(c, "m", vid, 0, 1000, 96_000));

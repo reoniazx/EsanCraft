@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub type SharedSource = Arc<dyn ByteSource + Send + Sync>;
 
 /// Largest picture we decode (bounds every allocation derived from the file).
-const MAX_PIXELS: u64 = 8192 * 8192;
+pub(crate) const MAX_PIXELS: u64 = 8192 * 8192;
 
 /// A decoded picture, packed RGBA (8 bits per channel, `width * height * 4` bytes).
 #[derive(Debug, Clone, PartialEq)]
@@ -395,6 +395,11 @@ impl Movie {
         self.decoded += 1;
         match self.codec {
             Codec::ProRes => {
+                let (hdr, ..) = crate::prores::FrameHeader::parse(&data).map_err(|e| VideoError::Decode(e.to_string()))?;
+                let (w, h) = (u32::from(hdr.width), u32::from(hdr.height));
+                if (w, h) != (self.info.width, self.info.height) {
+                    return Err(VideoError::Decode(format!("{w}x{h} frame in a {}x{} track", self.info.width, self.info.height)));
+                }
                 let opts = crate::prores::DecodeOptions { bit_depth: Some(8), threads: false };
                 let f = crate::prores::decode_frame_with(&data, &opts).map_err(|e| VideoError::Decode(e.to_string()))?;
                 if u64::from(f.width) * u64::from(f.height) > MAX_PIXELS {

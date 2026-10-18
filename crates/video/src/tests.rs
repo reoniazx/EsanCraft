@@ -96,6 +96,28 @@ fn prores_and_mjpeg_decode() {
     }
 }
 
+/// A 64x48 ProRes frame whose header claims `w`x`h`.
+fn prores_frame_claiming(w: u16, h: u16) -> Vec<u8> {
+    use crate::prores::{ChromaFormat, Encoder, Frame, Profile};
+    let mut data = Encoder::new(Profile::Hq, 64, 48).encode(&Frame::new(64, 48, ChromaFormat::Yuv422, 10, false)).unwrap();
+    data[16..18].copy_from_slice(&w.to_be_bytes());
+    data[18..20].copy_from_slice(&h.to_be_bytes());
+    data
+}
+
+#[test]
+fn prores_frame_size_is_checked_before_decoding() {
+    use crate::prores::{DecodeOptions, Error, decode_frame_with};
+    let huge = decode_frame_with(&prores_frame_claiming(65535, 65535), &DecodeOptions::default());
+    assert!(matches!(huge, Err(Error::Unsupported("frame size"))), "{huge:?}");
+    // A frame that differs from the track's declared size is refused, not decoded at its own size.
+    let mut mw = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mov)).unwrap();
+    let t = mw.add_track(TrackConfig::new(SampleEntry::prores(crate::isobmff::FourCc(*b"apch"), 64, 48), 25)).unwrap();
+    mw.write_sample(t, WriteSample { data: &prores_frame_claiming(56, 48), duration: 1, composition_offset: 0, is_sync: true }).unwrap();
+    let mut m = Movie::open(mw.finish().unwrap().into_inner()).unwrap();
+    assert!(matches!(m.frame(0), Err(VideoError::Decode(e)) if e.contains("56x48 frame in a 64x48 track")));
+}
+
 #[test]
 fn unsupported_codec_opens_but_does_not_decode() {
     let mut mw = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();

@@ -7,7 +7,7 @@ use crate::cmd;
 use serde_json::json;
 use soundcraft_model::{BusId, ChannelFormat, ClipContent, OutputPath, Route, Session, SourceId, TrackId, TrackKind};
 use soundcraft_time::Timecode;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 macro_rules! option {
     ($id:literal, $label:literal, $flag:literal) => {
@@ -407,7 +407,6 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(id, "`path` required"))?.to_string();
     let text_v = crate::io::read_text(&path)?;
     let other = Session::from_json(&text_v).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
-    let dir = Path::new(&path).parent().map(Path::to_path_buf).unwrap_or_default();
     let names: Option<Vec<String>> =
         p.get("tracks").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
     let picked: Vec<soundcraft_model::Track> = match &names {
@@ -435,20 +434,27 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut map: std::collections::BTreeMap<u64, SourceId> = Default::default();
     let mut missing = Vec::new();
     for src in needed.iter().filter_map(|sid| other.source(*sid)) {
-        let abs = if Path::new(&src.path).is_absolute() { PathBuf::from(&src.path) } else { dir.join(&src.path) };
         let mut ns = src.clone();
         ns.id = SourceId(s.alloc());
-        ns.path = abs.to_string_lossy().into_owned();
-        match crate::io::decode_file(&mut files, &abs, sr) {
-            Ok(audio) => {
-                ns.frames = audio.buffer.frames() as u64;
-                ns.sample_rate = sr;
-                ns.unsaved = true;
-                s.pool.insert(ns.id, audio);
+        match crate::io::stored_path(&src.path, Path::new(&path)) {
+            Ok(abs) => {
+                ns.path = abs.to_string_lossy().into_owned();
+                match crate::io::decode_file(&mut files, &abs, sr) {
+                    Ok(audio) => {
+                        ns.frames = audio.buffer.frames() as u64;
+                        ns.sample_rate = sr;
+                        ns.unsaved = true;
+                        s.pool.insert(ns.id, audio);
+                    }
+                    Err(_) => {
+                        ns.unsaved = false;
+                        missing.push(ns.path.clone());
+                    }
+                }
             }
-            Err(_) => {
+            Err(why) => {
                 ns.unsaved = false;
-                missing.push(ns.path.clone());
+                missing.push(format!("{}: {why}", ns.path));
             }
         }
         map.insert(src.id.0, ns.id);

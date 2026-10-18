@@ -1,7 +1,7 @@
 //! Crash-recovery copies of open sessions, one folder each, written in the background, and the
 //! recovery of the ones left behind with unsaved work.
 
-use crate::io::{Recording, open_session, sanitize_name};
+use crate::io::{Recording, open_session_linked, sanitize_name};
 use crate::{Engine, EngineError, Result};
 use soundcraft_audio_io::{BitDepth, EncodeOptions, FileFormat};
 use soundcraft_model::{Session, SourceAudio, SourceId};
@@ -197,7 +197,7 @@ impl Autosave {
             let file = if Path::new(&src.path).is_absolute() { Some(PathBuf::from(&src.path)) } else { base.as_ref().map(|b| b.join(&src.path)) };
             let audio = s.pool.get(src.id);
             if let Some(f) = &file
-                && (!src.unsaved && f.is_file() || audio.is_none())
+                && (audio.is_none() || !src.unsaved && f.is_file())
             {
                 src.path = f.to_string_lossy().into_owned();
                 continue;
@@ -291,7 +291,9 @@ pub fn leftovers(root: &Path) -> Vec<Leftover> {
 /// media that couldn't be loaded.
 pub fn recover(e: &mut Engine, left: &Leftover) -> Result<Vec<String>> {
     let mut r = Engine::default();
-    let mut missing = open_session(&mut r, &left.dir.join(SESSION).to_string_lossy())?;
+    let session = left.dir.join(SESSION);
+    let links = left.origin.as_deref().map_or(session.as_path(), Path::new);
+    let mut missing = open_session_linked(&mut r, &session.to_string_lossy(), links)?;
     let mut s = r.session().clone();
     let unfinished = unfinished_takes(left, &s, &mut missing);
     if let Some(home) = left.origin.as_deref().and_then(|o| Path::new(o).parent()) {
@@ -315,7 +317,8 @@ pub fn recover(e: &mut Engine, left: &Leftover) -> Result<Vec<String>> {
 /// is left untouched and added to `skipped`.
 fn unfinished_takes(left: &Leftover, s: &Session, skipped: &mut Vec<String>) -> Option<(Recording, Vec<(soundcraft_model::TrackId, PathBuf)>)> {
     let plan: Recording = serde_json::from_str(&std::fs::read_to_string(left.dir.join(RECORDING)).ok()?).ok()?;
-    let known: Vec<PathBuf> = s.sources.iter().filter_map(|src| std::fs::canonicalize(&src.path).ok()).collect();
+    let known: Vec<PathBuf> =
+        s.sources.iter().filter(|src| s.pool.get(src.id).is_some()).filter_map(|src| std::fs::canonicalize(&src.path).ok()).collect();
     let folders = take_folders(left);
     let mut takes = Vec::new();
     for t in &plan.takes {
@@ -413,6 +416,7 @@ fn io_error(path: &Path, err: std::io::Error) -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::open_session;
     use serde_json::json;
     use soundcraft_audio_io::AudioBuffer;
     use soundcraft_model::{ChannelFormat, Clip, TrackKind};
