@@ -31,6 +31,7 @@ fn multilingual_track_and_clip_names_can_be_entered_and_saved() {
 
     for name in [
         "ร้องนำ - น้ำเสียง ๑",
+        "ສຽງຮ້ອງ - ບັນທຶກ ໑໒໓",
         "录音轨道 / 錄音軌道",
         "ボーカル 録音",
         "보컬 녹음",
@@ -64,4 +65,31 @@ fn multilingual_track_and_clip_names_can_be_entered_and_saved() {
         assert_eq!(restored.track(track_id).unwrap().name, name);
         assert_eq!(restored.find_clip(clip_id).unwrap().1.name, clip_name);
     }
+}
+
+#[test]
+fn pasted_lao_names_preserve_combining_marks_and_mixed_text() {
+    let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    let track = app.engine.session().track_by_name("Kick").unwrap();
+    let track_id = track.id;
+    let clip_id = track.clips().first().unwrap().id;
+    let ctx = egui::Context::default();
+    let name = "ສຽງຮ້ອງ ກິ່ ກຸ້ / เสียงร้อง / Vocal ໑໒໓";
+    for is_clip in [false, true] {
+        if is_clip {
+            app.dialogs.open_rename_clip(clip_id, "");
+        } else {
+            app.dialogs.open_rename_track(track_id, "");
+        }
+        for _ in 0..3 {
+            frame(&ctx, &mut app, vec![]);
+        }
+        frame(&ctx, &mut app, vec![Event::Paste(name.into())]);
+        frame(&ctx, &mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        assert!(app.dialogs.open.is_none());
+    }
+    let saved = app.engine.session().to_json().unwrap();
+    let restored = soundcraft_model::Session::from_json(&saved).unwrap();
+    assert_eq!(restored.track(track_id).unwrap().name, name);
+    assert_eq!(restored.find_clip(clip_id).unwrap().1.name, name);
 }

@@ -24,6 +24,12 @@ macro_rules! noto {
 
 const BUNDLED: &[BundledFont] = &[
     BundledFont {
+        name: "NotoSansLao",
+        regular: include_bytes!("../../../assets/fonts/noto-sans-lao/NotoSansLao-Regular.ttf"),
+        bold: include_bytes!("../../../assets/fonts/noto-sans-lao/NotoSansLao-Bold.ttf"),
+        index: 0,
+    },
+    BundledFont {
         name: "NotoSansThai",
         regular: include_bytes!("../../../assets/fonts/noto-sans-thai/NotoSansThai-Regular.ttf"),
         bold: include_bytes!("../../../assets/fonts/noto-sans-thai/NotoSansThai-Bold.ttf"),
@@ -218,6 +224,7 @@ mod tests {
     #[test]
     fn bundled_fonts_cover_requested_scripts_without_system_fonts() {
         let samples = [
+            ("Lao", "ສຽງຮ້ອງ ບັນທຶກ ດົນຕີ ໑໒໓"),
             ("Simplified Chinese", "录音轨道 汉字"),
             ("Traditional Chinese", "錄音軌道 漢字"),
             ("Japanese", "ボーカル 音楽 録音"),
@@ -256,6 +263,53 @@ mod tests {
                         assert!(galley.size().x.is_finite() && galley.size().x > 0.0, "{script} layout must be finite");
                         assert!(galley.mesh_bounds.is_finite(), "{script} glyph bounds must be finite");
                     }
+                }
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn bundled_fonts_cover_lao_in_every_ui_family() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(bundled_definitions());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.ctx().fonts_mut(|fonts| {
+                for family in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name("bold".into())] {
+                    let id = FontId::new(12.0, family);
+                    let replacement = fonts.layout_no_wrap("\u{10FFFF}".into(), id.clone(), Color32::WHITE);
+                    let missing_uv: Vec<_> = replacement.rows.iter().flat_map(|row| row.row.glyphs.iter().map(|g| g.uv_rect)).collect();
+                    // Assigned Lao letters (including Pali), combining marks, digits and punctuation.
+                    for (start, end) in [
+                        (0x0E81, 0x0E82),
+                        (0x0E84, 0x0E84),
+                        (0x0E86, 0x0E8A),
+                        (0x0E8C, 0x0EA3),
+                        (0x0EA5, 0x0EA5),
+                        (0x0EA7, 0x0EBD),
+                        (0x0EC0, 0x0EC4),
+                        (0x0EC6, 0x0EC6),
+                        (0x0EC8, 0x0ECE),
+                        (0x0ED0, 0x0ED9),
+                        (0x0EDC, 0x0EDF),
+                    ] {
+                        for code in start..=end {
+                            if let Some(ch) = char::from_u32(code) {
+                                let galley = fonts.layout_no_wrap(ch.to_string(), id.clone(), Color32::WHITE);
+                                let uv: Vec<_> = galley.rows.iter().flat_map(|row| row.row.glyphs.iter().map(|g| g.uv_rect)).collect();
+                                assert_ne!(uv, missing_uv, "missing Lao character U+{code:04X} in {:?}", id.family);
+                            }
+                        }
+                    }
+                    for (base, marked) in [("ກ", "ກິ່"), ("ກ", "ກຸ້")] {
+                        let base = fonts.layout_no_wrap(base.into(), id.clone(), Color32::WHITE);
+                        let marked = fonts.layout_no_wrap(marked.into(), id.clone(), Color32::WHITE);
+                        assert!((base.size().x - marked.size().x).abs() < 0.1, "Lao marks must attach without adding advance width");
+                        assert!(marked.mesh_bounds.is_finite());
+                    }
+                    let mixed = fonts.layout_no_wrap("ສຽງຮ້ອງ - เสียงร้อง - Vocal ໑໒໓.wav".into(), id, Color32::WHITE);
+                    assert!(mixed.size().x.is_finite() && mixed.size().x > 0.0);
+                    assert!(mixed.mesh_bounds.is_finite());
                 }
             });
         });

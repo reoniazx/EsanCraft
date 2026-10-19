@@ -8,6 +8,7 @@ monospace fields use the regular fallback for scripts absent from the base font.
 
 | Script / language group | Bundled font |
 |---|---|
+| Lao | Noto Sans Lao |
 | Thai | Noto Sans Thai |
 | Simplified / Traditional Chinese, Japanese kana, Korean Hangul | Noto Sans CJK |
 | Arabic, including Arabic-script text used by Urdu, Sindhi and Kashmiri | Noto Sans Arabic |
@@ -45,8 +46,10 @@ stored in its original Unicode order; SoundCraft does not reverse or replace
 session strings to approximate right-to-left rendering.
 
 Tests check script sample glyphs in all three UI font families without system
-fonts, retain the Thai combining-mark regression, and exercise multilingual input
-through real track/clip rename dialogs followed by session serialization.
+fonts, check Lao letters, digits and combining marks alongside the Thai regression,
+and exercise multilingual input through real track/clip rename dialogs followed
+by session serialization. Lao tests
+also cover pasting mixed Lao/Thai/Latin names and preservation of combining marks.
 
 All font files, upstream revisions and licenses are recorded in
 [`ATTRIBUTION.md`](../ATTRIBUTION.md) and the font directories' README files.

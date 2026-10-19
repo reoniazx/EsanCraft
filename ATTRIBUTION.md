@@ -21,7 +21,7 @@ are bundled.
 
 ## Fonts
 
-SoundCraft bundles regular and bold Noto fallback fonts for Thai, Chinese, Japanese, Korean,
+SoundCraft bundles regular and bold Noto fallback fonts for Lao, Thai, Chinese, Japanese, Korean,
 Arabic, Hebrew and Indic scripts on all platforms, including Web/WASM, under the SIL Open Font
 License 1.1. The unmodified upstream fonts and licenses are in `assets/fonts/`; licenses are also
 available in About SoundCraft. See [text support](docs/text-support.md) for coverage and RTL limits.
@@ -36,6 +36,9 @@ and, at runtime, the operating system's own UI fonts when available (never redis
 | `assets/fonts/noto-sans-thai/NotoSansThai-Regular.ttf` | The Noto Project Authors | [Noto Sans Thai](https://github.com/notofonts/noto-fonts/tree/main/hinted/ttf/NotoSansThai), revision recorded in the adjacent README | SIL Open Font License 1.1 (`assets/fonts/noto-sans-thai/OFL.txt`) |
 | `assets/fonts/noto-sans-thai/NotoSansThai-Bold.ttf` | The Noto Project Authors | [Noto Sans Thai](https://github.com/notofonts/noto-fonts/tree/main/hinted/ttf/NotoSansThai), revision recorded in the adjacent README | SIL Open Font License 1.1 (`assets/fonts/noto-sans-thai/OFL.txt`) |
 | `assets/fonts/noto-sans-thai/OFL.txt` | The Noto Project Authors | [upstream license](https://github.com/notofonts/noto-fonts/blob/main/LICENSE) | SIL Open Font License 1.1 |
+| `assets/fonts/noto-sans-lao/OFL.txt` | The Noto Project Authors | [upstream release](https://github.com/notofonts/lao/releases/tag/NotoSansLao-v2.003) | SIL Open Font License 1.1 |
+| `assets/fonts/noto-sans-lao/NotoSansLao-Regular.ttf` | The Noto Project Authors | [upstream](https://github.com/notofonts/lao/releases/tag/NotoSansLao-v2.003) | SIL Open Font License 1.1 (`assets/fonts/noto-sans-lao/OFL.txt`) |
+| `assets/fonts/noto-sans-lao/NotoSansLao-Bold.ttf` | The Noto Project Authors | [upstream](https://github.com/notofonts/lao/releases/tag/NotoSansLao-v2.003) | SIL Open Font License 1.1 (`assets/fonts/noto-sans-lao/OFL.txt`) |
 | `assets/fonts/noto/NotoSansArabic-Regular.ttf` | The Noto Project Authors | [upstream](https://github.com/notofonts/noto-fonts/tree/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSansArabic) | SIL Open Font License 1.1 (`assets/fonts/noto/OFL.txt`) |
 | `assets/fonts/noto/NotoSansArabic-Bold.ttf` | The Noto Project Authors | [upstream](https://github.com/notofonts/noto-fonts/tree/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSansArabic) | SIL Open Font License 1.1 (`assets/fonts/noto/OFL.txt`) |
 | `assets/fonts/noto/NotoSansHebrew-Regular.ttf` | The Noto Project Authors | [upstream](https://github.com/notofonts/noto-fonts/tree/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSansHebrew) | SIL Open Font License 1.1 (`assets/fonts/noto/OFL.txt`) |

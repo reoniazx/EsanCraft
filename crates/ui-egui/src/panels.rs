@@ -629,6 +629,7 @@ fn about(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.collapsing("Bundled font licenses", |ui| {
                     for (name, license) in [
                         ("Noto Sans Thai", include_str!("../../../assets/fonts/noto-sans-thai/OFL.txt")),
+                        ("Noto Sans Lao", include_str!("../../../assets/fonts/noto-sans-lao/OFL.txt")),
                         ("Noto Arabic, Hebrew and Indic fonts", include_str!("../../../assets/fonts/noto/OFL.txt")),
                         ("Noto Sans CJK", include_str!("../../../assets/fonts/noto-cjk/OFL.txt")),
                     ] {
