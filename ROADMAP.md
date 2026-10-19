@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (mono device playback fold-down) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** trivial (merge upstream updates, retaining local progress) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -129,6 +129,9 @@ mutated and truncated movies. Field reports from the first public week are track
 - **2026-10-14 (MIDI Velocity tails):** Each Velocity stem has a horizontal tail spanning its note's duration. Tails follow zoom/pan and support velocity dragging and double-click reset to 100; selected handles stay visible in white. Nearby stems, Undo and viewport clipping are tested. No readiness percentage change.
 - **2026-10-14 (MIDI Velocity sizing):** The divider above Velocity adjusts its height inside docked and floating MIDI Editors. UI preferences retain the height; keyboard adjustment and double-click reset share the UI command. Viewport bounds keep notes visible without modifying the session or playback cue. No readiness percentage change.
 - **2026-10-14 (MIDI playback visibility):** MIDI Editor displays the transport cursor within the piano roll, with six independent scrolling modes (Page by default). Center Playhead supports a stopped playback cue without replacing selections; explicit starts, loop and punch ranges retain their behavior. Tempo changes, zoom/pan, loop wraps, stops, natural completion and preference compatibility are tested. No readiness percentage change.
+- **2026-10-14:** MCP `batch` rejects more than 1000 calls before executing any command, instead of silently running only the first 1000 (#460). No readiness percentage change.
+- **2026-10-13:** WAV: an empty data chunk followed by metadata (LIST, bext) reads as no audio; a recording that was never finalised (sizes left at 0) still gives what was written (#466)
+- **2026-10-13:** Sampler: a ping-pong loop keeps its phase and direction when a step is wider than the loop (a narrow loop with high transposition), instead of reflecting once and dropping the rest of the travel (#463)
 - **2026-10-13:** `mix.instrument` takes the built-in instrument's parameters in `params` (validated, clamped) and refuses any other field, so a synth setting written beside `plugin` is an error instead of being accepted and ignored (#265)
 - **2026-10-13:** A bounce of a bus that an aux returns onto lines up with the timeline: the aux insert's lookahead is compensated like the main mix's (it left the bus late and cut the end off), and tracks routed to that bus wait for it too (#246)
 - **2026-10-13:** Delay compensation covers the inserts of the master faders: a bounce of the main mix with a Maximizer on the master lines up with the same mix without it (it came out 71 samples late) (#351)
@@ -162,6 +165,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-18 | trivial | Mono device playback retains both stereo sides and surround fold-down channels; readiness estimates unchanged |
 | 2026-10-16 | trivial | Failed inserts no longer contribute aux, folder or master latency after containment; readiness estimates unchanged |
 | 2026-10-16 | trivial | Master volume automation block boundaries corrected; readiness estimates unchanged |
@@ -170,6 +174,9 @@ mutated and truncated movies. Field reports from the first public week are track
 | 2026-10-14 | minor | Resizable MIDI Velocity lane with saved height, keyboard adjustment and reset; readiness estimates unchanged |
 | 2026-10-14 | minor | MIDI playback cursor stops above Velocity |
 | 2026-10-14 | minor | MIDI Editor cursor and six scrolling modes, including centered play-start cue; stage and readiness estimates unchanged |
+| 2026-10-14 | trivial | Progress log: oversized MCP batches rejected before execution (#460) |
+| 2026-10-13 | trivial | Progress log: empty WAV data chunk followed by metadata (#466) |
+| 2026-10-13 | trivial | Progress log: sampler ping-pong phase for wide steps (#463) |
 | 2026-10-13 | trivial | Progress log: mix.instrument params, unknown fields refused (#265) |
 | 2026-10-13 | trivial | Progress log: bus bounce compensates aux returns (#246) |
 | 2026-10-13 | trivial | Progress log: master insert latency compensated (#351) |

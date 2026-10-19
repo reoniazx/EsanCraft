@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             add_marker
         ),
         cmd!("markers.delete", "Delete Memory Location", [], None, "{number | id}", always, delete_marker),
-        cmd!("markers.edit", "Edit Memory Location", [], None, "{number | id, name?, comments?, at?, color?}", always, edit_marker),
+        cmd!("markers.edit", "Edit Memory Location", [], None, "{number | id, name?, comments?, at?, color?: [r,g,b] | null}", always, edit_marker),
         cmd!(noundo "markers.recall", "Recall Memory Location", [], Some("Period + n + Period"), "{number}", always, recall_marker),
         cmd!(noundo "markers.next", "Go to Next Marker", [], None, "{}", always, |e, _| step_marker(e, 1)),
         cmd!(noundo "markers.previous", "Go to Previous Marker", [], None, "{}", always, |e, _| step_marker(e, -1)),
@@ -300,6 +300,7 @@ fn add_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     let (a, b) = match (at, st, en) {
         (Some(a), _, _) => (a, a),
         (None, Some(a), Some(b)) => (a, b),
+        (None, Some(p), None) | (None, None, Some(p)) => (p, p),
         _ if kind == MarkerKind::Selection => (sel.start, sel.end),
         _ => (if e.transport.playing { e.transport.position } else { sel.start }, sel.start),
     };
@@ -337,8 +338,23 @@ fn delete_marker(e: &mut Engine, p: &Value) -> Result<Value> {
 fn edit_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     let i = marker_index(e, p, "markers.edit")?;
     let at = position_param(e, "markers.edit", p, "at")?;
+    let color = match p.get("color") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::Array(a)) if a.len() == 3 => {
+            let ch = |i: usize| a.get(i).and_then(Value::as_u64).and_then(|v| u8::try_from(v).ok());
+            match (ch(0), ch(1), ch(2)) {
+                (Some(r), Some(g), Some(b)) => Some(Some([r, g, b])),
+                _ => return Err(bad("markers.edit", "`color` components must be integers 0..=255")),
+            }
+        }
+        Some(_) => return Err(bad("markers.edit", "`color` must be [r,g,b] or null")),
+    };
     let s = e.session_mut();
     let Some(m) = s.markers.get_mut(i) else { return Err(bad("markers.edit", "gone")) };
+    if let Some(c) = color {
+        m.color = c;
+    }
     // `name` is the documented new name; when it was the selector it already matches, so this is a no-op.
     if let Some(n) = str_param(p, "rename").or_else(|| str_param(p, "name")) {
         m.name = n.to_string();
@@ -441,6 +457,44 @@ mod tests {
         let s = e.session();
         let bridge = s.markers.iter().find(|m| m.id.0 == outro_id).unwrap();
         assert_eq!((bridge.name.as_str(), bridge.comments.as_str()), ("Bridge", "last"));
+    }
+
+    /// `markers.add` with only `start` or only `end` places the marker there, not at the edit selection.
+    #[test]
+    fn markers_add_start_or_end_alone_is_used() {
+        let mut e = demo_engine();
+        assert_ne!(e.session().edit.selection.start, 96_000);
+        let a = e.execute("markers.add", &json!({"name": "A", "start": 96_000})).unwrap();
+        let b = e.execute("markers.add", &json!({"name": "B", "end": 96_000})).unwrap();
+        let c = e.execute("markers.add", &json!({"name": "C", "start": 1000, "end": 2000})).unwrap();
+        let find = |r: &serde_json::Value| e.session().markers.iter().find(|m| Some(m.id.0) == r["id"].as_u64()).map(|m| (m.start, m.end));
+        assert_eq!(find(&a), Some((96_000, 96_000)));
+        assert_eq!(find(&b), Some((96_000, 96_000)));
+        assert_eq!(find(&c), Some((1000, 2000)));
+    }
+
+    /// `markers.edit` documents `color`: it sets the memory location's RGB colour, undoably; `null` clears it.
+    #[test]
+    fn edit_marker_sets_documented_color() {
+        let mut e = demo_engine();
+        let n = e.session().markers.first().unwrap().number;
+        let color = |e: &crate::Engine| e.session().markers.iter().find(|m| m.number == n).unwrap().color;
+        assert_eq!(color(&e), None);
+
+        e.execute("markers.edit", &json!({"number": n, "color": [255, 0, 0]})).unwrap();
+        assert_eq!(color(&e), Some([255, 0, 0]));
+        assert!(e.undo());
+        assert_eq!(color(&e), None);
+        assert!(e.redo());
+        assert_eq!(color(&e), Some([255, 0, 0]));
+
+        e.execute("markers.edit", &json!({"number": n, "color": null})).unwrap();
+        assert_eq!(color(&e), None);
+
+        for bad in [json!([1, 2]), json!([1, 2, 300]), json!("red"), json!([1, 2, -3])] {
+            assert!(e.execute("markers.edit", &json!({"number": n, "color": bad})).is_err());
+            assert_eq!(color(&e), None);
+        }
     }
 
     /// Constant replaces the tempo over [start, end) only; the tempo at the old end tick carries on after it.

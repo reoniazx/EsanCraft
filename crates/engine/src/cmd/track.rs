@@ -19,6 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("track.group", "Group...", ["Track"], Some("Cmd+G"), "{name?, tracks?, edit?: true, mix?: true}", has_selection, group),
         cmd!("track.ungroup", "Delete Group", [], None, "{group: id|name}", always, delete_group),
         cmd!("track.group_toggle", "Toggle Group Active", [], None, "{group: id|name}", always, toggle_group),
+        cmd!("track.group_modify", "Modify Group", [], None, "{group: id|name, name?, tracks?, edit?, mix?}", always, modify_group),
         cmd!(
             "track.duplicate",
             "Duplicate...",
@@ -320,6 +321,55 @@ fn toggle_group(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"active": active}))
 }
 
+/// Change an existing group's name, membership and Edit/Mix linking. Omitted fields keep their value.
+fn modify_group(e: &mut Engine, p: &Value) -> Result<Value> {
+    const CMD: &str = "track.group_modify";
+    let g = find_group(e, p, CMD)?;
+    // Absent `tracks` leaves membership alone; present, it replaces it. Only an array counts, so a
+    // mistyped param can't silently swap the members for whatever happens to be selected.
+    let members = match p.get("tracks") {
+        None => None,
+        Some(Value::Array(_)) => {
+            let mut t = tracks_param(e, CMD, p)?;
+            // A track listed twice would take every linked move twice over.
+            let mut seen = std::collections::HashSet::new();
+            t.retain(|id| seen.insert(*id));
+            if t.is_empty() {
+                return Err(bad(CMD, "a group needs at least one track"));
+            }
+            Some(t)
+        }
+        Some(_) => return Err(bad(CMD, "`tracks` must be an array of track ids or names")),
+    };
+    let name = match str_param(p, "name") {
+        None => None,
+        Some(n) => {
+            let n = n.trim();
+            if n.is_empty() {
+                return Err(bad(CMD, "`name` must not be empty"));
+            }
+            // `find_group` resolves by name, so duplicates would make a group unaddressable.
+            if e.session().groups.iter().any(|x| x.name == n && x.id != g) {
+                return Err(bad(CMD, format!("a group named `{n}` already exists")));
+            }
+            let mut n = n.to_string();
+            soundcraft_model::truncate_chars(&mut n, soundcraft_model::MAX_NAME_CHARS);
+            Some(n)
+        }
+    };
+    let s = e.session_mut();
+    let Some(gr) = s.groups.iter_mut().find(|x| x.id == g) else { return Err(bad(CMD, "unknown `group`")) };
+    if let Some(n) = name {
+        gr.name = n;
+    }
+    if let Some(m) = members {
+        gr.members = m;
+    }
+    gr.edit = bool_or(p, "edit", gr.edit);
+    gr.mix = bool_or(p, "mix", gr.mix);
+    Ok(json!({"group": g, "name": gr.name, "tracks": gr.members, "edit": gr.edit, "mix": gr.mix}))
+}
+
 fn duplicate(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.duplicate", p)?;
     let (pl, auto, ins, snd) =
@@ -529,6 +579,15 @@ fn folder_bus(s: &Session, folder: TrackId) -> Option<Route> {
     s.track(folder).map(|folder| folder.mixer.input.clone()).filter(|route| matches!(route, Route::Bus(_)))
 }
 
+/// The summing bus owned by a routing folder.
+fn owned_folder_bus(s: &Session, folder: TrackId) -> Option<soundcraft_model::BusId> {
+    let folder = s.track(folder).filter(|track| track.kind == TrackKind::Folder)?;
+    match folder.mixer.input {
+        Route::Bus(id) => Some(id),
+        _ => None,
+    }
+}
+
 /// Keep only the selected roots so selecting a folder and one of its children preserves the subtree.
 fn root_tracks(s: &Session, tracks: Vec<TrackId>) -> Vec<TrackId> {
     tracks.iter().copied().filter(|track| !tracks.iter().any(|root| root != track && in_folder(s, *track, *root))).collect()
@@ -613,6 +672,20 @@ fn change_width(e: &mut Engine, p: &Value) -> Result<Value> {
 fn delete(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.delete", p)?;
     let s = e.session_mut();
+    let removed_busses: Vec<_> = tracks
+        .iter()
+        .filter_map(|folder| {
+            let bus = owned_folder_bus(s, *folder)?;
+            let mut parent = s.track(*folder).and_then(|folder| folder.folder);
+            for _ in 0..64 {
+                match parent {
+                    Some(candidate) if tracks.contains(&candidate) => parent = s.track(candidate).and_then(|folder| folder.folder),
+                    _ => break,
+                }
+            }
+            Some((bus, parent.and_then(|parent| folder_bus(s, parent)).unwrap_or(Route::Main)))
+        })
+        .collect();
     // Promote children of deleted folders and repair only routes that used the deleted
     // folder's own bus. Custom outputs remain untouched.
     let mut promoted = Vec::new();
@@ -642,6 +715,22 @@ fn delete(e: &mut Engine, p: &Value) -> Result<Value> {
     s.edit.selected_tracks.retain(|t| !tracks.contains(t));
     for g in &mut s.groups {
         g.members.retain(|t| !tracks.contains(t));
+    }
+    for (bus, replacement) in removed_busses {
+        s.busses.retain(|candidate| candidate.id != bus);
+        for track in &mut s.tracks {
+            if track.mixer.input == Route::Bus(bus) {
+                track.mixer.input = Route::None;
+            }
+            if track.mixer.output == Route::Bus(bus) {
+                track.mixer.output = replacement.clone();
+            }
+            for send in &mut track.mixer.sends {
+                if send.as_ref().is_some_and(|send| send.target == Route::Bus(bus)) {
+                    *send = None;
+                }
+            }
+        }
     }
     Ok(json!({"deleted": tracks.len()}))
 }
@@ -909,6 +998,35 @@ mod tests {
     }
 
     #[test]
+    fn group_modify_changes_name_membership_and_linking() {
+        let mut e = crate::demo::demo_engine();
+        let g = e.execute("track.group", &json!({"tracks": ["Kick", "Snare"], "name": "Drums"})).unwrap()["group"].as_u64().unwrap();
+        // Every field at once, the way the dialog submits it.
+        let r = e.execute("track.group_modify", &json!({"group": g, "name": "Rhythm", "tracks": ["Kick", "Bass"], "edit": false})).unwrap();
+        assert_eq!(r["name"], "Rhythm");
+        let gr = e.session().groups.iter().find(|x| x.id.0 == g).unwrap().clone();
+        assert_eq!(gr.name, "Rhythm");
+        assert_eq!(gr.members, vec![e.session().track_by_name("Kick").unwrap().id, e.session().track_by_name("Bass").unwrap().id]);
+        assert!(!gr.edit);
+        assert!(gr.mix, "an omitted field keeps its value");
+        assert_eq!(gr.letter, 'a', "the letter is the group's stable id and never changes");
+        // Omitting `tracks` leaves membership alone rather than falling back to the selection.
+        e.execute("edit.select", &json!({"tracks": ["Pad"], "exact": true})).unwrap();
+        e.execute("track.group_modify", &json!({"group": g, "name": "Rhythm Section"})).unwrap();
+        assert_eq!(e.session().groups.iter().find(|x| x.id.0 == g).unwrap().members, gr.members);
+        // Resolving the group by its new name keeps working, so names stay unique and non-empty.
+        e.execute("track.group", &json!({"tracks": ["Pad"], "name": "Pads"})).unwrap();
+        assert!(e.execute("track.group_modify", &json!({"group": "Pads", "name": "Rhythm Section"})).is_err());
+        assert!(e.execute("track.group_modify", &json!({"group": g, "name": "  "})).is_err());
+        assert!(e.execute("track.group_modify", &json!({"group": g, "tracks": []})).is_err());
+        assert!(e.execute("track.group_modify", &json!({"group": g, "tracks": "Kick"})).is_err(), "`tracks` must be an array");
+        assert!(e.execute("track.group_modify", &json!({"group": g, "tracks": ["Kick", "Kick"]})).is_ok());
+        assert_eq!(e.session().groups.iter().find(|x| x.id.0 == g).unwrap().members.len(), 1, "a repeated track is listed once");
+        assert!(e.execute("track.group_modify", &json!({"group": 9999, "name": "x"})).is_err());
+        assert_eq!(e.session().groups.iter().find(|x| x.id.0 == g).unwrap().name, "Rhythm Section", "a rejected call changes nothing");
+    }
+
+    #[test]
     fn folder_routes_members_through_its_bus() {
         let mut e = crate::demo::demo_engine();
         let r = e.execute("track.move_to_new_folder", &json!({"tracks": ["Kick", "Snare"], "name": "Drums"})).unwrap();
@@ -956,6 +1074,14 @@ mod tests {
 
         e.execute("track.move_to_folder", &json!({"tracks": ["Kick"], "folder": inner.0})).unwrap();
         e.execute("track.move_to_folder", &json!({"tracks": [inner.0], "folder": outer.0})).unwrap();
+        let inner_bus = match e.session().track(inner).unwrap().mixer.input {
+            Route::Bus(bus) => bus,
+            _ => panic!("folder did not receive a bus"),
+        };
+        let outer_bus = match e.session().track(outer).unwrap().mixer.input {
+            Route::Bus(bus) => bus,
+            _ => panic!("folder did not receive a bus"),
+        };
         assert!(e.execute("track.move_to_folder", &json!({"tracks": [outer.0], "folder": inner.0})).is_err());
 
         let kick = e.session().track_by_name("Kick").unwrap();
@@ -982,6 +1108,8 @@ mod tests {
         let kick = e.session().track_by_name("Kick").unwrap();
         assert_eq!(kick.folder, None);
         assert_eq!(kick.mixer.output, Route::Main);
+        assert!(e.session().bus(inner_bus).is_none(), "the deleted folder's owned bus must be removed");
+        assert!(e.session().bus(outer_bus).is_some(), "the surviving parent folder's bus must remain");
     }
 
     #[test]

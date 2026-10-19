@@ -149,6 +149,7 @@ pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -
                 s.add_track(kind, fmt, Some("Clip Group"))
             }
         };
+        let mut prepared = Vec::new();
         for mut c in lane {
             if let ClipContent::Audio { source, offset } = &mut c.content {
                 let Some(n) = map.get(&source.0) else { continue };
@@ -160,10 +161,23 @@ pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -
             c.id = s.new_clip_id();
             c.start = at.saturating_add(scale(c.start.max(0)));
             c.length = scale(c.length);
+            c.fade_in.len = scale(c.fade_in.len);
+            c.fade_out.len = scale(c.fade_out.len);
+            c.sync_point = scale(c.sync_point);
+            c.gain_env.iter_mut().for_each(|(at, _)| *at = scale(*at));
             c.group = Some(group_id);
             c.sanitize();
             placed.push(c.id);
-            crate::edit::place_clip(s, target, c);
+            prepared.push(c);
+        }
+        // Clear what was already on the track first, then add the whole lane at once, so clips of
+        // the group that overlap each other (crossfades) keep their overlap.
+        for c in &prepared {
+            crate::edit::clear_range(s, target, c.range(), false);
+        }
+        if let Some(pl) = s.track_mut(target).and_then(|t| t.playlist_mut()) {
+            pl.clips.extend(prepared);
+            pl.sort();
         }
     }
     Ok(placed)
@@ -226,6 +240,51 @@ mod tests {
         for cmd in ["edit.duplicate", "event.extract_chords"] {
             assert!(!matches!(e.execute(cmd, &json!({})), Err(crate::EngineError::Internal(..))), "{cmd}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overlapping_clips_of_a_group_keep_their_overlap_on_import() {
+        let dir = std::env::temp_dir().join(format!("sc-grp-overlap-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("overlap.scgrp");
+        let note = json!({"pitch": 60, "velocity": 100, "release_velocity": 64, "channel": 0, "start": 0, "length": 100});
+        let content = json!({"Midi": {"sequence": {"notes": [note], "ctrls": []}}});
+        let a = json!({"id": 1, "name": "a", "start": 0, "length": 1000, "content": content});
+        let b = json!({"id": 2, "name": "b", "start": 600, "length": 1000, "content": content});
+        let file = json!({"format": "soundcraft.clipgroup", "version": 1, "sample_rate": 48000, "length": 1600, "lanes": [[a, b]], "audio": {}});
+        std::fs::write(&p, file.to_string()).unwrap();
+        let mut e = crate::demo::demo_engine();
+        let r = e.execute("file.import_clip_groups", &json!({"path": p.to_string_lossy()})).unwrap();
+        let ids: Vec<_> = r["clips"].as_array().unwrap().iter().filter_map(serde_json::Value::as_u64).collect();
+        assert_eq!(ids.len(), 2);
+        let spans: Vec<_> =
+            ids.iter().filter_map(|id| e.session().find_clip(soundcraft_model::ClipId(*id)).map(|(_, c)| (c.start, c.length))).collect();
+        // The group lands at the insertion point; its clips keep their relative positions and overlap.
+        let at = spans.first().map_or(0, |s| s.0);
+        assert_eq!(spans, vec![(at, 1000), (at + 600, 1000)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fades_sync_point_and_envelope_follow_the_sample_rate() {
+        let dir = std::env::temp_dir().join(format!("sc-grp-rate-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("rate.scgrp");
+        let mut e = crate::demo::demo_engine();
+        // The file was saved at half the session rate, so every position doubles.
+        let src_rate = e.session().sample_rate.hz() / 2;
+        let fade = |len: i64| json!({"len": len, "shape": "Linear"});
+        let clip = json!({
+            "id": 1, "name": "m", "start": 0, "length": 10_000, "content": {"Midi": {"sequence": {"notes": [], "ctrls": []}}},
+            "fade_in": fade(1000), "fade_out": fade(2000), "sync_point": 500, "gain_env": [[100, -6.0], [4000, 0.0]]
+        });
+        let file = json!({"format": "soundcraft.clipgroup", "version": 1, "sample_rate": src_rate, "length": 10_000, "lanes": [[clip]], "audio": {}});
+        std::fs::write(&p, file.to_string()).unwrap();
+        let r = e.execute("file.import_clip_groups", &json!({"path": p.to_string_lossy()})).unwrap();
+        let c = e.session().find_clip(soundcraft_model::ClipId(r["clips"][0].as_u64().unwrap())).unwrap().1;
+        assert_eq!((c.length, c.fade_in.len, c.fade_out.len, c.sync_point), (20_000, 2000, 4000, 1000));
+        assert_eq!(c.gain_env.iter().map(|&(at, _)| at).collect::<Vec<_>>(), vec![200, 8000]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

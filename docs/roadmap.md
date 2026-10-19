@@ -1,6 +1,6 @@
 # SoundCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (M7: Velocity note-length tails) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** trivial (merge upstream updates, retaining local progress) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Forward-looking plan. Status and numbers: [`../ROADMAP.md`](../ROADMAP.md) and
 [`target-app-parity.md`](target-app-parity.md); the ranked work list: [`gaps.md`](gaps.md).
@@ -54,6 +54,9 @@ Status: ✅ done · 🟡 in progress · ⬜ not started.
 | M16 | Built-in plugin depth, sidechain, ARA | ⬜ | 110–170 |
 | M17 | Immersive delivery (ADM BWF, object renderer, binaural) and video depth | ⬜ | 80–130 |
 
+M8 follow-up (2026-10-14): MCP batches above 1000 calls are rejected before execution (#460).
+The limit is advertised in the tool schema and description; stage and readiness estimates are unchanged.
+
 ## To beta (~350–570 h, about 60–70 % parallelizable)
 
 Beta needs ~75 % ready for real work and no blocking gap in session interchange.
@@ -86,8 +89,10 @@ There is no `cargo xtask scorecard` in this repo; the measured number is `cargo 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-14 | minor | M7: Velocity note-length tails with direct drag/reset input and selected-note visibility; stage and readiness estimates unchanged |
 | 2026-10-14 | minor | M7: resizable Velocity with saved UI height, keyboard adjustment and reset; stage and readiness estimates unchanged |
 | 2026-10-14 | minor | M7: MIDI Editor playback cursor, six scrolling modes and independent stopped cue; stage and readiness estimates unchanged |
+| 2026-10-14 | trivial | M8: reject oversized MCP batches before execution (#460) |
 | 2026-10-10 | minor | Added the alpha gate (3 of 6 core workflows fail → pre-alpha) |
 | 2026-10-10 | major | Created from ROADMAP.md's milestones and alpha list; added M12–M17 and the beta plan with estimates |

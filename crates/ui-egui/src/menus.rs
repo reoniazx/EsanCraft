@@ -207,6 +207,11 @@ pub fn tree() -> Vec<MenuNode> {
         insert_path(&mut roots, line);
     }
     insert_path(&mut roots, "Window > Reset Panel Layout");
+    // Not in the observed catalog either; Pro Tools lists it right under Identify Sync Point.
+    if let Some(clip) = roots.iter_mut().find(|n| n.label == "Clip") {
+        let at = clip.children.iter().position(|n| n.label == "Identify Sync Point").map_or(clip.children.len(), |i| i + 1);
+        clip.children.insert(at, MenuNode { label: "Remove Sync Point".into(), path: "Clip > Remove Sync Point".into(), children: Vec::new() });
+    }
     // Not in the incumbent catalog, but the only UI path to an empty MIDI clip (#282).
     // It creates a clip rather than acting on the selected ones, so it leads the Clip menu.
     insert_path(&mut roots, "Clip > New MIDI Clip");
@@ -248,6 +253,9 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                             if c.path == "File > Open" {
                                 crate::recent::menu(app, ui);
                             }
+                            if c.path == "Track > New..." {
+                                instrument_menu(app, ui);
+                            }
                         }
                         if root.label == "AudioSuite" {
                             ui.separator();
@@ -279,6 +287,23 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
             });
         },
     );
+}
+
+/// Track › Instrument: the instrument picker for the selected instrument track (#374).
+fn instrument_menu(app: &mut SoundApp, ui: &mut egui::Ui) {
+    match instrument_track(app.engine.session()) {
+        Some(id) => {
+            ui.menu_button("Instrument", |ui| crate::mix_window::instrument_menu(app, ui, id));
+        }
+        None => {
+            ui.add_enabled(false, egui::Button::new("Instrument")).on_disabled_hover_text("Select an instrument track");
+        }
+    }
+}
+
+/// The first selected instrument track, in track order.
+fn instrument_track(s: &soundcraft_model::Session) -> Option<soundcraft_model::TrackId> {
+    s.tracks.iter().find(|t| t.kind == soundcraft_model::TrackKind::Instrument && s.edit.selected_tracks.contains(&t.id)).map(|t| t.id)
 }
 
 fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str, &str)]) {
@@ -759,5 +784,17 @@ mod tests {
         assert!(app.dialogs.open.is_none());
         assert!(!app.engine.is_dirty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn track_instrument_menu_targets_the_selected_instrument_track() {
+        let mut e = soundcraft_engine::Engine::default();
+        let audio = e.execute("track.new", &json!({"kind": "audio"})).unwrap()["tracks"][0].as_u64().unwrap();
+        assert_eq!(instrument_track(e.session()), None);
+        let inst = e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        e.execute("edit.select", &json!({"tracks": [audio]})).unwrap();
+        assert_eq!(instrument_track(e.session()), None, "an audio track has no instrument");
+        e.execute("edit.select", &json!({"tracks": [audio, inst]})).unwrap();
+        assert_eq!(instrument_track(e.session()).map(|t| t.0), Some(inst));
     }
 }
