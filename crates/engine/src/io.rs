@@ -119,6 +119,12 @@ pub fn add_source(s: &mut Session, name: &str, mut buf: AudioBuffer, path: Optio
         buf.channels = soundcraft_dsp::offline::resample(&buf.channels, buf.sample_rate, sr);
         buf.sample_rate = sr;
     }
+    add_source_audio(s, name, Arc::new(SourceAudio::new(buf)), path, format)
+}
+
+fn add_source_audio(s: &mut Session, name: &str, audio: Arc<SourceAudio>, path: Option<&str>, format: FileFormat) -> SourceId {
+    let buf = &audio.buffer;
+    let sr = s.sample_rate.hz();
     let id = SourceId(s.alloc());
     let stem = Path::new(name).file_stem().and_then(|x| x.to_str()).unwrap_or(name).to_string();
     let stored = match path {
@@ -136,7 +142,7 @@ pub fn add_source(s: &mut Session, name: &str, mut buf: AudioBuffer, path: Optio
         time_reference: 0,
         unsaved: true,
     });
-    s.pool.insert(id, Arc::new(SourceAudio::new(buf)));
+    s.pool.insert(id, audio);
     id
 }
 
@@ -153,16 +159,39 @@ fn stamp_at_rate(stamp: u64, file_rate: u32, session_rate: u32) -> u64 {
 pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option<&str>, target: Option<TrackId>, at: Samples) -> Result<Value> {
     let ext = Path::new(name).extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
     let (info, buf) = soundcraft_audio_io::decode(bytes, ext.as_deref()).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
-    let buf = at_rate(buf, e.session().sample_rate.hz(), MAX_IMPORT_SAMPLES)
-        .ok_or_else(|| EngineError::Io(format!("{name}: file is too large to import")))?;
+    let buf = prepare_import_buffer(name, buf, e.session().sample_rate.hz())?;
+    let audio = Arc::new(SourceAudio::new(buf));
+    import_prepared(e, name, path, info, audio, target, at)
+}
+
+/// Resample decoded audio before constructing its waveform. May run on a worker thread.
+pub fn prepare_import_buffer(name: &str, buf: AudioBuffer, sample_rate: u32) -> Result<AudioBuffer> {
+    let buf = at_rate(buf, sample_rate, MAX_IMPORT_SAMPLES).ok_or_else(|| EngineError::Io(format!("{name}: file is too large to import")))?;
     if buf.frames() == 0 {
         return Err(EngineError::Io(format!("{name}: no audio")));
+    }
+    Ok(buf)
+}
+
+/// Place already converted audio and its waveform without doing sample processing on the caller.
+pub fn import_prepared(
+    e: &mut Engine,
+    name: &str,
+    path: Option<&str>,
+    info: soundcraft_audio_io::AudioInfo,
+    audio: Arc<SourceAudio>,
+    target: Option<TrackId>,
+    at: Samples,
+) -> Result<Value> {
+    let buf = &audio.buffer;
+    if buf.sample_rate != e.session().sample_rate.hz() {
+        return Err(EngineError::Io("session sample rate changed during import; please import again".into()));
     }
     let channels = buf.num_channels();
     let file_rate = info.sample_rate;
     let s = e.session_mut();
     let session_rate = s.sample_rate.hz();
-    let src = add_source(s, name, buf, path, info.format);
+    let src = add_source_audio(s, name, audio, path, info.format);
     if let (Some(bwf), Some(sx)) = (info.bwf.as_ref(), s.sources.last_mut()) {
         sx.time_reference = stamp_at_rate(bwf.time_reference, file_rate, session_rate);
     }
@@ -178,6 +207,40 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     let stem = s.source(src).map(|x| x.name.clone()).unwrap_or_default();
     crate::edit::place_clip(s, track, Clip::audio(cid, stem, src, 0, at, frames));
     Ok(json!({"track": track, "clip": cid, "source": src, "frames": frames, "channels": channels}))
+}
+
+/// A file that has been read and decoded for `file.import_audio` to place: the UI's importer
+/// produces this off the UI thread and offers it to the engine, so a long decode never blocks.
+#[derive(Debug)]
+pub struct PreparedImport {
+    /// The file's path; the command takes the entry naming it.
+    pub path: String,
+    /// The file's own name, which names the source.
+    pub name: String,
+    /// Header information (`bwf` stamps the source's time reference).
+    pub info: soundcraft_audio_io::AudioInfo,
+    /// Audio at the session sample rate with its waveform already built.
+    pub audio: Arc<SourceAudio>,
+}
+
+/// Stores a decoded file until `file.import_audio` names its path. One session's imports
+/// are cleared when the session is replaced.
+pub fn offer_import(e: &mut Engine, p: PreparedImport) {
+    e.imports.push(p);
+}
+
+/// Dispatch one atomic, undoable import, and discard unused prepared files even on failure.
+pub fn execute_prepared_imports(e: &mut Engine, params: &Value, imports: Vec<PreparedImport>) -> Result<Value> {
+    e.imports = imports;
+    let result = e.execute("file.import_audio", params);
+    e.imports.clear();
+    result
+}
+
+/// Takes the prepared import for `path`, if one is waiting.
+pub(crate) fn take_import(e: &mut Engine, path: &str) -> Option<PreparedImport> {
+    let at = e.imports.iter().position(|p| p.path == path)?;
+    Some(e.imports.remove(at))
 }
 
 /// Loads an audio file's bytes into an instrument track's Sampler as one undo step ("Load

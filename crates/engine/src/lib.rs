@@ -141,6 +141,8 @@ pub struct Engine {
     /// The edit selection (range, tracks) before the last change, for Restore Last Selection.
     /// Kept out of the document so selecting never marks the session modified.
     pub last_selection: Option<(soundcraft_time::Range, Vec<TrackId>)>,
+    /// Files the UI importer decoded ahead of `file.import_audio` (see `io::PreparedImport`).
+    pub(crate) imports: Vec<crate::io::PreparedImport>,
 }
 
 impl Default for Engine {
@@ -171,6 +173,7 @@ impl Engine {
             merge_hold: None,
             messages: Vec::new(),
             last_selection: None,
+            imports: Vec::new(),
         }
     }
 
@@ -205,6 +208,7 @@ impl Engine {
         self.undo.clear();
         self.redo.clear();
         self.last_selection = None;
+        self.imports.clear();
         self.revision = self.revision.wrapping_add(1);
         self.dirty = false;
     }

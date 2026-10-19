@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** trivial (merge upstream updates, retaining local progress) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (native audio import progress and cancellation) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 How SoundCraft feels in the hands of a Pro Tools user: tools, modes, modifiers, shortcuts,
 windows, meters. Measured from `crates/model/src/session.rs` (tools, modes), the command
@@ -50,6 +50,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 | Transport, Big Counter, Memory Locations, Automation, Video, Universe, Renderer, UI Customization | ✅ present | |
 | Workspace / sound browser with previews | ❌ | G-16 |
 | I/O Setup | 🟡 | Busses and paths; no hardware channel matrix (G-01) |
+| Audio import progress | 🟡 | Native menu/Workspace imports and file drops show filename, file count, measured decoding progress and reading/conversion/waveform stages. Cancel/Esc, atomic batch failure and one-step Undo covered. Browser byte imports remain synchronous; no claim of full Pro Tools Task Manager parity |
 | Preferences | 🟡 | Many settings stored, fewer honoured |
 | Window configurations, Tile/Cascade | 🟡 | Configurations ✅; Tile/Cascade in PR #151 |
 | Plugin windows | 🟡 | Generic parameter sliders; Pro Tools plugins have bespoke GUIs (#138 asks for skeuomorphic design); multi-page plugin views (#6) |
@@ -72,6 +73,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-18 | trivial | Meter bands align with -10/-5 dB rules and scale ticks, clip lights sit inside the wells, and peak holds stay inside the bars. Edit shares the Mix/output renderer; mono/stereo/multichannel, themes and fractional display scales covered. Readiness estimate unchanged |
 | 2026-10-14 | minor | Note-length Velocity tails enlarge the drag/reset target; nearby stems, zoom/pan, viewport clipping and selection visibility covered |

@@ -151,7 +151,8 @@ fn info_of(reader: &dyn FormatReader, detected: FileFormat) -> Result<(u32, Audi
 }
 
 /// Decode the whole first audio track. When `count_only`, samples are counted but not stored.
-fn run(bytes: &[u8], detected: FileFormat, count_only: bool) -> Result<(AudioInfo, AudioBuffer)> {
+/// `progress` hears `0..=1` as packets decode when the header states a frame count.
+fn run(bytes: &[u8], detected: FileFormat, count_only: bool, progress: &mut dyn FnMut(f32) -> Result<()>) -> Result<(AudioInfo, AudioBuffer)> {
     let mut reader = match open(bytes)? {
         Opened::Reader(reader) => reader,
         Opened::Empty(info) => {
@@ -160,11 +161,10 @@ fn run(bytes: &[u8], detected: FileFormat, count_only: bool) -> Result<(AudioInf
         }
     };
     let (track_id, mut info) = info_of(reader.as_ref(), detected)?;
-    if let Some(n) = reader.tracks().iter().find(|t| t.id == track_id).and_then(|t| t.codec_params.n_frames) {
-        let total = n.saturating_mul(u64::from(info.channels.max(1)));
-        if !count_only && total > MAX_DECODE_SAMPLES {
-            return Err(AudioError::TooLarge(format!("{total} samples exceeds the decode limit")));
-        }
+    let total_frames = reader.tracks().iter().find(|t| t.id == track_id).and_then(|t| t.codec_params.n_frames).unwrap_or(0);
+    let total = total_frames.saturating_mul(u64::from(info.channels.max(1)));
+    if !count_only && total > MAX_DECODE_SAMPLES {
+        return Err(AudioError::TooLarge(format!("{total} samples exceeds the decode limit")));
     }
     let params = reader
         .tracks()
@@ -223,6 +223,7 @@ fn run(bytes: &[u8], detected: FileFormat, count_only: bool) -> Result<(AudioInf
         }
         let n = decoded.frames() as u64;
         frames = frames.saturating_add(n);
+        progress(if total_frames > 0 { (frames as f32 / total_frames as f32).min(1.0) } else { 0.0 })?;
         if frames.saturating_mul(ch as u64) > MAX_DECODE_SAMPLES {
             return Err(AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()));
         }
@@ -263,10 +264,10 @@ pub(crate) fn probe(bytes: &[u8], detected: FileFormat) -> Result<AudioInfo> {
             return Ok(info);
         }
         // Length not in the header (e.g. MP3 without a Xing frame): count by decoding.
-        run(bytes, detected, true).map(|(i, _)| i)
+        run(bytes, detected, true, &mut |_| Ok(())).map(|(i, _)| i)
     })
 }
 
-pub(crate) fn decode(bytes: &[u8], detected: FileFormat) -> Result<(AudioInfo, AudioBuffer)> {
-    guarded(|| run(bytes, detected, false))
+pub(crate) fn decode(bytes: &[u8], detected: FileFormat, progress: &mut dyn FnMut(f32) -> Result<()>) -> Result<(AudioInfo, AudioBuffer)> {
+    guarded(|| run(bytes, detected, false, progress))
 }

@@ -174,6 +174,9 @@ pub fn ask_to_save(app: &mut SoundApp, id: &str, params: &Value) -> bool {
     {
         return false;
     }
+    if crate::import::refuses_session_switch(app) {
+        return true;
+    }
     if app.engine.transport.recording {
         app.stop_play();
     }
@@ -198,7 +201,7 @@ const OPEN_PENDING: &str = "ui.open_pending_session";
 /// Opens a session the browser read as bytes (picked or dropped), asking first when the open one
 /// has changes. The read finishes later than the pick, so the question is asked only now.
 pub fn open_session_bytes(app: &mut SoundApp, name: String, bytes: Vec<u8>) {
-    if crate::bounce::refuses_session_switch(app) {
+    if crate::bounce::refuses_session_switch(app) || crate::import::refuses_session_switch(app) {
         return;
     }
     app.dialogs.pending_session = Some((name, bytes));
@@ -209,7 +212,7 @@ pub fn open_session_bytes(app: &mut SoundApp, name: String, bytes: Vec<u8>) {
 
 fn open_pending_session(app: &mut SoundApp) {
     let Some((name, bytes)) = app.dialogs.pending_session.take() else { return };
-    if crate::bounce::refuses_session_switch(app) {
+    if crate::bounce::refuses_session_switch(app) || crate::import::refuses_session_switch(app) {
         return;
     }
     let _ = app.run("transport.stop", json!({}));
@@ -307,6 +310,7 @@ fn default_dir() -> String {
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     audiosuite_window(app, ctx);
     crate::bounce::show(app, ctx);
+    crate::import::show(app, ctx);
     let Some(mut d) = app.dialogs.open.take() else { return };
     let mut keep = true;
     let mut action: Option<(String, Value)> = None;
@@ -691,6 +695,9 @@ fn run_then(app: &mut SoundApp, cmd: &str, params: Value) -> Result<Value, Strin
     if cmd == OPEN_PENDING {
         open_pending_session(app);
         return Ok(Value::Null);
+    }
+    if cmd == "file.import_audio" {
+        return crate::import::start(app, &params);
     }
     app.run(cmd, params)
 }

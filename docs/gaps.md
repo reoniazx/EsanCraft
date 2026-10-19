@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (Lao text support) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (native audio import progress and cancellation) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -200,6 +200,8 @@ settings command only. Needs an openly licensed local speech model. ≈ 30–50 
 
 ### G-19. UI feel
 
+**Fixed (2026-10-20):** Native audio imports report reading, decoding, rate conversion and waveform preparation in a modal while a worker does the sample processing. Cancel/Esc discards the batch; a failed file leaves the session unchanged; completed batches use one Undo step. Multi-file drops are grouped. Browser byte imports still process synchronously; full Task Manager parity remains outside this change. Estimates unchanged.
+
 **Fixed (2026-10-18):** Meter colour boundaries align with the -10 and -5 dB rules and scale
 ticks, including fractional display scales. Clip lights sit inside their wells; full-scale peak
 holds stay inside the bars. Edit headers share the Mix/output band renderer. Other meter types
@@ -232,6 +234,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | minor | G-09 shrunk: bundled Lao fonts and text-entry coverage; catalog, translations and bidi work remain |
 | 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-18 | trivial | G-19 shrunk: meter colours align with -10/-5 dB rules, clip lights sit inside the wells and peak holds stay inside the bars; estimates unchanged |

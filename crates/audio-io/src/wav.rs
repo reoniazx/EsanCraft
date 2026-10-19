@@ -264,10 +264,10 @@ pub(crate) fn parse(b: &[u8]) -> Result<WavParse> {
     }))
 }
 
-pub(crate) fn decode(b: &[u8], layout: &WavLayout) -> Result<AudioBuffer> {
+pub(crate) fn decode(b: &[u8], layout: &WavLayout, progress: &mut dyn FnMut(f32) -> Result<()>) -> Result<AudioBuffer> {
     let end = layout.data_start.saturating_add(layout.data_len).min(b.len());
     let data = b.get(layout.data_start..end).unwrap_or_default();
-    let channels = deinterleave(data, layout.kind, usize::from(layout.info.channels), layout.info.frames)?;
+    let channels = deinterleave(data, layout.kind, usize::from(layout.info.channels), layout.info.frames, progress)?;
     Ok(AudioBuffer { sample_rate: layout.info.sample_rate, channels })
 }
 

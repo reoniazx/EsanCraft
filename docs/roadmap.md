@@ -1,12 +1,14 @@
 # SoundCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** trivial (merge upstream updates, retaining local progress) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (native audio import progress and cancellation) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Forward-looking plan. Status and numbers: [`../ROADMAP.md`](../ROADMAP.md) and
 [`target-app-parity.md`](target-app-parity.md); the ranked work list: [`gaps.md`](gaps.md).
 Hours are Opus 5.5 agent-hours.
 
 ## Current focus
+
+**Delivered 2026-10-20:** Native audio import progress and background sample processing, with Cancel/Esc, atomic multi-file placement and one-step Undo. Browser import workers and broader Task Manager behavior remain future work; milestone/readiness estimates unchanged.
 
 1. **Merge or close the open bug-fix PRs** (#123–#134, #146, #148, #75) and fix the rest of the
    correctness backlog (G-04). ≈ 15–25 h.
@@ -89,6 +91,7 @@ There is no `cargo xtask scorecard` in this repo; the measured number is `cargo 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-14 | minor | M7: Velocity note-length tails with direct drag/reset input and selected-note visibility; stage and readiness estimates unchanged |
 | 2026-10-14 | minor | M7: resizable Velocity with saved UI height, keyboard adjustment and reset; stage and readiness estimates unchanged |

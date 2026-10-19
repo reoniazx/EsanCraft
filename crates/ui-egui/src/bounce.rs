@@ -7,6 +7,9 @@ use serde_json::Value;
 
 /// Starts the bounce `file.bounce_mix` runs for `params`; [`step`] renders it.
 pub fn start(app: &mut SoundApp, params: &Value) {
+    if crate::import::refuses_session_switch(app) {
+        return;
+    }
     if app.bounce.is_some() {
         app.ui.status = "A bounce is already running".into();
         return;

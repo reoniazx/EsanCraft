@@ -26,6 +26,9 @@ log.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd.workspace = true
 
+[dev-dependencies]
+soundcraft-audio-io.workspace = true
+
 [build-dependencies]
 # Icon + VERSIONINFO for soundcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"

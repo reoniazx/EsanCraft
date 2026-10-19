@@ -224,6 +224,25 @@ fn new_session(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"name": e.session().name, "sample_rate": e.session().sample_rate.hz()}))
 }
 
+/// Validate and freeze a UI import's destination before background work starts.
+pub fn audio_import_params(e: &Engine, p: &Value) -> Result<Value> {
+    let mut paths: Vec<String> =
+        p.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+    if let Some(one) = str_param(p, "path") {
+        paths.push(one.to_string());
+    }
+    if paths.is_empty() {
+        return Err(bad("file.import_audio", "`path` or `paths` required"));
+    }
+    let at = position_param(e, "file.import_audio", p, "at")?.unwrap_or(0).max(0);
+    let target = import_audio_target(e, p)?;
+    let mut params = json!({"paths": paths, "at": at, "new_tracks": true});
+    if let Some(track) = target {
+        params["track"] = json!(track);
+    }
+    Ok(params)
+}
+
 fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut paths: Vec<String> =
         p.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
@@ -237,8 +256,14 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let target = import_audio_target(e, p)?;
     let mut out = Vec::new();
     for path in &paths {
-        let bytes = crate::io::read_file(path)?;
         let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("Audio").to_string();
+        // The UI importer may already have read and decoded this file in the background; then
+        // placing it is all that is left, and the bytes on disk are not opened again.
+        if let Some(pre) = crate::io::take_import(e, path) {
+            out.push(crate::io::import_prepared(e, &pre.name, Some(&pre.path), pre.info, pre.audio, target, at)?);
+            continue;
+        }
+        let bytes = crate::io::read_file(path)?;
         let r = crate::io::import_audio_bytes(e, &name, &bytes, Some(path.as_str()), target, at)?;
         out.push(r);
     }
@@ -396,6 +421,67 @@ mod tests {
         assert_eq!(e.session().tracks[0].format, ChannelFormat::Mono);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A decoded import offered to the engine stands in for re-reading the file: the command
+    /// places exactly this audio and consumes the entry, once.
+    #[test]
+    fn import_audio_places_a_prepared_import_and_consumes_it() {
+        let dir = std::env::temp_dir().join(format!("sc-import-prepared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes = {
+            let tone: Vec<f32> = (0..4_800).map(|i| (i as f32 * 0.1).sin() * 0.2).collect();
+            soundcraft_audio_io::encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions::default()).unwrap()
+        };
+        // The path never gets a file: a successful import here can only be the prepared one.
+        let missing = dir.join("prepared.wav");
+        let (info, buf) = soundcraft_audio_io::decode(&bytes, Some("wav")).unwrap();
+        let mut e = Engine::default();
+        crate::io::offer_import(
+            &mut e,
+            crate::io::PreparedImport {
+                path: missing.to_string_lossy().into_owned(),
+                name: "prepared.wav".into(),
+                info,
+                audio: std::sync::Arc::new(soundcraft_model::SourceAudio::new(buf)),
+            },
+        );
+        let r = e.execute("file.import_audio", &json!({"path": missing, "at": 96_000})).unwrap();
+        assert_eq!(e.session().tracks.len(), 1);
+        let clip = &e.session().tracks[0].clips()[0];
+        assert_eq!(clip.start, 96_000);
+        assert_eq!(clip.length, 4_800);
+        assert_eq!(r["imported"][0]["frames"], json!(4_800));
+        // Second import of the same path reverts to reading the file, which is not there.
+        let err = e.execute("file.import_audio", &json!({"path": missing})).unwrap_err();
+        assert!(err.to_string().contains("prepared.wav"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A prepared import lives until its command runs; replacing the session clears what was
+    /// waiting, so nothing from the old session lands in a new one.
+    #[test]
+    fn replacing_the_session_clears_prepared_imports() {
+        let tone: Vec<f32> = (0..4_800).map(|i| (i as f32 * 0.1).sin() * 0.2).collect();
+        let bytes = soundcraft_audio_io::encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions::default()).unwrap();
+        let (info, buf) = soundcraft_audio_io::decode(&bytes, Some("wav")).unwrap();
+        let mut e = Engine::default();
+        // Never a file at this path: the entry is the only way this import could succeed.
+        let missing = "/nowhere/at-all.wav".to_string();
+        crate::io::offer_import(
+            &mut e,
+            crate::io::PreparedImport {
+                path: missing.clone(),
+                name: "at-all.wav".into(),
+                info,
+                audio: std::sync::Arc::new(soundcraft_model::SourceAudio::new(buf)),
+            },
+        );
+        e.execute("session.new", &json!({"name": "Later"})).unwrap();
+        let err = e.execute("file.import_audio", &json!({"path": missing})).unwrap_err();
+        assert!(err.to_string().contains("at-all.wav"), "{err}");
+        assert_eq!(e.session().tracks.len(), 0);
     }
 
     #[test]

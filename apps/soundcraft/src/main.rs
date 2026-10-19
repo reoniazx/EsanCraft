@@ -58,9 +58,7 @@ impl eframe::App for App {
         // the sampler; otherwise sessions open and audio/MIDI import.
         let dropped: Vec<String> =
             app.take_dropped_files(ctx).iter().map(|f| f.path().to_string_lossy().into_owned()).filter(|s| !s.is_empty()).collect();
-        for p in dropped {
-            open_path(&mut app, &p);
-        }
+        open_paths(&mut app, &dropped);
         if app.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else if !closing_view && ctx.input(|i| i.viewport().close_requested()) && dialogs::ask_to_save(&mut app, "app.quit", &serde_json::json!({}))
@@ -102,18 +100,27 @@ impl eframe::App for App {
     }
 }
 
-fn open_path(app: &mut SoundApp, p: &str) {
-    let lower = p.to_ascii_lowercase();
-    let r = if lower.ends_with(".scraft") {
-        dialogs::run_or_ask(app, "session.open", serde_json::json!({"path": p}))
-    } else if lower.ends_with(".mid") || lower.ends_with(".midi") || lower.ends_with(".smf") {
-        app.run("file.import_midi", serde_json::json!({"path": p}))
-    } else {
+fn open_paths(app: &mut SoundApp, paths: &[String]) {
+    let mut audio = Vec::new();
+    for p in paths {
+        let lower = p.to_ascii_lowercase();
+        let r = if lower.ends_with(".scraft") {
+            dialogs::run_or_ask(app, "session.open", serde_json::json!({"path": p}))
+        } else if lower.ends_with(".mid") || lower.ends_with(".midi") || lower.ends_with(".smf") {
+            app.run("file.import_midi", serde_json::json!({"path": p}))
+        } else {
+            audio.push(p);
+            continue;
+        };
+        if let Err(e) = r {
+            log::warn!("{p}: {e}");
+        }
+    }
+    if !audio.is_empty() {
         let at = app.engine.session().edit.selection.start;
-        app.run("file.import_audio", serde_json::json!({"path": p, "at": at}))
-    };
-    if let Err(e) = r {
-        log::warn!("{p}: {e}");
+        if let Err(e) = soundcraft_ui_egui::import::start(app, &serde_json::json!({"paths": audio, "at": at})) {
+            log::warn!("Import Audio: {e}");
+        }
     }
 }
 
@@ -278,9 +285,7 @@ fn main() -> eframe::Result {
                 let rx = control_server::start(port, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             }
-            for f in &files {
-                open_path(&mut app, f);
-            }
+            open_paths(&mut app, &files);
             // If the system menu bar cannot be built, keep the egui menu bar rather than fail to start.
             #[cfg(target_os = "macos")]
             let menu = match native_menu::NativeMenu::new(&app, &cc.egui_ctx) {
@@ -311,6 +316,34 @@ fn sane_window_size([w, h]: [f32; 2]) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::set_title;
+
+    #[test]
+    fn dropping_two_audio_files_imports_both_in_one_batch() {
+        let dir = std::env::temp_dir().join(format!("sc-native-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.2; 480]] };
+        let bytes = soundcraft_audio_io::encode(&buf, &soundcraft_audio_io::EncodeOptions::default()).unwrap();
+        let files: Vec<_> = ["one.wav", "two.wav"].into_iter().map(|name| dir.join(name).to_string_lossy().into_owned()).collect();
+        for path in &files {
+            std::fs::write(path, &bytes).unwrap();
+        }
+        let mut app = super::SoundApp::new(soundcraft_engine::Engine::default(), None, soundcraft_ui_egui::Services::default());
+        super::open_paths(&mut app, &files);
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.engine.session().tracks.len() < 2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            output.textures_delta.clear();
+            assert!(std::time::Instant::now() < deadline, "{}", app.ui.status);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(app.engine.undo_history().len(), 1);
+        assert_eq!(app.ui.status, "Imported 2 files");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn the_title_is_sent_only_when_it_changes() {

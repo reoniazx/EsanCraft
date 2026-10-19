@@ -42,6 +42,9 @@ pub enum AudioError {
     /// Encoding failed (e.g. an empty buffer).
     #[error("audio encode failed: {0}")]
     Encode(String),
+    /// Decoding was cancelled by its caller.
+    #[error("audio decode cancelled")]
+    Cancelled,
     /// Writing the output failed.
     #[error("audio write failed: {0}")]
     Io(#[from] std::io::Error),
@@ -226,34 +229,44 @@ pub fn probe(bytes: &[u8], ext_hint: Option<&str>) -> Result<AudioInfo> {
     }
 }
 
-/// Decode a whole file to planar `f32`.
-pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioBuffer)> {
+/// Decode to planar `f32`, reporting progress per PCM block or codec packet.
+/// A callback error stops decoding. Unknown lengths report zero until completion.
+/// Progress measures frames, independent of channel count; one means decoding has finished.
+pub fn decode_with(bytes: &[u8], ext_hint: Option<&str>, mut progress: impl FnMut(f32) -> Result<()>) -> Result<(AudioInfo, AudioBuffer)> {
+    progress(0.0)?;
     let format = detect_format(bytes, ext_hint);
-    match format {
+    let decoded = match format {
         FileFormat::Wav if wav::is_wav(bytes) => match wav::parse(bytes)? {
             wav::WavParse::Native(l) => {
-                let buf = wav::decode(bytes, &l)?;
+                let buf = wav::decode(bytes, &l, &mut progress)?;
                 let mut info = l.info;
                 info.frames = buf.frames() as u64;
                 Ok((info, buf))
             }
             wav::WavParse::Foreign { bwf } => {
-                let (mut info, buf) = symph::decode(bytes, format)?;
+                let (mut info, buf) = symph::decode(bytes, format, &mut progress)?;
                 info.bwf = bwf;
                 Ok((info, buf))
             }
         },
         FileFormat::Aiff if aiff::is_aiff(bytes) => match aiff::parse(bytes)? {
             aiff::AiffParse::Native(l) => {
-                let buf = aiff::decode(bytes, &l)?;
+                let buf = aiff::decode(bytes, &l, &mut progress)?;
                 let mut info = l.info;
                 info.frames = buf.frames() as u64;
                 Ok((info, buf))
             }
-            aiff::AiffParse::Foreign => symph::decode(bytes, format),
+            aiff::AiffParse::Foreign => symph::decode(bytes, format, &mut progress),
         },
-        _ => symph::decode(bytes, format),
-    }
+        _ => symph::decode(bytes, format, &mut progress),
+    }?;
+    progress(1.0)?;
+    Ok(decoded)
+}
+
+/// Decode a whole file to planar `f32`.
+pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioBuffer)> {
+    decode_with(bytes, ext_hint, |_| Ok(()))
 }
 
 /// Encode `buf` as WAV/BWF, AIFF/AIFF-C or FLAC. Samples are clamped to [-1, 1].
@@ -370,4 +383,53 @@ pub fn wav_float_header(channels: usize, sample_rate: u32, frames: u64) -> Resul
         return Err(AudioError::Encode("a WAV needs channels and a sample rate".into()));
     }
     wav::header(channels, sample_rate, (32, true), None, None, frames, false)
+}
+
+#[cfg(test)]
+mod decode_progress_tests {
+    use super::*;
+
+    fn encoded(format: FileFormat, channels: usize) -> Vec<u8> {
+        let tone: Vec<f32> = (0..24_000).map(|i| (i as f32 * 0.1).sin() * 0.2).collect();
+        encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone; channels] }, &EncodeOptions { format, ..Default::default() }).unwrap()
+    }
+
+    #[test]
+    fn progress_counts_frames_for_mono_and_stereo_in_all_decoders() {
+        for format in [FileFormat::Wav, FileFormat::Aiff, FileFormat::Flac] {
+            let mut sequences = Vec::new();
+            for channels in [1, 2] {
+                let mut progress = Vec::new();
+                let (_, decoded) = decode_with(&encoded(format, channels), None, |f| {
+                    progress.push(f);
+                    Ok(())
+                })
+                .unwrap();
+                assert_eq!(decoded.frames(), 24_000);
+                assert_eq!(decoded.num_channels(), channels);
+                assert_eq!(progress.first(), Some(&0.0));
+                assert_eq!(progress.last(), Some(&1.0));
+                assert!(progress.iter().any(|f| *f > 0.5 && *f < 1.0), "must report intermediate progress: {format:?}");
+                assert!(progress.windows(2).all(|p| p[0] <= p[1]));
+                sequences.push(progress);
+            }
+            assert_eq!(sequences[0], sequences[1], "channel count must not change progress: {format:?}");
+        }
+    }
+
+    #[test]
+    fn cancellation_interrupts_pcm_and_compressed_decoding() {
+        for format in [FileFormat::Wav, FileFormat::Aiff, FileFormat::Flac] {
+            let mut calls = 0;
+            let error = decode_with(&encoded(format, 2), None, |f| {
+                calls += 1;
+                if f > 0.0 { Err(AudioError::Cancelled) } else { Ok(()) }
+            })
+            .unwrap_err();
+            assert!(matches!(error, AudioError::Cancelled));
+            assert!(calls > 1);
+        }
+        let error = decode_with(&[], None, |_| Err(AudioError::Cancelled)).unwrap_err();
+        assert!(matches!(error, AudioError::Cancelled), "cancellation precedes parsing");
+    }
 }

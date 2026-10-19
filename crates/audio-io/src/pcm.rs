@@ -102,7 +102,13 @@ fn decode_sample(s: &[u8], kind: PcmKind) -> f32 {
 }
 
 /// Deinterleave `frames` frames of `channels`-channel PCM from `data` into planar `f32`.
-pub(crate) fn deinterleave(data: &[u8], kind: PcmKind, channels: usize, frames: u64) -> Result<Vec<Vec<f32>>> {
+pub(crate) fn deinterleave(
+    data: &[u8],
+    kind: PcmKind,
+    channels: usize,
+    frames: u64,
+    progress: &mut dyn FnMut(f32) -> Result<()>,
+) -> Result<Vec<Vec<f32>>> {
     let bytes = kind.bytes();
     let block = bytes.checked_mul(channels).filter(|&b| b > 0).ok_or_else(|| AudioError::Malformed("zero-sized sample frame".into()))?;
     let available = (data.len() / block) as u64;
@@ -113,7 +119,10 @@ pub(crate) fn deinterleave(data: &[u8], kind: PcmKind, channels: usize, frames: 
     }
     let frames = usize::try_from(frames).map_err(|_| AudioError::TooLarge("frame count exceeds address space".into()))?;
     let mut out: Vec<Vec<f32>> = (0..channels).map(|_| Vec::with_capacity(frames)).collect();
-    for frame in data.chunks_exact(block).take(frames) {
+    for (index, frame) in data.chunks_exact(block).take(frames).enumerate() {
+        if index % 4096 == 0 {
+            progress(index as f32 / frames.max(1) as f32)?;
+        }
         for (ch, s) in out.iter_mut().zip(frame.chunks_exact(bytes)) {
             ch.push(decode_sample(s, kind));
         }
