@@ -173,8 +173,25 @@ pub fn refuses_session_switch(app: &mut SoundApp) -> bool {
     app.import.is_some()
 }
 
-/// A compact modal using the application's existing dialog styling. Stages without a measured
-/// fraction use a spinner; percentages refer explicitly to decoding the current file.
+/// An indeterminate horizontal indicator: a segment travels left to right until work ends.
+/// There is no percentage value because reading, conversion and waveform work are not measured.
+fn loading_bar(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.0), egui::Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, ui.is_enabled(), label));
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        ui.painter().rect_filled(rect, 9.0, visuals.extreme_bg_color);
+        let width = rect.width() * 0.3;
+        let cycle = ui.input(|i| (i.time / 1.4).rem_euclid(1.0)) as f32;
+        let left = rect.left() - width + cycle * (rect.width() + width);
+        let segment = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(width, rect.height()));
+        ui.painter().rect_filled(segment.intersect(rect), 9.0, visuals.selection.bg_fill);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+    }
+    response
+}
+
+/// A compact loading modal using one left-to-right indicator throughout the import.
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(job) = &mut app.import else { return };
     job.shown = true;
@@ -187,27 +204,19 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         ui.set_width(360.0_f32.min((ctx.content_rect().width() - 48.0).max(160.0)));
         ui.label(egui::RichText::new(if cancelling { "Cancelling import…" } else { "Importing Audio" }).font(bold(15.0)));
         ui.add(egui::Label::new(name).truncate()).on_hover_text(name);
-        if !cancelling && let Phase::Decoding(fraction) = progress.phase {
-            ui.add(egui::ProgressBar::new(fraction).animate(true).text(if fraction > 0.0 {
-                format!("Decoding audio · {:.0}%", fraction * 100.0)
-            } else {
-                "Decoding audio…".into()
-            }));
+        let stage = if cancelling {
+            "Stopping audio processing…".into()
         } else {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(if cancelling {
-                    "Stopping audio processing…"
-                } else {
-                    match progress.phase {
-                        Phase::Reading => "Reading audio…",
-                        Phase::Converting => "Converting sample rate…",
-                        Phase::Waveform => "Building waveform…",
-                        Phase::Decoding(_) => "Decoding audio…",
-                    }
-                });
-            });
-        }
+            match progress.phase {
+                Phase::Reading => "Reading audio…".into(),
+                Phase::Decoding(fraction) if fraction > 0.0 => format!("Decoding audio · {:.0}%", fraction * 100.0),
+                Phase::Decoding(_) => "Decoding audio…".into(),
+                Phase::Converting => "Converting sample rate…".into(),
+                Phase::Waveform => "Building waveform…".into(),
+            }
+        };
+        loading_bar(ui, &stage);
+        ui.label(&stage);
         ui.horizontal(|ui| {
             ui.label(format!("File {} of {}", progress.file.saturating_add(1), job.names.len()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
