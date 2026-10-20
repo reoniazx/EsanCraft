@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** trivial (consistent horizontal import loading indicator) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** trivial (cumulative audio import progress) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -123,6 +123,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 ## Progress log
 
+- **2026-10-20:** Audio import fills one cumulative progress bar across all files and preparation stages, then displays 100% only after atomic placement succeeds. Stage transitions ease forward without resetting between files; cancellation freezes the fill. No readiness percentage change.
 - **2026-10-20:** Audio import uses one horizontal loading indicator sweeping left to right through every processing stage and cancellation, until the job ends. No readiness percentage change.
 - **2026-10-20:** Native Import Audio, Workspace imports and audio drops show a loading modal with filename, file count, decoding progress and conversion/waveform stages. Sample processing runs off the UI thread; Cancel/Esc discards the batch, failures leave no partial tracks, and Undo restores the whole batch. CLI/control imports retain synchronous results. Browser byte imports remain synchronous. No readiness percentage change.
 - **2026-10-19:** Lao names use bundled Noto Sans Lao in regular, bold and monospace text on native platforms and Web/WASM. Regression tests cover glyphs, combining marks, text entry, paste and session serialization. UI translations and readiness estimates unchanged.
@@ -169,6 +170,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | trivial | Cumulative filling import bar with a visible 100% completion frame after successful placement |
 | 2026-10-20 | trivial | One horizontal loading animation throughout audio import and cancellation; readiness estimates unchanged |
 | 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | minor | Bundled Lao regular/bold font fallback and Lao typing/paste/save regressions; UI translations and readiness estimates unchanged |
