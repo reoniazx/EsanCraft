@@ -1480,7 +1480,7 @@ fn midi_offset(s: &Session, t: &Track) -> i64 {
         .map_or(0, |v| v as i64)
 }
 
-/// Send note on/offs and controllers for MIDI clips overlapping the block.
+/// Send note on/offs and controllers, including terminal note-offs at this block's start.
 fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mut PluginSlot, held: &mut Vec<u8>) {
     let sr = s.sample_rate;
     // MIDI Track Offsets: the track's notes sound `offset` samples later (earlier if negative), so
@@ -1488,14 +1488,18 @@ fn schedule_notes(s: &Session, t: &Track, pos: Samples, frames: usize, inst: &mu
     let offset = midi_offset(s, t);
     let pos = pos.saturating_sub(offset);
     let end = pos.saturating_add(frames as i64);
-    for clip in t.clips() {
+    let block = Range { start: pos, end };
+    let clips = t.clips();
+    // A clip ending at `pos` no longer overlaps this half-open block, but its terminal note-offs
+    // belong here (offset 0), not in the preceding block. Send these first so an adjacent clip's
+    // same-pitch note-on follows the old note's release even when the playlist is not sorted.
+    let ending = clips.iter().filter(|c| c.end() == pos);
+    let overlapping = clips.iter().filter(|c| c.range().overlaps(&block));
+    for clip in ending.chain(overlapping) {
         if clip.muted {
             continue;
         }
         let ClipContent::Midi { sequence } = &clip.content else { continue };
-        if !clip.range().overlaps(&Range { start: pos, end }) {
-            continue;
-        }
         // Fractional ticks relative to the clip start, not integer ones: a clip start in samples
         // is not usually tick-aligned (e.g. sample 512 at 120 BPM / 48 kHz is tick 20.48), and
         // rounding the start to tick 20 moves a note-on at the clip start to sample 500 — before

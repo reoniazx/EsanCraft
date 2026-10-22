@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (native audio import progress and cancellation) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** trivial (MIDI clip-end note-offs) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -79,6 +79,12 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
   black-box format study is in the clean-room rules; not included in the estimate.
 
 ### G-04. Correctness bugs in "done" features
+
+**Fixed (2026-10-22):** MIDI clip-end note-offs are sent at offset zero of the next render block
+when the clip ends on a block boundary, rather than being skipped and leaving the voice held.
+They precede adjacent same-pitch note-ons even in unsorted playlists. Exact event timing is
+tested with positive and negative MIDI Track Offsets, natural and clipped note ends, and 1-,
+37-, 64-, 128-, 512- and 1024-sample render blocks. Bounce tests also verify audible synth release.
 
 **Fixed (2026-10-18):** Mono device playback averages the stereo channels before output clipping,
 instead of discarding the right side. Surround mixes average both sides of the ITU stereo
@@ -234,6 +240,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | trivial | G-04: MIDI clip-end note-offs preserved at block boundaries, with adjacent-note ordering and playback/bounce regression coverage |
 | 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | minor | G-09 shrunk: bundled Lao fonts and text-entry coverage; catalog, translations and bidi work remain |
 | 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
