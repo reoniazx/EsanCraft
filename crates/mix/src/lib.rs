@@ -298,6 +298,9 @@ struct ClipFx {
     gain_db: f32,
     sr: f32,
     ch: usize,
+    /// Output position expected next, and the lookahead already primed for this stream.
+    next: Option<Samples>,
+    latency: usize,
 }
 
 impl Strip {
@@ -946,13 +949,9 @@ fn process_strip(
                         if strip.clipbuf.len() != nch || strip.clipbuf.first().map_or(0, Vec::len) < frames {
                             strip.clipbuf = vec![vec![0.0; frames.max(strip.scratch.len())]; nch];
                         }
-                        for c in strip.clipbuf.iter_mut() {
-                            c.iter_mut().take(frames).for_each(|x| *x = 0.0);
-                        }
-                        render_clip(s, clip, pos, frames, &mut strip.clipbuf, &mut strip.scratch);
                         let fx = strip.clip_fx.entry(clip.id.0).or_insert_with(|| ClipFx::new(s.sample_rate.as_f64() as f32, nch));
                         fx.configure(params);
-                        fx.process(&mut strip.clipbuf, frames);
+                        fx.render(s, clip, pos, frames, &mut strip.clipbuf, &mut strip.scratch);
                         for (d, c) in strip.buf.iter_mut().zip(strip.clipbuf.iter()) {
                             for (x, y) in d.iter_mut().zip(c.iter()).take(frames) {
                                 *x += *y;
@@ -1152,10 +1151,11 @@ impl std::fmt::Write for Key {
 
 impl ClipFx {
     fn new(sr: f32, ch: usize) -> ClipFx {
-        ClipFx { eq: None, comp: None, gain_db: 0.0, sr, ch }
+        ClipFx { eq: None, comp: None, gain_db: 0.0, sr, ch, next: None, latency: 0 }
     }
     /// Clear filter, detector and lookahead history (transport stop / locate).
     fn reset(&mut self) {
+        self.next = None;
         for p in self.eq.iter_mut().chain(self.comp.iter_mut()) {
             p.reset();
         }
@@ -1199,6 +1199,38 @@ impl ClipFx {
             }
         }
     }
+    /// Clip media is available ahead of playback. Prime the effect's delay once, then read that
+    /// far ahead so its output keeps the clip's timeline position (including the last sample).
+    /// This is local to each clip: overlapping clips need not share a latency, and rendered
+    /// clip audio stays aligned independently of the mixer's track delay-compensation setting.
+    fn render(&mut self, s: &Session, clip: &Clip, pos: Samples, frames: usize, io: &mut [Vec<f32>], scratch: &mut [f32]) {
+        let frames = frames.min(io.iter().map(Vec::len).min().unwrap_or(0));
+        if frames == 0 {
+            return;
+        }
+        let latency = self.eq.iter().chain(self.comp.iter()).fold(0usize, |sum, p| sum.saturating_add(p.latency())).min(MAX_LATENCY);
+        if self.next != Some(pos) || latency != self.latency {
+            self.reset();
+            let mut done = 0;
+            while done < latency {
+                let n = (latency - done).min(frames);
+                self.render_at(s, clip, pos.saturating_add(done as i64), n, io, scratch);
+                done += n;
+            }
+        }
+        self.latency = latency;
+        self.render_at(s, clip, pos.saturating_add(latency as i64), frames, io, scratch);
+        self.next = Some(pos.saturating_add(frames as i64));
+    }
+
+    fn render_at(&mut self, s: &Session, clip: &Clip, pos: Samples, frames: usize, io: &mut [Vec<f32>], scratch: &mut [f32]) {
+        for c in io.iter_mut() {
+            c.iter_mut().take(frames).for_each(|x| *x = 0.0);
+        }
+        render_clip(s, clip, pos, frames, io, scratch);
+        self.process(io, frames);
+    }
+
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
         if let Some(eq) = &mut self.eq {
             eq.process(io, frames);
@@ -2181,18 +2213,16 @@ pub fn render_clips(s: &Session, track: TrackId, range: Range) -> Vec<Vec<f32>> 
         match clip_fx_params(s, c.id.0) {
             None => render_clip(s, c, range.start, len, &mut out, &mut scratch),
             Some(params) => {
-                let mut tmp = vec![vec![0.0f32; len]; out.len()];
-                render_clip(s, c, range.start, len, &mut tmp, &mut scratch);
-                let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, tmp.len());
+                let mut block = vec![vec![0.0f32; len.min(4096)]; out.len()];
+                let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, out.len());
                 fx.configure(params);
                 let mut done = 0;
                 while done < len {
                     let n = (len - done).min(4096);
-                    let mut block: Vec<Vec<f32>> = tmp.iter().map(|ch| ch.get(done..done + n).map(<[f32]>::to_vec).unwrap_or_default()).collect();
-                    fx.process(&mut block, n);
+                    fx.render(s, c, range.start.saturating_add(done as i64), n, &mut block, &mut scratch);
                     for (o, b) in out.iter_mut().zip(block.iter()) {
                         if let Some(dst) = o.get_mut(done..done + n) {
-                            for (x, y) in dst.iter_mut().zip(b.iter()) {
+                            for (x, y) in dst.iter_mut().zip(b.iter().take(n)) {
                                 *x += *y;
                             }
                         }

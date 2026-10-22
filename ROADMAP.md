@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** trivial (MIDI clip-end note-offs) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** trivial (MIDI clip-end note-offs and Clip Effects lookahead) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -123,6 +123,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 ## Progress log
 
+- **2026-10-22:** Clip Effects primes its lookahead and reads media ahead within each clip, retaining timeline placement and the final samples in playback, bounce, Consolidate and Render Clip Effects. Overlapping clips keep independent delays; seek/reset, lookahead changes, bypass, clip edits, track inserts, Undo/Redo and saved audio are regression-tested. No readiness percentage change.
 - **2026-10-22:** MIDI notes release at the clip end even when it falls exactly on a render-block boundary. Terminal note-offs precede adjacent same-pitch note-ons, including unsorted playlists. Regression tests cover exact event timing, MIDI Track Offsets and audible synth releases across playback and bounce block sizes. No readiness percentage change.
 - **2026-10-20:** Audio import fills one cumulative progress bar across all files and preparation stages, then displays 100% only after atomic placement succeeds. Stage transitions ease forward without resetting between files; cancellation freezes the fill. No readiness percentage change.
 - **2026-10-20:** Audio import uses one horizontal loading indicator sweeping left to right through every processing stage and cancellation, until the job ends. No readiness percentage change.
@@ -171,6 +172,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | trivial | Clip Effects lookahead preserves clip timing and final samples across playback, bounce and rendered audio; readiness estimates unchanged |
 | 2026-10-22 | trivial | MIDI clip-end note-offs preserved at render-block boundaries; adjacent-note ordering and playback/bounce regressions; readiness estimates unchanged |
 | 2026-10-20 | trivial | Cumulative filling import bar with a visible 100% completion frame after successful placement |
 | 2026-10-20 | trivial | One horizontal loading animation throughout audio import and cancellation; readiness estimates unchanged |
