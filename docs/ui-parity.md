@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** trivial (cumulative audio import progress) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** trivial (Edit status bar) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 How SoundCraft feels in the hands of a Pro Tools user: tools, modes, modifiers, shortcuts,
 windows, meters. Measured from `crates/model/src/session.rs` (tools, modes), the command
@@ -69,10 +69,14 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 | Fader resolution, fine adjust, numeric entry | 🟡 | |
 | macOS system menu bar | ✅ | #10 |
 
+The Edit status bar shows session details and task status. Undo information stays in the Edit
+menu and Undo History; frame timing remains available through `ui.inspect`.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | trivial | Edit status bar shows session details and task status without persistent Undo or frame timing text; Edit menu, Undo History and diagnostic inspection retained |
 | 2026-10-20 | trivial | Cumulative batch progress fills monotonically and paints 100% only after successful import; cancellation and failure never complete the bar |
 | 2026-10-20 | trivial | Uniform horizontal loading animation for all import stages and cancellation |
 | 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |

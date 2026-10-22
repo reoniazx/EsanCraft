@@ -192,14 +192,6 @@ fn status_bar(app: &mut SoundApp, ui: &mut Ui) {
     );
     soundcraft_model::truncate_chars(&mut left, 4 * soundcraft_model::MAX_NAME_CHARS);
     ui.painter().text(pos2(r.min.x + 10.0, r.center().y), Align2::LEFT_CENTER, left, regular(11.0), t.text_dim);
-    let undo = app.engine.undo_label().map_or(String::new(), |l| format!("Undo {l}"));
-    ui.painter().text(
-        pos2(r.max.x - 10.0, r.center().y),
-        Align2::RIGHT_CENTER,
-        if app.frame_ms < 50.0 { format!("{undo}   {:.1} ms/frame", app.frame_ms) } else { undo },
-        regular(11.0),
-        t.text_dim,
-    );
 }
 
 pub(crate) fn main_area(app: &mut SoundApp, ui: &mut Ui) {
