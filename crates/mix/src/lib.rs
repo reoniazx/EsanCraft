@@ -248,21 +248,37 @@ struct Strip {
 /// at most this, whatever its plugins claim, so a bogus value can't stall offline renders.
 const MAX_LATENCY: usize = 1 << 20;
 
-/// A multichannel delay line (samples), resized only when the delay changes.
+/// A multichannel delay line (samples). The rings only grow (keeping their contents), so a delay
+/// change in the callback moves the read offset instead of reallocating and zeroing.
 #[derive(Default)]
 struct DelayLine {
     bufs: Vec<Vec<f32>>,
+    /// Write position in the rings.
     idx: usize,
+    /// Current delay (samples).
     len: usize,
 }
 
 impl DelayLine {
     fn set(&mut self, len: usize, ch: usize) {
         let len = len.min(MAX_LATENCY);
-        if len != self.len || self.bufs.len() != ch {
-            self.len = len;
-            self.idx = 0;
-            self.bufs = vec![vec![0.0; len]; ch];
+        self.len = len;
+        let cap = self.bufs.first().map_or(0, Vec::len);
+        if self.bufs.len() != ch {
+            self.bufs.resize_with(ch, || vec![0.0; cap]);
+        }
+        let need = if len == 0 { 0 } else { len + 1 };
+        if need > cap {
+            let new_cap = need.next_power_of_two().min(MAX_LATENCY + 1);
+            let start = self.idx.min(cap);
+            for ring in &mut self.bufs {
+                let mut grown = Vec::with_capacity(new_cap);
+                grown.extend_from_slice(ring.get(start..).unwrap_or(&[]));
+                grown.extend_from_slice(ring.get(..start).unwrap_or(&[]));
+                grown.resize(new_cap, 0.0);
+                *ring = grown;
+            }
+            self.idx = cap;
         }
     }
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -270,20 +286,29 @@ impl DelayLine {
             return;
         }
         let start = self.idx;
+        let mut end = start;
         for (c, ch) in io.iter_mut().enumerate() {
             let Some(ring) = self.bufs.get_mut(c) else { continue };
-            let mut i = start;
+            let cap = ring.len();
+            if cap <= self.len {
+                continue;
+            }
+            let mut i = start % cap;
             for x in ch.iter_mut().take(frames) {
-                if let Some(r) = ring.get_mut(i) {
-                    std::mem::swap(r, x);
+                if let Some(w) = ring.get_mut(i) {
+                    *w = *x;
+                }
+                if let Some(r) = ring.get((i + cap - self.len) % cap) {
+                    *x = *r;
                 }
                 i += 1;
-                if i >= self.len {
+                if i >= cap {
                     i = 0;
                 }
             }
+            end = i;
         }
-        self.idx = (start + frames) % self.len.max(1);
+        self.idx = end;
     }
     fn clear(&mut self) {
         self.bufs.iter_mut().for_each(|b| b.fill(0.0));
@@ -2343,6 +2368,31 @@ mod tests {
         ins.params.insert("level".into(), level_db);
         tr.instrument = Some(ins);
         s
+    }
+
+    #[test]
+    fn delay_line_change_keeps_buffers_and_history() {
+        // #889: a latency change must not reallocate or zero the delay line in the callback.
+        let mut d = DelayLine::default();
+        d.set(480, 2);
+        let ptrs: Vec<_> = d.bufs.iter().map(|b| b.as_ptr()).collect();
+        let mut io = vec![(1..=480).map(|v| v as f32).collect::<Vec<f32>>(); 2];
+        d.process(&mut io, 480);
+        assert!(io.iter().all(|c| c.iter().all(|&x| x == 0.0)));
+        // Shorter delay: the line keeps its storage and outputs what it already holds.
+        d.set(240, 2);
+        let after: Vec<_> = d.bufs.iter().map(|b| b.as_ptr()).collect();
+        assert_eq!(ptrs, after, "delay line reallocated on a shorter delay");
+        let mut io = vec![vec![0.0f32; 240]; 2];
+        d.process(&mut io, 240);
+        let want: Vec<f32> = (241..=480).map(|v| v as f32).collect();
+        for c in &io {
+            assert_eq!(c, &want, "held samples lost on a latency change");
+        }
+        // Back to the longer delay: still the same storage.
+        d.set(480, 2);
+        let after: Vec<_> = d.bufs.iter().map(|b| b.as_ptr()).collect();
+        assert_eq!(ptrs, after, "delay line reallocated going back to its size");
     }
 
     #[test]

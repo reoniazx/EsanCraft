@@ -288,7 +288,7 @@ impl Default for EditState {
             timeline_selection: Range::default(),
             flags: ["view.clip.name", "view.clip.gain_line", "waveform.peak", "view.clip.overlap_shadows", "view.marker.ruler_lines"]
                 .iter()
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .collect(),
             values: std::collections::BTreeMap::new(),
         }

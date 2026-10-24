@@ -50,7 +50,7 @@ pub fn export(e: &Engine, ids: &[ClipId], path: &str) -> Result<usize> {
     };
     let n = clips.len();
     lanes.sort_by_key(|(i, _)| *i);
-    let stem = p.file_stem().and_then(|x| x.to_str()).unwrap_or("Clip Group").to_string();
+    let stem = p.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Clip Group").to_string();
     let audio_dir_name = format!("{} Audio", crate::io::sanitize_name(&stem));
     let dir = p.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut audio = BTreeMap::new();
@@ -80,26 +80,17 @@ pub fn export(e: &Engine, ids: &[ClipId], path: &str) -> Result<usize> {
     Ok(n)
 }
 
-/// Import a clip group file at `at`, one lane per track starting at `first` (new audio tracks
-/// are made when the session runs out). Returns the ids of the placed clips.
-pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -> Result<Vec<ClipId>> {
-    let id = "file.import_clip_groups";
-    let text = crate::io::read_text(path)?;
-    let file: GroupFile = serde_json::from_str(&text).map_err(|err| EngineError::BadParams(id.into(), format!("not a clip group file: {err}")))?;
-    if file.format != FORMAT {
-        return Err(EngineError::BadParams(id.into(), "not a SoundCraft clip group file".into()));
-    }
-    if file.lanes.iter().map(|l| l.len().max(1)).sum::<usize>() > MAX_CLIPS || file.audio.len() > MAX_CLIPS {
-        return Err(EngineError::BadParams(id.into(), "clip group file has too many clips".into()));
-    }
-    let dir = Path::new(path).parent().map(Path::to_path_buf).unwrap_or_default();
-    // Decode audio first so a bad file changes nothing, and each file once however many ids name it.
+fn decode_group_audio(
+    audio_entries: &BTreeMap<u64, String>,
+    dir: &Path,
+    rate: u32,
+    cmd_id: &str,
+) -> Result<(Vec<(String, soundcraft_audio_io::AudioBuffer)>, BTreeMap<u64, usize>)> {
     let (mut decoded, mut index, mut file_of) = (Vec::new(), BTreeMap::new(), BTreeMap::new());
-    let rate = e.session().sample_rate.hz();
-    for (old, rel) in &file.audio {
+    for (old, rel) in audio_entries {
         let full = dir.join(rel);
-        if !full.starts_with(&dir) || rel.contains("..") {
-            return Err(EngineError::BadParams(id.into(), format!("audio path escapes the group folder: {rel}")));
+        if !full.starts_with(dir) || rel.contains("..") {
+            return Err(EngineError::BadParams(cmd_id.into(), format!("audio path escapes the group folder: {rel}")));
         }
         let key = crate::io::file_key(&full);
         let n = match index.get(&key) {
@@ -116,6 +107,25 @@ pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -
         };
         file_of.insert(*old, n);
     }
+    Ok((decoded, file_of))
+}
+
+/// Import a clip group file at `at`, one lane per track starting at `first` (new audio tracks
+/// are made when the session runs out). Returns the ids of the placed clips.
+pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -> Result<Vec<ClipId>> {
+    let id = "file.import_clip_groups";
+    let text = crate::io::read_text(path)?;
+    let file: GroupFile = serde_json::from_str(&text).map_err(|err| EngineError::BadParams(id.into(), format!("not a clip group file: {err}")))?;
+    if file.format != FORMAT {
+        return Err(EngineError::BadParams(id.into(), "not a SoundCraft clip group file".into()));
+    }
+    if file.lanes.iter().map(|l| l.len().max(1)).sum::<usize>() > MAX_CLIPS || file.audio.len() > MAX_CLIPS {
+        return Err(EngineError::BadParams(id.into(), "clip group file has too many clips".into()));
+    }
+    let dir = Path::new(path).parent().map(Path::to_path_buf).unwrap_or_default();
+    // Decode audio first so a bad file changes nothing, and each file once however many ids name it.
+    let rate = e.session().sample_rate.hz();
+    let (decoded, file_of) = decode_group_audio(&file.audio, &dir, rate, id)?;
     let src_rate = f64::from(file.sample_rate.max(1));
     let s = e.session_mut();
     let ratio = f64::from(s.sample_rate.hz()) / src_rate;
@@ -123,7 +133,7 @@ pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -
     let sources: Vec<SourceId> = decoded
         .into_iter()
         .map(|(rel, buf)| {
-            let name = Path::new(&rel).file_name().and_then(|x| x.to_str()).unwrap_or("clip group").to_string();
+            let name = Path::new(&rel).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("clip group").to_string();
             crate::io::add_source(s, &name, buf, None, FileFormat::Wav)
         })
         .collect();

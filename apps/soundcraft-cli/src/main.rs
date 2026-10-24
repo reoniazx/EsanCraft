@@ -8,12 +8,14 @@
 //! soundcraft-cli commands [FILTER]               list commands
 //! soundcraft-cli describe ID                     one command's details
 //! soundcraft-cli app [--port P] METHOD [JSON]     call a running app's control channel
-//! soundcraft-cli mcp [--connect PORT] [--demo] [--automation-read-root DIR] [--automation-write-root DIR]
-//!                                                 MCP server on stdio. The two roots confine every file the
+//! soundcraft-cli mcp [--connect PORT] [--demo] [--automation-read-root DIR]... [--automation-write-root DIR]...
+//!                                                 MCP server on stdio. The roots confine every file the
 //!                                                 agent's commands read (open, import, presets) and write
 //!                                                 (save, bounce, export) to those folders, links followed;
-//!                                                 a root left out grants none of its access. They run the
-//!                                                 in-process server, so they conflict with --connect.
+//!                                                 each flag may be given more than once, a path inside any
+//!                                                 of its folders being allowed, and a kind left out grants
+//!                                                 none of its access. They run the in-process server, so
+//!                                                 they conflict with --connect.
 //! soundcraft-cli parity [--write PATH]            parity report (markdown)
 //! soundcraft-cli plugins                          list built-in plugins
 //! ```
@@ -110,7 +112,7 @@ fn info(args: &[String]) -> ExitCode {
         Ok(b) => b,
         Err(e) => return fail(format!("{path}: {e}")),
     };
-    let ext = std::path::Path::new(path).extension().and_then(|x| x.to_str());
+    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str);
     match soundcraft_audio_io::probe(&bytes, ext) {
         Ok(i) => {
             outln!("{}", serde_json::to_string_pretty(&json!({"format": i.format, "sample_format": i.sample_format, "sample_rate": i.sample_rate, "channels": i.channels, "frames": i.frames, "seconds": i.duration_secs(), "bwf": i.bwf})).unwrap_or_default());
@@ -134,7 +136,7 @@ fn convert(args: &[String]) -> ExitCode {
         Ok(b) => b,
         Err(e) => return fail(format!("{input}: {e}")),
     };
-    let ext = std::path::Path::new(input).extension().and_then(|x| x.to_str());
+    let ext = std::path::Path::new(input).extension().and_then(std::ffi::OsStr::to_str);
     let (_, mut buf) = match soundcraft_audio_io::decode(&bytes, ext) {
         Ok(x) => x,
         Err(e) => return fail(format!("{input}: {e}")),
@@ -146,7 +148,7 @@ fn convert(args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "--normalize") {
         soundcraft_dsp::offline::normalize(&mut buf.channels, -0.1, false);
     }
-    let out_ext = std::path::Path::new(output).extension().and_then(|x| x.to_str()).unwrap_or("wav").to_ascii_lowercase();
+    let out_ext = std::path::Path::new(output).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("wav").to_ascii_lowercase();
     let Some(format) = soundcraft_audio_io::encode_format_for(&out_ext) else {
         return fail(format!("{output}: cannot write `.{out_ext}` files (supported: {})", soundcraft_audio_io::ENCODE_EXTENSIONS));
     };
@@ -398,7 +400,7 @@ struct McpArgs {
 fn parse_mcp_args(args: &[String]) -> Result<McpArgs, String> {
     let mut connect = None;
     let mut demo = false;
-    let mut roots_args = automation_args::AutomationArgs::new(None, None);
+    let mut roots_args = automation_args::AutomationArgs::default();
     let mut it = args.iter().cloned();
     while let Some(a) = it.next() {
         if roots_args.consume(&a, &mut it)? {
@@ -411,7 +413,9 @@ fn parse_mcp_args(args: &[String]) -> Result<McpArgs, String> {
             _ => {}
         }
     }
-    let roots = AutomationRoots::new(roots_args.read_root.as_deref(), roots_args.write_root.as_deref())?;
+    let read: Vec<&std::path::Path> = roots_args.read_roots.iter().map(std::path::PathBuf::as_path).collect();
+    let write: Vec<&std::path::Path> = roots_args.write_roots.iter().map(std::path::PathBuf::as_path).collect();
+    let roots = AutomationRoots::new(&read, &write)?;
     if roots.is_some() && connect.is_some() {
         return Err("--automation-read-root and --automation-write-root confine the in-process server; a running app is not confined by them, \
 so drop --connect (or use --connect without the roots)"
@@ -437,8 +441,7 @@ fn mcp(args: &[String]) -> ExitCode {
         if let Some(roots) = roots {
             // Every thread of this process, not only the server's: nothing reaches past the roots.
             file_access::confine_process(roots.clone());
-            let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
-            eprintln!("soundcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
+            eprintln!("soundcraft-cli: files confined: {}", roots.describe());
             h = h.with_automation_roots(Some(roots));
         }
         let mut s = Server::new(h);

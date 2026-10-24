@@ -97,7 +97,7 @@ fn assets() -> Result<(), String> {
     let attribution = std::fs::read_to_string(root().join("ATTRIBUTION.md")).map_err(|e| format!("ATTRIBUTION.md: {e}"))?;
     let mut missing = Vec::new();
     for f in files.lines() {
-        let ext = Path::new(f).extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+        let ext = Path::new(f).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
         if !ASSET_EXT.contains(&ext.as_str()) {
             continue;
         }

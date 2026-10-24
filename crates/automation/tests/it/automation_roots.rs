@@ -57,7 +57,7 @@ fn fixture(name: &str) -> Fixture {
 }
 
 fn server(read: Option<&Path>, write: Option<&Path>) -> Server<Headless> {
-    let roots = AutomationRoots::new(read, write).unwrap();
+    let roots = AutomationRoots::new(read.as_slice(), write.as_slice()).unwrap();
     Server::new(Headless::new(Engine::default()).with_automation_roots(roots))
 }
 
@@ -186,7 +186,7 @@ fn writes(dir: &Path) -> Vec<(&'static str, Value)> {
 }
 
 fn demo_server(read: Option<&Path>, write: Option<&Path>) -> Server<Headless> {
-    let roots = AutomationRoots::new(read, write).unwrap();
+    let roots = AutomationRoots::new(read.as_slice(), write.as_slice()).unwrap();
     Server::new(Headless::new(soundcraft_engine::demo::demo_engine()).with_automation_roots(roots))
 }
 

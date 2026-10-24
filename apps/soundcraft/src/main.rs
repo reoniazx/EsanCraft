@@ -186,7 +186,7 @@ fn services() -> Services {
             if let Some(dir) = path.parent().filter(|dir| dir.is_dir()) {
                 d = d.set_directory(dir);
             }
-            if let Some(n) = path.file_name().and_then(|n| n.to_str()) {
+            if let Some(n) = path.file_name().and_then(std::ffi::OsStr::to_str) {
                 d = d.set_file_name(n);
             }
             d.save_file().map(|p| p.to_string_lossy().into_owned())

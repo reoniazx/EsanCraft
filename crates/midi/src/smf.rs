@@ -483,11 +483,49 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
         if !track.name.is_empty() {
             ev.push(WEvent { tick: 0, order: 0, bytes: meta(0x03, track.name.as_bytes())? });
         }
-        for n in &track.sequence.notes {
+        let notes = &track.sequence.notes;
+        let mut ends: Vec<u64> = notes.iter().map(|n| clamp_tick(n.end()).max(clamp_tick(n.start).saturating_add(1))).collect();
+        let mut dropped = vec![false; notes.len()];
+        // The reader pairs offs with ons first-in first-out, so a note still sounding when the next
+        // same-pitch note starts would swap ends with it: trim it to that start. When two same-pitch
+        // notes start on the same tick they cannot be told apart, so only the longer one is written.
+        let mut order: Vec<usize> = (0..notes.len()).collect();
+        order.sort_by_key(|&i| {
+            notes.get(i).map_or((0, 0, 0, std::cmp::Reverse(0)), |n| {
+                (n.channel & 0x0F, n.pitch.min(127), clamp_tick(n.start), std::cmp::Reverse(ends.get(i).copied().unwrap_or(0)))
+            })
+        });
+        let mut prev: Option<usize> = None;
+        for &b in &order {
+            let Some(nb) = notes.get(b) else { continue };
+            if let Some(a) = prev
+                && let Some(na) = notes.get(a)
+                && na.channel & 0x0F == nb.channel & 0x0F
+                && na.pitch.min(127) == nb.pitch.min(127)
+            {
+                let (sa, sb) = (clamp_tick(na.start), clamp_tick(nb.start));
+                if sa == sb {
+                    if let Some(d) = dropped.get_mut(b) {
+                        *d = true;
+                    }
+                    continue;
+                }
+                if let Some(ea) = ends.get_mut(a)
+                    && sb < *ea
+                {
+                    *ea = sb;
+                }
+            }
+            prev = Some(b);
+        }
+        for (i, n) in notes.iter().enumerate() {
+            if dropped.get(i).copied().unwrap_or(false) {
+                continue;
+            }
             let ch = n.channel & 0x0F;
             let pitch = n.pitch.min(127);
             let start = clamp_tick(n.start);
-            let end = clamp_tick(n.end()).max(start.saturating_add(1));
+            let end = ends.get(i).copied().unwrap_or(start.saturating_add(1));
             ev.push(WEvent { tick: start, order: 3, bytes: vec![0x90 | ch, pitch, n.velocity.clamp(1, 127)] });
             ev.push(WEvent { tick: end, order: 1, bytes: vec![0x80 | ch, pitch, n.release_velocity.min(127)] });
         }
@@ -535,5 +573,27 @@ mod tests {
         let mut b = Vec::new();
         push_vlq(&mut b, 0x2000).unwrap();
         assert_eq!(b, [0xC0, 0x00]);
+    }
+
+    #[test]
+    fn same_pitch_overlaps_do_not_swap_ends() {
+        let mk = |start, length| Note { pitch: 60, velocity: 100, release_velocity: 64, channel: 0, start, length };
+        let smf = Smf {
+            format: 1,
+            tracks: vec![SmfTrack {
+                name: String::new(),
+                sequence: Sequence { notes: vec![mk(0, 1000), mk(100, 200), mk(1000, 100), mk(2000, 500), mk(2000, 900)], ..Sequence::default() },
+            }],
+            tempos: vec![],
+            meters: vec![],
+            markers: vec![],
+            key_sigs: vec![],
+        };
+        let back = read_smf(&write_smf(&smf).unwrap()).unwrap();
+        let mut got: Vec<(i64, i64)> = back.tracks.iter().flat_map(|t| t.sequence.notes.iter().map(|n| (n.start, n.length))).collect();
+        got.sort_unstable();
+        // The earlier note is trimmed to the start of the next same-pitch note; later notes keep their length;
+        // of two notes starting together only the longer survives.
+        assert_eq!(got, vec![(0, 100), (100, 200), (1000, 100), (2000, 900)]);
     }
 }

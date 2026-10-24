@@ -124,7 +124,7 @@ pub fn parse_position(
         }
         TimeFormat::BarsBeats => {
             let parts: Vec<i64> =
-                t.split(['|', '.', ' ']).filter(|p| !p.is_empty()).map(|p| p.parse::<i64>()).collect::<Result<_, _>>().map_err(|_| err())?;
+                t.split(['|', '.', ' ']).filter(|p| !p.is_empty()).map(str::parse::<i64>).collect::<Result<_, _>>().map_err(|_| err())?;
             let bb = BarBeat {
                 bar: *parts.first().ok_or_else(err)?,
                 beat: parts.get(1).copied().unwrap_or(1).max(1),

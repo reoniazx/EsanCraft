@@ -341,7 +341,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                             return None;
                         }
                         let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
-                        let ext = std::path::Path::new(&name).extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+                        let ext = std::path::Path::new(&name).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
                         (is_dir || ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "m4b", "caf", "mid", "midi", "scraft"].contains(&ext.as_str()))
                             .then_some((name, is_dir))
                     })

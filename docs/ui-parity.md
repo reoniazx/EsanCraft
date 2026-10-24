@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** trivial (Edit status bar) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** trivial (upstream integration including Scroll Into View) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 How SoundCraft feels in the hands of a Pro Tools user: tools, modes, modifiers, shortcuts,
 windows, meters. Measured from `crates/model/src/session.rs` (tools, modes), the command
@@ -35,7 +35,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 | Modifier gestures (Alt for all tracks, Shift-Alt for selected, Cmd-click fine faders, Ctrl-click defaults) | 🟡 | Main ones on faders and pan; not across every control |
 | Scroll/zoom: wheel, trackpad pinch | 🟡 | Anchored trackpad zoom in open PRs #112, #137 |
 | Drag and drop: Clip List → tracks, files → tracks | ✅ macOS/Windows; 🟡 Wayland (PR #150) | |
-| Context menus (clip, track name, ruler, Clip List) | 🟡 | Clip and track menus exist; depth lower than Pro Tools'; Clip List delete (#4) |
+| Context menus (clip, track name, ruler, Clip List) | 🟡 | Clip and track menus exist; depth lower than Pro Tools'; Clip List delete (#4); track name ▸ Scroll Into View (Edit top, Mix left) |
 | Drag across checkboxes to check or uncheck several | ✅ | #399; every checkbox, as in the other Craft apps |
 
 ## Windows and panels
@@ -76,12 +76,14 @@ menu and Undo History; frame timing remains available through `ui.inspect`.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | trivial | Integrate upstream Scroll Into View while retaining local import progress, playback and editing improvements; readiness estimates unchanged |
 | 2026-10-22 | trivial | Edit status bar shows session details and task status without persistent Undo or frame timing text; Edit menu, Undo History and diagnostic inspection retained |
 | 2026-10-20 | trivial | Cumulative batch progress fills monotonically and paints 100% only after successful import; cancellation and failure never complete the bar |
 | 2026-10-20 | trivial | Uniform horizontal loading animation for all import stages and cancellation |
 | 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-18 | trivial | Meter bands align with -10/-5 dB rules and scale ticks, clip lights sit inside the wells, and peak holds stay inside the bars. Edit shares the Mix/output renderer; mono/stereo/multichannel, themes and fractional display scales covered. Readiness estimate unchanged |
+| 2026-10-16 | minor | Track name menu: Scroll Into View brings the track to the top of the Edit window and the left of the Mix. Readiness estimate unchanged |
 | 2026-10-14 | minor | Note-length Velocity tails enlarge the drag/reset target; nearby stems, zoom/pan, viewport clipping and selection visibility covered |
 | 2026-10-14 | minor | Velocity stems reset to 100 on double-click; overlapping handles, continuous drag targeting, Undo and empty-space clicks covered |
 | 2026-10-14 | minor | Velocity lane height adjusts independently inside the MIDI Editor; saved preference, divider/keyboard input and document isolation tested |

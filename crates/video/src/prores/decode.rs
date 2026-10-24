@@ -200,7 +200,7 @@ pub fn decode_frame_into(data: &[u8], opts: &DecodeOptions, out: &mut Frame) -> 
         let mut ac = alpha.as_mut().map(|a| a.chunks_mut(band_h * width));
         while let (Some(y), Some(cb), Some(cr)) = (yc.next(), cbc.next(), crc.next()) {
             let rows = y.len() / width;
-            let a = ac.as_mut().and_then(|it| it.next());
+            let a = ac.as_mut().and_then(Iterator::next);
             bands.push(Band { y, cb, cr, a, rows });
         }
     }
@@ -492,7 +492,7 @@ fn put_block(f: &[f32; 64], plane: &mut [u16], stride: usize, x0: usize, y0: usi
     if xn == 8 && (y0 + 7) * step + parity < rows {
         for yy in 0..8 {
             let o = ((y0 + yy) * step + parity) * stride + x0;
-            let (Some(row), Some(src)) = (plane.get_mut(o..).and_then(|p| p.first_chunk_mut::<8>()), f.as_chunks::<8>().0.get(yy)) else {
+            let (Some(row), Some(src)) = (plane.get_mut(o..).and_then(<[_]>::first_chunk_mut::<8>), f.as_chunks::<8>().0.get(yy)) else {
                 return;
             };
             for x in 0..8 {

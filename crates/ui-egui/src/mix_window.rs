@@ -48,11 +48,13 @@ pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
     let ids: Vec<TrackId> = app.engine.session().tracks.iter().filter(|x| !x.hidden && x.kind != TrackKind::Video).map(|x| x.id).collect();
     // Per-channel peaks for multichannel meters (read once per frame).
     let snap = app.meters_live().then(|| app.meter_snapshot.clone());
+    // Consume hidden-track requests in this frame, while retaining newly queued requests.
+    let scroll_to = app.mix_scroll_into_view.take();
     egui::ScrollArea::both().id_salt("mix_strips").auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
             for id in ids {
-                strip(app, ui, id, snap.as_deref());
+                strip(app, ui, id, snap.as_deref(), scroll_to == Some(id));
             }
             let rest = Rect::from_min_max(pos2(ui.cursor().min.x, ui.clip_rect().min.y), ui.clip_rect().max);
             if rest.width() > 4.0 && ui.interact(rest, ui.id().with("past_strips"), Sense::click()).double_clicked() {
@@ -150,12 +152,18 @@ pub(crate) fn route_popup(app: &mut SoundApp, resp: &egui::Response, id: TrackId
     egui::Popup::menu(resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| route_menu(app, ui, id, input));
 }
 
-fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapshot>) {
+fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapshot>, scroll_here: bool) {
     let t = Tokens::current();
     let narrow = app.ui.narrow_mix;
     let w = strip_width(narrow);
     let h = ui.available_height().max(560.0);
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    if scroll_here {
+        // egui stops `item_spacing` short of the edge (the scroll area's, not the strips' 1 pt),
+        // which would leave a sliver of the previous strip showing.
+        let margin = ui.ctx().global_style().spacing.item_spacing.x;
+        ui.scroll_to_rect(r.translate(vec2(margin, 0.0)), Some(egui::Align::Min));
+    }
     if !ui.is_rect_visible(r) {
         return;
     }

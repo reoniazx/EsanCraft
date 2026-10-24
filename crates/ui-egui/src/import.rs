@@ -378,7 +378,7 @@ mod tests {
         let outside = f.wav("outside.wav", 48_000);
         let allowed = f.0.join("allowed");
         std::fs::create_dir_all(&allowed).unwrap();
-        let roots = soundcraft_engine::file_access::AutomationRoots::new(Some(&allowed), None).unwrap();
+        let roots = soundcraft_engine::file_access::AutomationRoots::new(&[&allowed], &[]).unwrap();
         let mut app = app();
         soundcraft_engine::file_access::confine(roots.as_ref(), || start(&mut app, &json!({"path": outside}))).unwrap();
         finish(&mut app);

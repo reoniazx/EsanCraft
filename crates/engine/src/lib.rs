@@ -322,6 +322,7 @@ impl Engine {
         let before = Arc::clone(&self.doc);
         let rev = self.revision;
         let dirty = self.dirty;
+        let side_effects = (self.clipboard.clone(), self.messages.clone(), self.transport_requests.clone(), self.last_selection.clone());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match result {
             Ok(r) => r,
@@ -329,6 +330,7 @@ impl Engine {
                 self.doc = before;
                 self.revision = rev.wrapping_add(1);
                 self.dirty = dirty;
+                (self.clipboard, self.messages, self.transport_requests, self.last_selection) = side_effects;
                 return Err(EngineError::Internal(id.to_string(), panic_message(&*p)));
             }
         };
@@ -400,6 +402,11 @@ impl Engine {
         }
     }
 
+    /// The gesture `execute_merged` is continuing, if any.
+    pub fn merge_key(&self) -> Option<&str> {
+        self.merge_key.as_deref()
+    }
+
     /// End a gesture started with `execute_merged`.
     pub fn end_merge(&mut self) {
         self.merge_key = None;
@@ -455,7 +462,7 @@ fn install_panic_hook() {
 }
 
 fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
-    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into())
+    p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into())
 }
 
 #[cfg(test)]
@@ -525,5 +532,28 @@ mod dirty_tests {
         assert!(e.is_dirty());
         e.undo();
         assert!(!e.is_dirty());
+    }
+}
+
+#[cfg(test)]
+mod panic_tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_command_restores_side_effect_state() {
+        let mut e = Engine::default();
+        // Non-default values, so clearing them instead of restoring them would fail.
+        e.clipboard.length = 42;
+        e.messages.push("prior".into());
+        e.transport_requests.push(TransportRequest::Stop);
+        e.last_selection = Some((soundcraft_time::Range::new(20, 30), Vec::new()));
+        let (clipboard, messages, requests, selection) =
+            (e.clipboard.clone(), e.messages.clone(), e.transport_requests.clone(), e.last_selection.clone());
+        let r = e.execute("test.panic_probe", &json!({"panic": true}));
+        assert!(matches!(r, Err(EngineError::Internal(..))));
+        assert_eq!(e.clipboard, clipboard);
+        assert_eq!(e.messages, messages);
+        assert_eq!(e.transport_requests, requests);
+        assert_eq!(e.last_selection, selection);
     }
 }

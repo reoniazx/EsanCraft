@@ -381,12 +381,13 @@ impl AudioState {
                     // one; `read` is in [-1, 0), so `read + 1` is the fraction past `carry`.
                     let a = self.carry.get(c).copied().unwrap_or(0.0);
                     let b = self.pending.get(c).and_then(|v| v.first()).copied().unwrap_or(a);
-                    a + (b - a) * (self.read + 1.0) as f32
+                    a * (-self.read) as f32 + b * (self.read + 1.0) as f32
                 } else {
                     let ch = self.pending.get(c);
                     let a = ch.and_then(|v| v.get(i0)).copied().unwrap_or(0.0);
-                    let b = ch.and_then(|v| v.get(i0 + 1)).copied().unwrap_or(a);
-                    a + (b - a) * fr
+                    // Only pending_len frames are valid in a short final block.
+                    let b = if i0 + 1 < self.pending_len { ch.and_then(|v| v.get(i0 + 1)).copied().unwrap_or(a) } else { a };
+                    a * (1.0 - fr) + b * fr
                 }
             };
             if channels < nch {
@@ -405,23 +406,25 @@ impl AudioState {
                 }
                 for (c, o) in frame.iter_mut().enumerate() {
                     *o = match c {
-                        0 if channels == 1 => {
-                            let mono = (0.5 * l + 0.5 * r).clamp(-1.0, 1.0);
-                            if mono.is_finite() { mono } else { 0.0 }
-                        }
-                        0 => l.clamp(-1.0, 1.0),
-                        1 => r.clamp(-1.0, 1.0),
+                        0 if channels == 1 => out_sample(0.5 * l + 0.5 * r),
+                        0 => out_sample(l),
+                        1 => out_sample(r),
                         _ => 0.0,
                     };
                 }
             } else {
                 for (c, o) in frame.iter_mut().enumerate() {
-                    *o = if c < nch.max(1) && sounding { sample(c).clamp(-1.0, 1.0) } else { 0.0 };
+                    *o = if c < nch.max(1) && sounding { out_sample(sample(c)) } else { 0.0 };
                 }
             }
             self.read += step;
         }
     }
+}
+
+/// Clamp to the device range, mapping NaN and infinities to silence.
+fn out_sample(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
 }
 
 /// UI-thread bookkeeping of the third-party instances the audio thread holds.
@@ -708,6 +711,17 @@ impl Player {
         self.side().capture_states()
     }
 
+    /// The plugins that said their state changed since the last call, so the session can keep
+    /// changes made only in plugin editors.
+    pub fn changed_states(&self) -> Vec<(TrackId, usize)> {
+        self.side().changed_states()
+    }
+
+    /// Reads the state of the plugins in `slots`.
+    pub fn capture_states_of(&self, slots: &[(TrackId, usize)]) -> PluginStates {
+        self.side().capture_states_of(slots)
+    }
+
     /// Per-UI-frame housekeeping: drops retired instances and services plugin editors. Returns
     /// the parameter edits made in open editors since the last call.
     pub fn idle(&self) -> Vec<EditorEdit> {
@@ -836,6 +850,24 @@ impl Side {
         self.states.iter_mut().filter(|(k, _)| !self.refused.contains(*k)).filter_map(|(&(t, slot), r)| Some((t, slot, r.save_state()?))).collect()
     }
 
+    fn changed_states(&mut self) -> Vec<(TrackId, usize)> {
+        self.editors.iter_mut().filter_map(|(k, e)| e.state_changed().then_some(*k)).collect()
+    }
+
+    fn capture_states_of(&mut self, slots: &[(TrackId, usize)]) -> PluginStates {
+        self.states
+            .iter_mut()
+            .filter(|(k, _)| !self.refused.contains(*k) && slots.contains(k))
+            .filter_map(|(&(t, slot), r)| Some((t, slot, r.save_state()?)))
+            .collect()
+    }
+
+    /// A plugin that marks its state changed while it loads or restores it hasn't changed.
+    fn add_editor(&mut self, key: (TrackId, usize), mut e: Box<dyn PluginEditor>) {
+        let _ = e.state_changed();
+        self.editors.insert(key, e);
+    }
+
     fn open_editor(&mut self, key: (TrackId, usize)) -> Result<(), String> {
         let e = self.editors.get_mut(&key).ok_or_else(|| "this plugin has no editor (or it is not loaded)".to_string())?;
         e.open()?;
@@ -872,7 +904,7 @@ impl Side {
             self.shadow.insert(key, (spec.id.clone(), spec.ch, made.is_some()));
             if let Some(soundcraft_mix::NewInstance { mut plugin, refused_state }) = made {
                 if let Some(e) = plugin.editor() {
-                    self.editors.insert(key, e);
+                    self.add_editor(key, e);
                 }
                 if let Some(r) = plugin.state_reader() {
                     self.states.insert(key, r);
@@ -1248,6 +1280,26 @@ mod tests {
     }
 
     #[test]
+    fn resampling_at_a_short_block_edge_does_not_mix_in_stale_frames() {
+        use soundcraft_model::ChannelFormat;
+        // DC for the first long block, then silence. The device runs slower than the session, so
+        // reads land between frames; a short block leaves the long block's DC past `pending_len`.
+        let mut st = audio_output_state(ChannelFormat::Stereo, vec![vec![0.8; BLOCK]; 2]);
+        st.device_rate = 44_100.0;
+        let mut long = vec![0.0; 2 * 470];
+        st.fill(&mut long, 2);
+        assert_eq!(st.pending_len, BLOCK);
+        let mut short = [0.0; 2 * 8];
+        for call in 0..20 {
+            st.fill(&mut short, 2);
+            assert!(st.pending_len < BLOCK);
+            // The first frame of the first short call still reads the DC block's last frame.
+            let from = if call == 0 { 2 } else { 0 };
+            assert!(short[from..].iter().all(|x| x.abs() < 1e-6), "call {call}: {short:?}");
+        }
+    }
+
+    #[test]
     fn mono_device_preserves_centered_mono_level_and_includes_surround_right_channels() {
         use soundcraft_model::ChannelFormat;
         let h = std::f32::consts::FRAC_1_SQRT_2;
@@ -1275,6 +1327,18 @@ mod tests {
         let mut out = [0.5; 128];
         st.fill(&mut out, 1);
         assert!(out.iter().all(|x| *x == 0.0), "overflow in the stereo fold-down must not send NaN to a mono device");
+    }
+
+    #[test]
+    fn interpolation_overflow_between_huge_samples_never_reaches_the_device() {
+        use soundcraft_model::ChannelFormat;
+        let alternating: Vec<f32> = (0..512).map(|i| if i % 2 == 0 { -3.4e38 } else { 3.4e38 }).collect();
+        for (format, nch, device) in [(ChannelFormat::Stereo, 2, 2), (ChannelFormat::Stereo, 2, 8), (ChannelFormat::Mono, 1, 1)] {
+            let mut st = audio_output_state(format, vec![alternating.clone(); nch]);
+            let mut out = vec![0.5; 64 * device];
+            st.fill(&mut out, device);
+            assert!(out.iter().all(|x| x.is_finite() && (-1.0..=1.0).contains(x)), "{format:?} on {device} channels: {out:?}");
+        }
     }
 
     #[test]
@@ -1392,6 +1456,55 @@ mod tests {
         assert!(side.capture_states().is_empty());
         side.open_editor(k).unwrap();
         assert_eq!(side.capture_states(), vec![(TrackId(1), 0, b"defaults".to_vec())]);
+    }
+
+    /// An editor whose plugin said its state changed (CLAP `state.mark_dirty`).
+    struct Dirty(bool);
+
+    impl PluginEditor for Dirty {
+        fn open(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+        fn close(&mut self) {}
+        fn is_open(&self) -> bool {
+            true
+        }
+        fn idle(&mut self) -> Vec<(String, f32)> {
+            Vec::new()
+        }
+        fn state_changed(&mut self) -> bool {
+            std::mem::take(&mut self.0)
+        }
+    }
+
+    #[test]
+    fn changed_states_are_reported_once_and_read_for_the_session() {
+        let mut side = Side::new(48_000.0, channel().1);
+        let (a, b) = (TrackId(1), TrackId(2));
+        let synth = (a, soundcraft_mix::INSTRUMENT_SLOT);
+        side.states.insert((a, 0), Box::new(|| Some(b"a0".to_vec())));
+        side.states.insert((a, 1), Box::new(|| Some(b"a1".to_vec())));
+        side.states.insert(synth, Box::new(|| Some(b"synth".to_vec())));
+        side.states.insert((b, 0), Box::new(|| Some(b"b0".to_vec())));
+        side.editors.insert((a, 0), Box::new(Dirty(true)));
+        side.editors.insert((a, 1), Box::new(Dirty(false)));
+        side.editors.insert((b, 0), Box::new(Dirty(true)));
+        side.refused.insert((b, 0));
+        let mut changed = side.changed_states();
+        changed.sort();
+        assert_eq!(changed, vec![(a, 0), (b, 0)]);
+        assert!(side.changed_states().is_empty(), "each change is reported once");
+        let want = vec![(a, 0, b"a0".to_vec()), (a, soundcraft_mix::INSTRUMENT_SLOT, b"synth".to_vec())];
+        assert_eq!(side.capture_states_of(&[(a, 0), synth, (b, 0)]), want);
+    }
+
+    #[test]
+    fn a_state_marked_changed_while_loading_is_not_a_change() {
+        let mut side = Side::new(48_000.0, channel().1);
+        let k = (TrackId(1), 0);
+        side.states.insert(k, Box::new(|| Some(b"loaded".to_vec())));
+        side.add_editor(k, Box::new(Dirty(true)));
+        assert!(side.changed_states().is_empty());
     }
 
     #[test]

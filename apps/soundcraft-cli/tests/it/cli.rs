@@ -2,7 +2,7 @@
 // Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md).
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
@@ -27,7 +27,16 @@ fn tmpdir(tag: &str) -> PathBuf {
 /// Send `calls` (tool name, arguments) to `soundcraft-cli mcp <args>`; returns whether it exited
 /// cleanly, its stderr, and the stdout lines after `initialize`, one per call.
 fn mcp_session(args: &[&str], calls: &[(&str, Value)]) -> (bool, String, Vec<Value>) {
-    let mut child = bin().arg("mcp").args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    mcp_session_in(None, args, calls)
+}
+
+/// [`mcp_session`] with the server started in the working directory `cwd`.
+fn mcp_session_in(cwd: Option<&Path>, args: &[&str], calls: &[(&str, Value)]) -> (bool, String, Vec<Value>) {
+    let mut cmd = bin();
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let mut child = cmd.arg("mcp").args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     {
         let stdin = child.stdin.as_mut().unwrap();
         writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18"}}}}"#).unwrap();
@@ -101,6 +110,74 @@ fn mcp_automation_roots_confine_the_server() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// #874: each root flag may be given more than once. A path inside any root of its kind passes;
+/// the two roots' common parent, `..` out of a root and a link out of one stay refused.
+#[test]
+fn mcp_automation_roots_take_several_folders() {
+    // Resolved, as the server shows the roots (`/var` is `/private/var` on macOS).
+    let base = std::fs::canonicalize(tmpdir("several")).unwrap();
+    for d in ["in", "in2", "out", "out2", "outside"] {
+        std::fs::create_dir_all(base.join(d)).unwrap();
+    }
+    for f in ["in/a.wav", "in2/b.wav", "outside/secret.wav", "parent.wav"] {
+        make_wav(&base.join(f));
+    }
+    let p = |f: &str| base.join(f).to_str().unwrap().to_string();
+    let sep = std::path::MAIN_SEPARATOR;
+    let calls = [
+        ("import_audio", serde_json::json!({"path": p("in/a.wav")})),
+        ("import_audio", serde_json::json!({"path": p("in2/b.wav")})),
+        // The roots' common parent is not a root.
+        ("import_audio", serde_json::json!({"path": p("parent.wav")})),
+        ("import_audio", serde_json::json!({"path": format!("{}{sep}..{sep}outside{sep}secret.wav", p("in2"))})),
+        ("bounce_mix", serde_json::json!({"path": p("out/a.wav")})),
+        ("bounce_mix", serde_json::json!({"path": p("out2/b.wav")})),
+        ("bounce_mix", serde_json::json!({"path": p("x.wav")})),
+        // Read and write stay separate: a read root is not a write root, nor the other way round.
+        ("bounce_mix", serde_json::json!({"path": p("in2/c.wav")})),
+        ("import_audio", serde_json::json!({"path": p("out2/b.wav")})),
+    ];
+    let read2 = format!("--automation-read-root={}", p("in2"));
+    let args = ["--automation-read-root", &p("in"), &read2, "--automation-write-root", &p("out"), "--automation-write-root", &p("out2")];
+    let (success, stderr, replies) = mcp_session(&args, &calls);
+    assert!(success, "{stderr}");
+    assert!(stderr.contains(&format!("read {}, {}", p("in"), p("in2"))), "{stderr}");
+    let errors: Vec<bool> = replies.iter().map(|r| r["result"]["isError"] == true).collect();
+    assert_eq!(errors, [false, false, true, true, false, false, true, true, true], "{replies:?}");
+    for (i, kind) in [(2, "read"), (3, "read"), (6, "write"), (7, "write"), (8, "read")] {
+        assert!(text(&replies[i]).contains(&format!("outside the {kind} roots ")), "{}", text(&replies[i]));
+    }
+    assert!(base.join("out/a.wav").is_file() && base.join("out2/b.wav").is_file());
+    assert!(!base.join("x.wav").exists() && !base.join("in2/c.wav").exists());
+
+    // A link in one root that leads out of all of them is outside.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(base.join("outside/secret.wav"), base.join("in2/leak.wav")).unwrap();
+        let (_, _, replies) = mcp_session(&args, &[("import_audio", serde_json::json!({"path": p("in2/leak.wav")}))]);
+        assert!(text(&replies[0]).contains("outside the read roots"), "{}", text(&replies[0]));
+    }
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn a_bare_save_session_name_lands_in_the_working_directory_inside_the_roots() {
+    let work = tmpdir("bare-name");
+    let work_s = work.to_str().unwrap();
+    let calls = [
+        ("new_session", serde_json::json!({"name": "t", "sample_rate": 48000})),
+        ("execute", serde_json::json!({"command": "track.new", "params": {"kind": "audio", "name": "Tone", "format": "mono"}})),
+        ("save_session", serde_json::json!({"path": "t.scraft"})),
+    ];
+    let (success, stderr, replies) = mcp_session_in(Some(&work), &["--automation-read-root", work_s, "--automation-write-root", work_s], &calls);
+    assert!(success, "{stderr}");
+    for reply in &replies {
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+    }
+    assert!(work.join("t.scraft").is_file());
+    let _ = std::fs::remove_dir_all(work);
+}
+
 #[test]
 fn mcp_automation_root_flags_are_checked_up_front() {
     let base = tmpdir("roots-args");
@@ -117,8 +194,9 @@ fn mcp_automation_root_flags_are_checked_up_front() {
     // The flags confine the in-process server, so they cannot be combined with --connect.
     fails(&["--connect", "7979", "--automation-read-root", dir], "--connect");
     fails(&["--automation-write-root", dir, "--connect", "7979"], "--connect");
-    fails(&["--automation-read-root", dir, "--automation-read-root", dir], "given twice");
-    fails(&["--automation-write-root", dir, "--automation-write-root", dir], "given twice");
+    // #874: a flag may be given again, but every folder it names must exist.
+    fails(&["--automation-read-root", dir, "--automation-read-root", missing.to_str().unwrap()], "cannot open the automation read root");
+    fails(&["--automation-write-root", dir, "--automation-write-root"], "needs a folder");
     fails(&["--automation-read-root"], "needs a folder");
     fails(&["--automation-write-root", "--demo"], "needs a folder");
     fails(&["--automation-read-root", missing.to_str().unwrap()], "cannot open the automation read root");

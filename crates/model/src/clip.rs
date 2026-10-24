@@ -244,13 +244,18 @@ impl Clip {
 
     /// Move the start edge to `new_start` keeping material anchored (trim start).
     pub fn trim_start_to(&mut self, new_start: Samples) {
-        let new_start = new_start.min(self.end() - 1);
-        let delta = new_start - self.start;
+        // #907: these are public APIs, so they have to survive arguments a command would never
+        // pass (commands clamp to `MAX_POSITION` first). `Samples` is `i64`, so an extreme
+        // `new_start` against an extreme `start` wrapped in release and panicked in debug.
+        // Never so far back that the length would pass `MAX_POSITION`: trimming the start keeps the end.
+        let end = self.end();
+        let new_start = new_start.max(end.saturating_sub(MAX_POSITION)).clamp(-MAX_POSITION, MAX_POSITION).min(end.saturating_sub(1));
+        let delta = new_start.saturating_sub(self.start);
         if let ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } = &mut self.content {
             *offset = offset.saturating_add(delta);
         }
         // MIDI note ticks are re-anchored by the engine, which knows the tempo map.
-        self.length -= delta;
+        self.length = self.length.saturating_sub(delta).clamp(1, MAX_POSITION);
         self.start = new_start;
         if self.sync_point != 0 {
             self.sync_point = self.sync_point.saturating_sub(delta);
@@ -267,8 +272,9 @@ impl Clip {
 
     /// Move the end edge to `new_end`.
     pub fn trim_end_to(&mut self, new_end: Samples) {
-        let new_end = new_end.max(self.start + 1);
-        self.length = new_end - self.start;
+        // #907: saturating, like `trim_start_to`.
+        let new_end = new_end.clamp(-MAX_POSITION, MAX_POSITION).max(self.start.saturating_add(1));
+        self.length = new_end.saturating_sub(self.start).clamp(1, MAX_POSITION);
         self.drop_stray_sync();
         self.clamp_fades();
     }
@@ -478,5 +484,26 @@ mod tests {
         c.fade_out = Fade { len: 800, shape: FadeShape::Linear, curvature: 0.0 };
         c.trim_start_to(900);
         assert!(c.fade_out.len <= c.length);
+    }
+
+    /// #907: `trim_start_to` / `trim_end_to` are public APIs, so they have to survive arguments a
+    /// command would never pass. `Samples` is `i64`, so an extreme `new_start` against an extreme
+    /// `start` wrapped in release and panicked in debug. Every position stays within
+    /// `±MAX_POSITION` and every length within `1..=MAX_POSITION`.
+    #[test]
+    fn trims_saturate_on_extreme_arguments() {
+        for &new_start in &[Samples::MIN, -(MAX_POSITION * 2), -1, 0, MAX_POSITION, MAX_POSITION * 2, Samples::MAX] {
+            let mut c = Clip::audio(ClipId(1), "a", SourceId(1), 1000, MAX_POSITION / 2, 1000);
+            c.trim_start_to(new_start);
+            assert!((-(MAX_POSITION as i128)..=(MAX_POSITION as i128)).contains(&(c.start as i128)), "start {new_start}: {}", c.start);
+            assert!((1..=MAX_POSITION).contains(&c.length), "start {new_start}: length {}", c.length);
+            assert_eq!(c.end(), MAX_POSITION / 2 + 1000, "start {new_start} moved the end");
+        }
+        for &new_end in &[Samples::MIN, -(MAX_POSITION * 2), -1, 0, MAX_POSITION, MAX_POSITION * 2, Samples::MAX] {
+            let mut c = Clip::audio(ClipId(2), "b", SourceId(1), 1000, -(MAX_POSITION / 2), 1000);
+            c.trim_end_to(new_end);
+            assert!((1..=MAX_POSITION).contains(&c.length), "end {new_end}: length {}", c.length);
+            assert!(c.end() - c.start == c.length, "end {new_end}: start {} end {}", c.start, c.end());
+        }
     }
 }

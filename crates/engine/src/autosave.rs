@@ -181,11 +181,15 @@ impl Autosave {
     fn create(root: &Path, name: &str) -> Result<Autosave> {
         let stamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis();
         let base = format!("{} {stamp}-{}", sanitize_name(name), std::process::id());
-        std::fs::create_dir_all(root).map_err(|err| io_error(root, err))?;
+        create_folder(root).map_err(|err| io_error(root, err))?;
         let mut dir = root.join(&base);
         let mut n = 1;
         loop {
-            match std::fs::create_dir(&dir) {
+            // Not recursive, so a folder that already exists is reported and the next name tried.
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            match builder.create(&dir) {
                 Ok(()) => break,
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     n += 1;
@@ -224,9 +228,7 @@ impl Autosave {
                     self.next += 1;
                     let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
                     let bytes = soundcraft_audio_io::encode(&audio.buffer, &opts).map_err(|err| EngineError::Io(err.to_string()))?;
-                    std::fs::create_dir_all(&audio_dir)
-                        .and_then(|()| write_synced(&audio_dir.join(&name), &bytes))
-                        .map_err(|err| io_error(&audio_dir, err))?;
+                    create_folder(&audio_dir).and_then(|()| write_synced(&audio_dir.join(&name), &bytes)).map_err(|err| io_error(&audio_dir, err))?;
                     name
                 }
             };
@@ -409,6 +411,18 @@ pub fn discard(left: &Leftover) {
     let _ = std::fs::remove_dir_all(&left.dir);
 }
 
+/// Create `dir` and its missing parents under the autosave root. On Unix every folder made here is
+/// owner-only (`0o700`): autosaves and the takes of a session never saved are unsaved work, and
+/// with the default mode other accounts on the machine could read them. A folder that already
+/// exists keeps its mode.
+pub fn create_folder(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut f = std::fs::File::create(path)?;
     f.write_all(bytes)?;
@@ -532,6 +546,50 @@ mod tests {
         recover(&mut r, &leftovers(&root)[0]).unwrap();
         assert_eq!(r.session().sources.len(), 6);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Autosaves are unsaved work: on Unix the folders the autosaver makes are owner-only, and an
+    /// autosave root that already exists keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn the_autosaver_makes_owner_only_folders() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let base = folder("autosave-modes");
+        let mut e = Engine::default();
+        record(&mut e, 0.5);
+        // A root that doesn't exist yet is made with the first autosave, owner-only like the
+        // session's folder and the audio copied into it.
+        let new = base.join("Autosave");
+        let w = Autosaver::new(new.clone());
+        w.write(e.session_arc(), None, None);
+        w.flush().unwrap();
+        let session = std::fs::read_dir(&new).unwrap().flatten().map(|d| d.path()).next().unwrap();
+        assert_eq!((mode(&new), mode(&session), mode(&session.join("Audio Files"))), (0o700, 0o700, 0o700));
+        w.close(false);
+        w.flush().unwrap();
+        // A root that already exists keeps its mode; the folders made inside it are owner-only.
+        let old = base.join("old");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let w = Autosaver::new(old.clone());
+        w.write(e.session_arc(), None, None);
+        w.flush().unwrap();
+        let session = std::fs::read_dir(&old).unwrap().flatten().map(|d| d.path()).next().unwrap();
+        assert_eq!((mode(&old), mode(&session)), (0o755, 0o700));
+        // A session never saved records its takes into `<name>/Audio Files` under the root. Both
+        // are made owner-only, and so is `Audio Files` in a take folder an earlier version left.
+        let takes = old.join("Untitled").join("Audio Files");
+        create_folder(&takes).unwrap();
+        assert_eq!((mode(&old.join("Untitled")), mode(&takes)), (0o700, 0o700));
+        let earlier = old.join("Earlier");
+        std::fs::create_dir_all(&earlier).unwrap();
+        std::fs::set_permissions(&earlier, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_folder(&earlier.join("Audio Files")).unwrap();
+        assert_eq!((mode(&earlier), mode(&earlier.join("Audio Files"))), (0o755, 0o700));
+        w.close(false);
+        w.flush().unwrap();
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
