@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** trivial (MIDI clip-end note-offs and Clip Effects lookahead) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** trivial (merge upstream updates; retain local fixes) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -87,6 +87,8 @@ Playback, bounce, Consolidate and Render Clip Effects use the same alignment. Re
 cover mono/stereo/5.1, 1-/37-/64-/512-/1024-frame renders, overlapping and adjacent clips, partial
 ranges, variable callbacks, seek/reset, bypass, lookahead edits, gain/fades/stretch, EQ/compression,
 track insert latency, Undo/Redo and saved audio. Other correctness gaps and estimates remain.
+
+**Fixed (2026-10-19, #791):** Float32 WAV and AIFF-C encoding retain finite samples above full scale. Whole-file and streaming tests cover both formats, integer clipping, and the existing NaN/infinity behavior. A bounce regression checks preserved headroom and file/report agreement with normalization off, then checks normalized output.
 
 **Fixed (2026-10-22):** MIDI clip-end note-offs are sent at offset zero of the next render block
 when the clip ends on a block boundary, rather than being skipped and leaving the voice held.
@@ -199,8 +201,10 @@ varispeed, high-quality offline) plus Elastic Pitch and warp-marker editing dept
 
 ### G-16. Session management
 
-No session templates, track presets, workspace/sound browser with previews, batch rename (new in
-2026.4), disk-usage and relink depth. ≈ 25–40 h.
+Session templates, track-preset recall UI and browser, workspace/sound browser with previews,
+batch rename (new in 2026.4), disk-usage and relink depth remain. Track-preset saves capture the
+current hosted-plugin state before writing (#661); recall UI, partial recall and preset browsing remain
+tracked in #639. ≈ 25–40 h.
 
 ### G-17. Video and post
 
@@ -248,12 +252,14 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
 | 2026-10-22 | trivial | G-04: Clip Effects lookahead preserves clip timing and final samples in playback, bounce and rendered audio |
 | 2026-10-22 | trivial | G-04: MIDI clip-end note-offs preserved at block boundaries, with adjacent-note ordering and playback/bounce regression coverage |
 | 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | minor | G-09 shrunk: bundled Lao fonts and text-entry coverage; catalog, translations and bidi work remain |
 | 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-18 | trivial | G-19 shrunk: meter colours align with -10/-5 dB rules, clip lights sit inside the wells and peak holds stay inside the bars; estimates unchanged |
+| 2026-10-19 | trivial | G-04: Float32 encoding retains finite headroom (#791); integer clipping and non-finite handling retained |
 | 2026-10-18 | trivial | G-04: mono device stereo/surround fold-down fixed and regression-tested; estimates unchanged |
 | 2026-10-16 | trivial | G-04: failed aux/folder/master inserts excluded from latency compensation after containment; estimates unchanged |
 | 2026-10-16 | trivial | G-04: master volume automation block boundaries fixed and regression-tested; estimates unchanged |
@@ -262,6 +268,7 @@ missing. Out of scope unless the owner decides otherwise.
 | 2026-10-14 | minor | G-19 shrunk: MIDI Velocity lane resizes independently with saved preferences; estimates unchanged |
 | 2026-10-14 | minor | MIDI cursor limited to the piano roll, keeping Velocity clear |
 | 2026-10-14 | minor | G-19 shrunk: MIDI playback cursor, independent scrolling and centered play cue |
+| 2026-10-16 | minor | G-16: capture current hosted-plugin state before saving a track preset (#661); broader preset work remains (#639) |
 | 2026-10-12 | minor | G-01 shrunk: audio device, rate and buffer choice; opt-in ASIO |
 | 2026-10-10 | minor | Marked the alpha blockers (G-01, G-02, G-03; parts of G-05 and G-06) from the core-workflow gate |
 | 2026-10-10 | major | Created from the full re-measure against Pro Tools Ultimate 2026.4.1: 22 ranked gaps with evidence and estimates |

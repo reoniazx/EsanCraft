@@ -133,6 +133,21 @@ fn resize_velocity(app: &mut SoundApp, ui: &mut Ui, full: Rect, cid: ClipId) -> 
     layout
 }
 
+impl MidiEditorState {
+    /// Start editing `id`. Note indices only mean something inside one clip, so the selection and
+    /// any gesture in progress are dropped when the clip changes.
+    fn switch_clip(&mut self, id: ClipId) {
+        if self.clip != Some(id) {
+            self.selected.clear();
+            self.drag = None;
+            self.velocity_drag = None;
+            self.velocity_note = None;
+            self.band = None;
+        }
+        self.clip = Some(id);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NoteDrag {
     pub index: usize,
@@ -394,11 +409,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         app.midi.top_pitch = f64::from((mid + rows / 2).clamp(rows.min(127), 127));
         app.midi.zoom = 1.0;
         app.midi.scroll_ticks = 0.0;
-        app.midi.selected.clear();
-        app.midi.drag = None;
-        app.midi.velocity_note = None;
-        app.midi.band = None;
-        app.midi.clip = Some(cid);
+        app.midi.switch_clip(cid);
     }
     app.midi.roll = [roll.min.x, roll.min.y, roll.max.x, roll.max.y];
     app.midi.velocity = [vel.min.x, vel.min.y, vel.max.x, vel.max.y];
@@ -612,7 +623,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             0
         };
         if (semi != 0 || ticks != 0) && !app.midi.selected.is_empty() {
-            let _ = app.run("midi.notes_move", json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks, "semitones": semi}));
+            let moved = app.run("midi.notes_move", json!({"clip": cid.0, "indices": app.midi.selected, "ticks": ticks, "semitones": semi}));
+            // The engine re-sorts the notes: follow the moved ones to their new indices, so the
+            // selection never points at other notes and the arrows can keep nudging it.
+            app.midi.selected = moved.ok().and_then(|v| serde_json::from_value(v["indices"].clone()).ok()).unwrap_or_default();
         }
     }
     if !app.midi.selected.is_empty()
@@ -734,5 +748,21 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if x.is_finite() && x >= roll.min.x && x <= roll.max.x {
         let color = if midi_playback::effective(app) == MidiScrollingMode::Center && !app.engine.transport.recording { t.accent } else { t.playhead };
         ui.painter().with_clip_rect(roll.intersect(ui.clip_rect())).line_segment([pos2(x, roll.min.y), pos2(x, roll.max.y)], Stroke::new(1.5, color));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switching_clip_drops_selection_and_gestures() {
+        let mut st = MidiEditorState { selected: vec![0, 2], clip: Some(ClipId(1)), band: Some(pos2(1.0, 2.0)), ..Default::default() };
+        st.switch_clip(ClipId(1));
+        assert_eq!(st.selected, vec![0, 2]);
+        st.switch_clip(ClipId(2));
+        assert!(st.selected.is_empty());
+        assert!(st.drag.is_none() && st.band.is_none());
+        assert_eq!(st.clip, Some(ClipId(2)));
     }
 }

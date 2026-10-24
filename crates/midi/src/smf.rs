@@ -204,7 +204,12 @@ pub fn read_smf(bytes: &[u8]) -> Result<Smf, MidiError> {
         tracks.push(track);
     }
 
-    if format == 1 && tracks.len() > 1 && tracks.first().is_some_and(|t| t.sequence.notes.is_empty() && t.sequence.ctrls.is_empty()) {
+    // A lone track is only a conductor track if it carried global data and has no name; otherwise it is kept.
+    let globals_present = !(globals.tempos.is_empty() && globals.meters.is_empty() && globals.markers.is_empty() && globals.key_sigs.is_empty());
+    if format == 1
+        && (tracks.len() > 1 || globals_present)
+        && tracks.first().is_some_and(|t| t.sequence.notes.is_empty() && t.sequence.ctrls.is_empty() && (tracks.len() > 1 || t.name.is_empty()))
+    {
         tracks.remove(0);
     }
 
@@ -444,7 +449,12 @@ fn write_track(out: &mut Vec<u8>, mut events: Vec<WEvent>) -> Result<(), MidiErr
 /// Errors: invalid tempo (non-finite or <= 0 bpm), meter denominator that is not a power of two
 /// (1..=128), more than 65535 tracks, or a gap between events beyond the 28-bit delta limit.
 pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
-    let ntrks = u16::try_from(smf.tracks.len().saturating_add(1)).map_err(|_| MidiError::Write("more than 65535 tracks".into()))?;
+    // The conductor track is omitted when there is nothing to put in it and no content tracks, so an
+    // empty `Smf` is written as a file with zero tracks and reads back as zero tracks.
+    let has_conductor =
+        !(smf.tempos.is_empty() && smf.meters.is_empty() && smf.key_sigs.is_empty() && smf.markers.is_empty() && smf.tracks.is_empty());
+    let ntrks =
+        u16::try_from(smf.tracks.len().saturating_add(usize::from(has_conductor))).map_err(|_| MidiError::Write("more than 65535 tracks".into()))?;
     let mut out = Vec::new();
     out.extend_from_slice(b"MThd");
     out.extend_from_slice(&6u32.to_be_bytes());
@@ -476,7 +486,9 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
     for (t, text) in &smf.markers {
         ev.push(WEvent { tick: clamp_tick(*t), order: 3, bytes: meta(0x06, text.as_bytes())? });
     }
-    write_track(&mut out, ev)?;
+    if has_conductor {
+        write_track(&mut out, ev)?;
+    }
 
     for track in &smf.tracks {
         let mut ev = Vec::new();
@@ -563,6 +575,19 @@ mod tests {
             assert!(c.is_empty());
         }
         assert!(push_vlq(&mut Vec::new(), MAX_VLQ + 1).is_err());
+    }
+
+    #[test]
+    fn empty_smf_round_trips_with_no_tracks() {
+        let r = read_smf(&write_smf(&Smf::default()).unwrap()).unwrap();
+        assert_eq!(r.tracks.len(), 0);
+        let one = Smf { tracks: vec![SmfTrack::default()], ..Smf::default() };
+        let r = read_smf(&write_smf(&one).unwrap()).unwrap();
+        assert_eq!(r.tracks.len(), 1);
+        let cond = Smf { tempos: vec![(0, 90.0)], ..Smf::default() };
+        let r = read_smf(&write_smf(&cond).unwrap()).unwrap();
+        assert_eq!(r.tracks.len(), 0);
+        assert_eq!(r.tempos.len(), 1);
     }
 
     #[test]

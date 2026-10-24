@@ -112,6 +112,9 @@ struct HistoryEntry {
     doc: Arc<Session>,
 }
 
+/// Most decoded imports [`Engine::offer_import`] holds at once (each can be gigabytes).
+const MAX_OFFERED_IMPORTS: usize = 4;
+
 /// Engine state: the document, history, clipboard and transport plumbing.
 pub struct Engine {
     doc: Arc<Session>,
@@ -142,7 +145,9 @@ pub struct Engine {
     /// Kept out of the document so selecting never marks the session modified.
     pub last_selection: Option<(soundcraft_time::Range, Vec<TrackId>)>,
     /// Files the UI importer decoded ahead of `file.import_audio` (see `io::PreparedImport`).
-    pub(crate) imports: Vec<crate::io::PreparedImport>,
+    pub(crate) prepared_imports: Vec<crate::io::PreparedImport>,
+    /// Audio decoded off the UI thread, waiting for its `file.import_audio` (see `offer_import`).
+    imports: Vec<io::DecodedImport>,
 }
 
 impl Default for Engine {
@@ -174,7 +179,32 @@ impl Engine {
             messages: Vec::new(),
             last_selection: None,
             imports: Vec::new(),
+            prepared_imports: Vec::new(),
         }
+    }
+
+    /// Hands over audio [`io::decode_import`] made off the UI thread: the next `file.import_audio`
+    /// of the same file at the session's rate places it instead of reading the file again. The
+    /// command still checks the path may be read. Only the few newest are kept.
+    pub fn offer_import(&mut self, d: io::DecodedImport) {
+        self.imports.retain(|x| x.key != d.key);
+        self.imports.push(d);
+        let extra = self.imports.len().saturating_sub(MAX_OFFERED_IMPORTS);
+        self.imports.drain(..extra);
+    }
+
+    /// Drops audio offered for imports that never ran (the command failed or was not sent).
+    pub fn drop_offered_imports(&mut self) {
+        self.imports.clear();
+        self.prepared_imports.clear();
+    }
+
+    /// The offered audio of the file at `path`, if it was decoded for the session's current rate.
+    pub(crate) fn take_import(&mut self, path: &std::path::Path) -> Option<io::DecodedImport> {
+        let key = io::file_key(path);
+        let rate = self.session().sample_rate.hz();
+        let i = self.imports.iter().position(|d| d.key == key && d.rate == rate)?;
+        Some(self.imports.remove(i))
     }
 
     pub fn session(&self) -> &Session {
@@ -209,6 +239,7 @@ impl Engine {
         self.redo.clear();
         self.last_selection = None;
         self.imports.clear();
+        self.prepared_imports.clear();
         self.revision = self.revision.wrapping_add(1);
         self.dirty = false;
     }

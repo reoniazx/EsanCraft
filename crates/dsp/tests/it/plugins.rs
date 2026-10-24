@@ -524,3 +524,95 @@ fn lofi_quantizes() {
     levels.dedup();
     assert!(levels.len() <= 5, "{levels:?}");
 }
+
+fn ring_mod(params: &[(&str, f32)]) -> Box<dyn Plugin> {
+    let mut p = prepared("ring_mod");
+    for &(id, v) in params {
+        assert!(p.set_param(id, v), "ring_mod.{id}");
+    }
+    p.reset();
+    p
+}
+
+/// Loudest bin within two bins of `hz` in an 8192-point spectrum.
+fn band_db(spec: &[f32], hz: f32) -> f32 {
+    let bin = (hz / (SR / 8192.0)).round() as usize;
+    spec[bin - 2..=bin + 2].iter().cloned().fold(f32::MIN, f32::max)
+}
+
+fn zero_crossings(x: &[f32]) -> usize {
+    x.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count()
+}
+
+#[test]
+fn ring_mod_makes_sum_and_difference_tones() {
+    let mut p = ring_mod(&[("effect", 0.0), ("frequency", 300.0), ("mod_depth", 0.0), ("mix", 100.0)]);
+    let out = run(p.as_mut(), &[sine(1000.0, 0.5, 48_000)]);
+    let spec = soundcraft_dsp::spectrum::magnitude_db(&out[0][8192..], 8192);
+    let (low, high, input) = (band_db(&spec, 700.0), band_db(&spec, 1300.0), band_db(&spec, 1000.0));
+    // The two tones fall at different places between bins, so their bin peaks differ a little.
+    assert!((low - high).abs() < 2.0, "700 Hz {low} dB, 1300 Hz {high} dB");
+    assert!(low - input > 40.0, "the 1000 Hz input is left at {input} dB against {low} dB");
+}
+
+#[test]
+fn ring_mod_frequency_mod_adds_sidebands() {
+    let x = sine(1000.0, 0.5, 48_000);
+    let dry = soundcraft_dsp::spectrum::magnitude_db(&x[8192..], 8192);
+    assert!(band_db(&dry, 1000.0) - band_db(&dry, 1200.0) > 40.0);
+    let mut p = ring_mod(&[("effect", 1.0), ("frequency", 200.0), ("mix", 100.0)]);
+    let out = run(p.as_mut(), &[x]);
+    let spec = soundcraft_dsp::spectrum::magnitude_db(&out[0][8192..], 8192);
+    for hz in [800.0, 1200.0] {
+        assert!(band_db(&spec, 1000.0) - band_db(&spec, hz) < 20.0, "no sideband at {hz} Hz");
+    }
+}
+
+#[test]
+fn ring_mod_resonators_ring_at_the_frequency_with_their_sign() {
+    // 480 Hz at 48 kHz is a 100-sample period.
+    for (effect, sign) in [(2.0, 1.0), (3.0, -1.0)] {
+        let mut p = ring_mod(&[("effect", effect), ("frequency", 480.0), ("resonance", 90.0), ("mix", 100.0)]);
+        let mut x = vec![0.0f32; 9600];
+        x[0] = 1.0;
+        let out = run(p.as_mut(), &[x]);
+        let y = &out[0];
+        assert!((y[0] - 0.1).abs() < 1e-4, "effect {effect}: direct {}", y[0]);
+        assert!((y[100] - sign * 0.09).abs() < 1e-4, "effect {effect}: first echo {}", y[100]);
+        assert!((y[200] - 0.081).abs() < 1e-4, "effect {effect}: second echo {}", y[200]);
+        assert!(y[50].abs() < 1e-6 && y[150].abs() < 1e-6, "effect {effect}: sound between the echoes");
+        let last = y.iter().rposition(|v| v.abs() > 0.1e-3).unwrap();
+        assert!(last < p.tail_samples(), "effect {effect}: ringing at {last}, tail {}", p.tail_samples());
+    }
+}
+
+#[test]
+fn ring_mod_modulation_sources_move_the_frequency() {
+    // A constant input through Ring gives the carrier itself.
+    let dc = vec![1.0f32; 48_000];
+
+    // The envelope of a full-scale input lifts 100 Hz by one octave at 50 % depth.
+    let mut p = ring_mod(&[("effect", 0.0), ("frequency", 100.0), ("mod_source", 1.0), ("mod_depth", 50.0), ("mix", 100.0)]);
+    let out = run(p.as_mut(), std::slice::from_ref(&dc));
+    let n = zero_crossings(&out[0][24_000..]);
+    assert!((195..=205).contains(&n), "envelope: {n} crossings in 0.5 s, 200 expected for 200 Hz");
+
+    // A 1 Hz LFO raises the frequency for its first half cycle and lowers it for the second.
+    let mut p = ring_mod(&[("effect", 0.0), ("frequency", 100.0), ("mod_source", 0.0), ("mod_rate", 1.0), ("mod_depth", 100.0), ("mix", 100.0)]);
+    let out = run(p.as_mut(), std::slice::from_ref(&dc));
+    let (up, down) = (zero_crossings(&out[0][..12_000]), zero_crossings(&out[0][24_000..36_000]));
+    assert!(up > 3 * down, "LFO: {up} crossings rising, {down} falling");
+
+    // Sample and hold at 4 Hz keeps one frequency for each 12,000-sample step.
+    let mut p = ring_mod(&[("effect", 0.0), ("frequency", 100.0), ("mod_source", 2.0), ("mod_rate", 4.0), ("mod_depth", 100.0), ("mix", 100.0)]);
+    let out = run(p.as_mut(), std::slice::from_ref(&dc));
+    let mut steps = Vec::new();
+    for s in out[0].chunks(12_000) {
+        let (a, b) = (zero_crossings(&s[..6000]), zero_crossings(&s[6000..]));
+        assert!(a.abs_diff(b) <= 2, "sample and hold changed within a step: {a} then {b}");
+        steps.push(a);
+    }
+    steps.sort_unstable();
+    steps.dedup_by(|a, b| a.abs_diff(*b) <= 2);
+    assert!(steps.len() >= 3, "sample and hold steps: {steps:?}");
+}

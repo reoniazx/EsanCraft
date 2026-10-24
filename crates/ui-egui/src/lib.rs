@@ -493,7 +493,7 @@ impl SoundApp {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             return r;
         }
-        if id.starts_with("session.save") || id.starts_with("file.bounce") {
+        if id.starts_with("session.save") || id.starts_with("file.bounce") || id == "track.save_preset" {
             // Third-party plugins keep state the session can't see: store it first.
             self.capture_plugin_states();
         }
@@ -504,6 +504,10 @@ impl SoundApp {
                 let new_selection = (self.engine.session().edit.selection, self.engine.session().edit.timeline_selection);
                 if selection != new_selection {
                     midi_playback::release_transport(self);
+                }
+                if replacing {
+                    // Note indices and gestures belong to the old session's clips.
+                    self.midi = midi_editor::MidiEditorState::default();
                 }
                 if replacing || (id.starts_with("session.save") && !self.engine.is_dirty()) {
                     self.release_autosave(false);
@@ -1533,6 +1537,17 @@ mod tests {
         assert!(msg.starts_with("Gain on Vox put out invalid audio"), "{msg}");
         assert_eq!(super::failed_plugin_status(&s, t, 0), None);
         assert_eq!(super::failed_plugin_status(&s, t, soundcraft_mix::INSTRUMENT_SLOT), None);
+    }
+
+    #[test]
+    fn replacing_the_session_drops_the_midi_note_selection() {
+        for command in ["session.new", "session.close"] {
+            let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+            app.midi.selected = vec![0, 1];
+            app.midi.clip = Some(soundcraft_model::ClipId(1));
+            app.run(command, json!({})).unwrap();
+            assert!(app.midi.selected.is_empty() && app.midi.clip.is_none(), "{command}");
+        }
     }
 
     #[test]

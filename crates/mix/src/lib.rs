@@ -1069,9 +1069,8 @@ fn process_strip(
     }
     strip.gr = gr;
     strip.latency = latency.min(MAX_LATENCY);
-    let auto_mute = t.mixer.automation_mode.reads() && t.lane(&AutoParam::Mute).is_some_and(|l| l.value_at(pos, 0.0) >= 0.5);
     let soloed_out = any_solo && !t.mixer.solo && !t.mixer.solo_safe && !receives_solo(s, t);
-    strip.muted = t.mixer.mute || auto_mute || soloed_out;
+    strip.muted = t.mixer.mute || soloed_out;
     if t.mixer.sends.iter().flatten().any(|x| x.pre_fader) {
         strip.pre.resize_with(strip.buf.len(), Vec::new);
         for (d, src) in strip.pre.iter_mut().zip(strip.buf.iter()) {
@@ -1109,6 +1108,23 @@ fn process_strip(
         for i in 0..frames {
             if let Some(x) = c.get_mut(i) {
                 *x *= lerp_gain(g0, g1, i, frames.saturating_sub(1));
+            }
+        }
+    }
+    // Track mute gates the audio and its pre-fader tap without splitting processor blocks.
+    // Keep the existing curve interpolation, first-lane and mode policy, and render-position
+    // clock. Processor/bus age and Master/VCA automation policy are separate concerns.
+    if t.mixer.automation_mode.reads()
+        && let Some(lane) = t.lane(&AutoParam::Mute).filter(|lane| !lane.points.is_empty())
+    {
+        for i in 0..frames {
+            let at = pos.saturating_add(i64::try_from(i).unwrap_or(i64::MAX));
+            if lane.value_at(at, 0.0) >= 0.5 {
+                for channel in strip.buf.iter_mut().chain(strip.pre.iter_mut()) {
+                    if let Some(sample) = channel.get_mut(i) {
+                        *sample = 0.0;
+                    }
+                }
             }
         }
     }
@@ -1374,24 +1390,95 @@ fn processing_order(s: &Session) -> Vec<usize> {
         (0..s.tracks.len()).filter(|&i| s.tracks.get(i).is_some_and(|t| !matches!(t.kind, TrackKind::Aux | TrackKind::Folder))).collect();
     let mut auxes: Vec<usize> =
         (0..s.tracks.len()).filter(|&i| s.tracks.get(i).is_some_and(|t| matches!(t.kind, TrackKind::Aux | TrackKind::Folder))).collect();
-    // Depth = how many aux hops feed this aux's input bus (bounded; cycles cap out).
-    let depth = |i: usize| -> usize {
-        let mut d = 0;
-        let mut cur = vec![i];
-        for _ in 0..8 {
-            let inputs: Vec<&Route> = cur.iter().filter_map(|&k| s.tracks.get(k)).map(|t| &t.mixer.input).collect();
-            let feeders: Vec<usize> = auxes_feeding(s, &inputs);
-            if feeders.is_empty() {
-                break;
-            }
-            d += 1;
-            cur = feeders;
-        }
-        d
-    };
-    auxes.sort_by_key(|&i| depth(i));
+    if let Some(depths) = acyclic_aux_depths(s, &auxes) {
+        // Stable sorting preserves session order among auxes at the same longest-path depth.
+        auxes.sort_by_key(|&i| depths.get(i).copied().unwrap_or(0));
+    } else {
+        // A cycle keeps the existing bounded ordering for the entire graph, including any
+        // independent acyclic branches. Feedback does not have a finite longest-path depth.
+        auxes.sort_by_key(|&i| bounded_aux_depth(s, i));
+    }
     order.extend(auxes);
     order
+}
+
+/// Exact aux-hop depths when the whole Aux/Folder graph is acyclic. Bus joins retain only
+/// producer counts and consumers, avoiding a producer-by-consumer adjacency matrix.
+fn acyclic_aux_depths(s: &Session, auxes: &[usize]) -> Option<Vec<usize>> {
+    #[derive(Default)]
+    struct BusDependencies {
+        remaining: usize,
+        depth: usize,
+        last_producer: Option<usize>,
+        last_processed: Option<usize>,
+        consumers: Vec<usize>,
+    }
+    let mut busses = HashMap::<BusId, BusDependencies>::new();
+    for &i in auxes {
+        for bus in aux_output_busses(s.tracks.get(i)?) {
+            let dependency = busses.entry(bus).or_default();
+            // Output and multiple sends from this producer may name the same bus.
+            if dependency.last_producer != Some(i) {
+                dependency.last_producer = Some(i);
+                dependency.remaining = dependency.remaining.checked_add(1)?;
+            }
+        }
+    }
+    let mut depths = vec![0usize; s.tracks.len()];
+    let mut ready = Vec::with_capacity(auxes.len());
+    for &i in auxes {
+        if let Route::Bus(bus) = &s.tracks.get(i)?.mixer.input {
+            let dependency = busses.entry(*bus).or_default();
+            dependency.consumers.push(i);
+            if dependency.remaining > 0 {
+                continue;
+            }
+        }
+        ready.push(i);
+    }
+    let mut processed = 0usize;
+    while let Some(&i) = ready.get(processed) {
+        processed = processed.checked_add(1)?;
+        let next_depth = depths.get(i)?.checked_add(1)?;
+        for bus in aux_output_busses(s.tracks.get(i)?) {
+            let dependency = busses.get_mut(&bus)?;
+            if dependency.last_processed == Some(i) {
+                continue;
+            }
+            dependency.last_processed = Some(i);
+            dependency.depth = dependency.depth.max(next_depth);
+            dependency.remaining = dependency.remaining.checked_sub(1)?;
+            if dependency.remaining == 0 {
+                for &consumer in &dependency.consumers {
+                    *depths.get_mut(consumer)? = dependency.depth;
+                    ready.push(consumer);
+                }
+            }
+        }
+    }
+    (processed == auxes.len()).then_some(depths)
+}
+
+fn aux_output_busses(t: &Track) -> impl Iterator<Item = BusId> + '_ {
+    std::iter::once(&t.mixer.output)
+        .chain(t.mixer.sends.iter().flatten().map(|send| &send.target))
+        .filter_map(|route| if let Route::Bus(bus) = route { Some(*bus) } else { None })
+}
+
+/// The previous bounded depth calculation, retained unchanged for any cyclic graph.
+fn bounded_aux_depth(s: &Session, i: usize) -> usize {
+    let mut d = 0;
+    let mut cur = vec![i];
+    for _ in 0..8 {
+        let inputs: Vec<&Route> = cur.iter().filter_map(|&k| s.tracks.get(k)).map(|t| &t.mixer.input).collect();
+        let feeders: Vec<usize> = auxes_feeding(s, &inputs);
+        if feeders.is_empty() {
+            break;
+        }
+        d += 1;
+        cur = feeders;
+    }
+    d
 }
 
 fn auxes_feeding(s: &Session, inputs: &[&Route]) -> Vec<usize> {
@@ -1404,6 +1491,60 @@ fn auxes_feeding(s: &Session, inputs: &[&Route]) -> Vec<usize> {
         })
         .map(|(i, _)| i)
         .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod processing_order_tests {
+    use super::*;
+    use soundcraft_model::SendSlot;
+
+    #[test]
+    fn acyclic_bus_joins_use_longest_depth_and_keep_session_order_for_ties() {
+        let mut s = Session::default();
+        s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+        let consumer = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        let first_root = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        let second_root = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        let middle = s.add_track(TrackKind::Folder, ChannelFormat::Stereo, None);
+        let first_bus = s.add_bus("First", ChannelFormat::Stereo);
+        let join = s.add_bus("Join", ChannelFormat::Stereo);
+        s.track_mut(consumer).unwrap().mixer.input = Route::Bus(join);
+        let root = s.track_mut(first_root).unwrap();
+        root.mixer.output = Route::Main;
+        root.mixer.sends[0] = Some(SendSlot::new(Route::Bus(first_bus)));
+        let root = s.track_mut(second_root).unwrap();
+        root.mixer.output = Route::Bus(join);
+        root.mixer.sends[0] = Some(SendSlot::new(Route::Bus(join)));
+        root.mixer.sends[1] = Some(SendSlot::new(Route::Bus(join)));
+        let folder = s.track_mut(middle).unwrap();
+        folder.mixer.input = Route::Bus(first_bus);
+        folder.mixer.output = Route::Bus(join);
+        folder.mixer.sends[0] = Some(SendSlot::new(Route::Bus(join)));
+
+        assert_eq!(processing_order(&s), vec![0, 2, 3, 4, 1]);
+    }
+
+    #[test]
+    fn a_cycle_preserves_bounded_order_for_the_whole_graph() {
+        let mut s = Session::default();
+        let busses: Vec<_> = (0..10).map(|i| s.add_bus(&format!("Chain {i}"), ChannelFormat::Stereo)).collect();
+        let tracks: Vec<_> = (0..10).map(|_| s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None)).collect();
+        for (i, id) in tracks.iter().enumerate() {
+            let track = s.track_mut(*id).unwrap();
+            track.mixer.input = Route::Bus(busses[i]);
+            track.mixer.output = if i == 0 { Route::Main } else { Route::Bus(busses[i - 1]) };
+        }
+        assert_eq!(processing_order(&s), vec![9, 8, 7, 6, 5, 4, 3, 2, 1, 0]);
+        let cycle_bus = s.add_bus("Feedback", ChannelFormat::Stereo);
+        let cycle = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        let track = s.track_mut(cycle).unwrap();
+        track.mixer.input = Route::Bus(cycle_bus);
+        track.mixer.output = Route::Bus(cycle_bus);
+
+        // Both deepest independent returns tie with the cycle at the legacy eight-hop cap.
+        assert_eq!(processing_order(&s), vec![9, 8, 7, 6, 5, 4, 3, 2, 0, 1, 10]);
+    }
 }
 
 /// Implicit solo: an aux is not muted when a soloed track feeds its input bus.
@@ -1512,7 +1653,7 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                     let x0 = f.floor();
                     let fr = (f - x0) as f32;
                     let a = if x0 >= 0.0 { src.get(x0 as usize).copied().unwrap_or(0.0) } else { 0.0 };
-                    let b = if x0 + 1.0 >= 0.0 { src.get((x0 as usize).saturating_add(1)).copied().unwrap_or(0.0) } else { 0.0 };
+                    let b = if x0 + 1.0 >= 0.0 { src.get((x0 + 1.0) as usize).copied().unwrap_or(0.0) } else { 0.0 };
                     a + (b - a) * fr
                 };
                 let t = (k - i) as f32 / n;
@@ -2298,6 +2439,13 @@ pub fn render_track_pre_fader(s: &Session, track: TrackId, range: Range) -> Vec<
 
 /// A built-in plugin, else a hosted CLAP plugin (`clap:<id>`).
 fn create_plugin(id: &str) -> Option<Box<dyn Plugin>> {
+    // Tests never load real plug-ins; adopt a fake instead. Scanning the machine's plug-in folders
+    // loads every installed plug-in in-process, and some never unload, so a test that reached the
+    // real hosts would hang on a developer machine (CI has none installed).
+    #[cfg(test)]
+    if is_third_party(id) {
+        return None;
+    }
     soundcraft_dsp::create(id)
         .or_else(|| soundcraft_clap_host::create(id))
         .or_else(|| soundcraft_vst3_host::create(id))
@@ -2350,6 +2498,10 @@ mod audio_thread_tests {
 
 #[cfg(test)]
 mod tests {
+    //! Rule: tests never call the real plug-in hosts. Third-party ids are not created here
+    //! (create_plugin returns None under cfg(test)); a test that needs a hosted plug-in
+    //! adopts a fake under a clap:test.* id via MixEngine::adopt.
+
     use super::*;
     use soundcraft_audio_io::AudioBuffer;
     use soundcraft_model::{Insert, SourceAudio, SourceId};
@@ -2470,6 +2622,30 @@ mod tests {
         s.track_mut(t).unwrap().mixer.pan = vec![-1.0];
         let out = render_range(&s, Range::new(0, 4800), 256);
         assert!(out[0][100] > 0.49 && out[1][100].abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_stretched_clip_before_its_source_start_reads_from_the_first_sample() {
+        // A clip that extends before its source (a negative offset) plays silence there. When it
+        // is stretched, the read position passes through [-1, 0), which must interpolate from
+        // that silence towards sample 0 of the file -- not towards sample 1.
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![1.0, 0.5, 0.25, 0.125]] };
+        s.pool.insert(SourceId(901), Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        let mut c = Clip::audio(id, "late", SourceId(901), -1, 0, 4);
+        c.stretch = 2.0;
+        if let Some(pl) = s.track_mut(t).and_then(|t| t.playlist_mut()) {
+            pl.clips.push(c);
+        }
+        let out = render_clips(&s, t, Range::new(0, 4));
+        // rel 0 -> source -1.0: silence; rel 1 -> source -0.5: halfway from silence to sample 0;
+        // rel 2 -> source 0.0: sample 0; rel 3 -> source 0.5: halfway to sample 1.
+        let want = [0.0, 0.5, 1.0, 0.75];
+        for (i, w) in want.iter().enumerate() {
+            assert!((out[0][i] - w).abs() < 1e-6, "frame {i}: {} vs {w}", out[0][i]);
+        }
     }
 
     #[test]
@@ -3049,7 +3225,7 @@ mod tests {
         s.track_mut(t).unwrap().mixer.inserts[0].as_mut().unwrap().params.insert("gain".into(), -12.0);
         render_block(&mut eng, &s, 1024);
         assert_eq!(sets.load(std::sync::atomic::Ordering::Relaxed), 2, "later session edits apply");
-        // Offline (not external): unknown third-party plugins are simply absent.
+        // Offline (not external): third-party plugins are simply absent (tests never load real ones).
         let out = render_range(&s, Range::new(0, 1024), 512);
         assert!(out[0][100] > 0.3);
     }

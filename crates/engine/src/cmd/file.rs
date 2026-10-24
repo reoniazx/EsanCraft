@@ -88,7 +88,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac, bit_depth?: 16|24|32f, start?, end?, source?: main|bus name, normalize?: false, dither?: true, fold_down?: stereo}", always, bounce),
-        cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac, bit_depth?: 16|24|32f, start?, end?, fold_down?: stereo}", has_tracks, |e, p| {
+        cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac, bit_depth?: 16|24|32f, start?, end?, dither?: true, fold_down?: stereo}", has_tracks, |e, p| {
             let dir = str_param(p, "dir").ok_or_else(|| bad("file.bounce_stems", "`dir` required"))?.to_string();
             let r = range_param(e, "file.bounce_stems", p)?;
             let r = if r.is_empty() { soundcraft_time::Range::new(0, e.session().content_end().max(1)) } else { r };
@@ -103,7 +103,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 _ => soundcraft_audio_io::BitDepth::Int24,
             };
             let fold = fold_down_param(p, "file.bounce_stems")?;
-            let files = crate::io::bounce_stems_with(e, &dir, r, &soundcraft_audio_io::EncodeOptions { format, bit_depth, dither: true, bwf: None }, fold)?;
+            let files = crate::io::bounce_stems_with(e, &dir, r, &soundcraft_audio_io::EncodeOptions { format, bit_depth, dither: bool_or(p, "dither", true), bwf: None }, fold)?;
             Ok(json!({"files": files}))
         }),
         cmd!(noundo "file.export_midi", "MIDI...", ["File", "Export"], None, "{path, tracks?}", always, |e, p| {
@@ -261,14 +261,20 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut out = Vec::new();
     for path in &paths {
         let name = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("Audio").to_string();
+        crate::file_access::check_read(std::path::Path::new(path)).map_err(crate::EngineError::Io)?;
         // The UI importer may already have read and decoded this file in the background; then
         // placing it is all that is left, and the bytes on disk are not opened again.
         if let Some(pre) = crate::io::take_import(e, path) {
             out.push(crate::io::import_prepared(e, &pre.name, Some(&pre.path), pre.info, pre.audio, target, at)?);
             continue;
         }
-        let bytes = crate::io::read_file(path)?;
-        let r = crate::io::import_audio_bytes(e, &name, &bytes, Some(path.as_str()), target, at)?;
+        let r = match e.take_import(std::path::Path::new(path)) {
+            Some(d) => crate::io::place_decoded(e, &name, d, Some(path.as_str()), target, at)?,
+            None => {
+                let bytes = crate::io::read_file(path)?;
+                crate::io::import_audio_bytes(e, &name, &bytes, Some(path.as_str()), target, at)?
+            }
+        };
         out.push(r);
     }
     Ok(json!({"imported": out}))
@@ -377,6 +383,46 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         path.to_string_lossy().into_owned()
+    }
+
+    /// Issue #597: the app decodes on a worker thread and hands the audio over; the command then
+    /// only places it. Audio decoded for another rate is ignored and the file is read again.
+    #[test]
+    fn import_audio_places_audio_offered_by_a_worker() {
+        let dir = std::env::temp_dir().join(format!("sc-import-offered-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = tone_wav(&dir, "tone.wav");
+
+        let mut e = Engine::default();
+        let rate = e.session().sample_rate.hz();
+        let decoded = std::thread::spawn({
+            let wav = wav.clone();
+            move || crate::io::decode_import(&wav, rate)
+        })
+        .join()
+        .unwrap()
+        .unwrap();
+        assert_eq!(decoded.frames(), 4_800);
+        e.offer_import(decoded);
+        // The file changes after decoding: the offered audio is placed, not the new bytes.
+        std::fs::write(&wav, b"not audio").unwrap();
+        let r = e.execute("file.import_audio", &json!({"path": wav, "at": 960})).unwrap();
+        assert_eq!(r["imported"][0]["frames"], 4_800);
+        assert_eq!(e.session().tracks.len(), 1);
+        assert_eq!(e.session().tracks[0].clips()[0].start, 960);
+        assert_eq!(e.session().sources[0].path, wav);
+        // Taken once: the next import reads the (now broken) file.
+        assert!(e.execute("file.import_audio", &json!({"path": wav})).is_err());
+
+        // Decoded for another rate: ignored, so the broken file is read and refused.
+        let good = tone_wav(&dir, "good.wav");
+        let other = crate::io::decode_import(&good, rate / 2).unwrap();
+        std::fs::write(&good, b"not audio").unwrap();
+        e.offer_import(other);
+        assert!(e.execute("file.import_audio", &json!({"path": good})).is_err());
+        e.drop_offered_imports();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

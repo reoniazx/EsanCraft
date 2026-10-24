@@ -407,6 +407,11 @@ pub fn trim_end_to(s: &mut Session, track: TrackId, at: Samples) -> usize {
     n
 }
 
+/// Source samples covered by `length` timeline samples of a clip with the given `stretch`.
+fn source_len(length: Samples, stretch: f64) -> Samples {
+    if stretch.is_finite() && stretch > 0.0 && (stretch - 1.0).abs() >= 1e-9 { (length as f64 / stretch).round() as Samples } else { length }
+}
+
 /// Heal separations inside `range`: merge neighbouring audio clips that continue the same file,
 /// either touching (a split) or with an empty gap that matches the gap in the source (a cut).
 pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
@@ -420,11 +425,15 @@ pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
             let gap = if contiguous { c.start.saturating_sub(prev.end()) } else { 0 };
             let same = match (&prev.content, &c.content) {
                 (ClipContent::Audio { source: a, offset: oa }, ClipContent::Audio { source: b, offset: ob }) => {
-                    a == b && oa.saturating_add(prev.length).saturating_add(gap) == *ob
+                    a == b && oa.saturating_add(source_len(prev.length.saturating_add(gap), prev.stretch)) == *ob
                 }
                 _ => false,
             };
-            if contiguous && same && (prev.gain_db - c.gain_db).abs() < 1e-6 {
+            let same_playback = prev.muted == c.muted && (prev.stretch - c.stretch).abs() < 1e-9 && (prev.gain_db - c.gain_db).abs() < 1e-6;
+            if contiguous && same && same_playback {
+                if !prev.gain_env.is_empty() || !c.gain_env.is_empty() {
+                    join_gain_env(prev, &c);
+                }
                 prev.length = c.end().saturating_sub(prev.start);
                 prev.fade_out = c.fade_out;
                 healed += 1;
@@ -435,6 +444,24 @@ pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
     }
     pl.clips = out;
     healed
+}
+
+/// Give `l` the gain envelope of `l` followed by `r`, which starts at or after where `l` ends, so
+/// every sample keeps its gain. Call it before `l.length` grows to cover `r`.
+fn join_gain_env(l: &mut Clip, r: &Clip) {
+    let cut = l.length;
+    let seam = r.start.saturating_sub(l.start);
+    let last = cut.saturating_sub(1);
+    let (end_db, start_db) = (l.env_db_at(last), r.env_db_at(0));
+    l.gain_env.retain(|&(at, _)| at < cut);
+    l.gain_env.extend(r.gain_env.iter().filter(|&&(at, _)| at >= 0).map(|&(at, db)| (at.saturating_add(seam), db)));
+    // Pin both sides of the seam where the joined points would interpolate across it.
+    for (at, db) in [(seam, start_db), (last, end_db)] {
+        if (l.env_db_at(at) - db).abs() > 1e-4 {
+            let i = l.gain_env.partition_point(|&(t, _)| t < at);
+            l.gain_env.insert(i, (at, db));
+        }
+    }
 }
 
 /// Move clips by `delta`, overwriting what they land on; `dest` sends whole tracks of them
@@ -818,8 +845,10 @@ pub fn create_fades(s: &mut Session, track: TrackId, range: Range, shape: FadeSh
 pub fn delete_fades(s: &mut Session, track: TrackId, range: Range) -> usize {
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     let mut n = 0;
+    let mut touched: HashSet<ClipId> = HashSet::new();
     for c in &mut pl.clips {
         if c.range().overlaps(&range) || (range.is_empty() && c.range().contains(range.start)) {
+            touched.insert(c.id);
             if c.fade_in.len > 0 || c.fade_out.len > 0 {
                 n += 1;
             }
@@ -827,11 +856,12 @@ pub fn delete_fades(s: &mut Session, track: TrackId, range: Range) -> usize {
             c.fade_out = Fade::default();
         }
     }
-    // Overlapping (crossfaded) neighbours are trimmed back to the midpoint.
+    // Overlapping (crossfaded) neighbours in the range are trimmed back to the midpoint; other overlaps stay as they are.
     pl.sort();
     for i in 0..pl.clips.len().saturating_sub(1) {
         let (Some(a_end), Some(b_start)) = (pl.clips.get(i).map(Clip::end), pl.clips.get(i + 1).map(|c| c.start)) else { continue };
-        if a_end > b_start {
+        let in_range = pl.clips.get(i).is_some_and(|a| touched.contains(&a.id)) || pl.clips.get(i + 1).is_some_and(|b| touched.contains(&b.id));
+        if in_range && a_end > b_start {
             let mid = b_start + (a_end - b_start) / 2;
             if let Some(a) = pl.clips.get_mut(i) {
                 a.trim_end_to(mid);
@@ -929,6 +959,72 @@ mod tests {
         }
         assert_eq!(heal(&mut s, t, Range::new(0, 10_000)), 0);
         assert_eq!(clips(&s, t).len(), 2);
+    }
+
+    #[test]
+    fn heal_skips_clips_with_different_playback() {
+        for tweak in [(|c: &mut Clip| c.muted = true) as fn(&mut Clip), |c: &mut Clip| c.stretch = 1.5] {
+            let (mut s, t) = session_with_clip();
+            separate_at(&mut s, t, 3000);
+            if let Some(pl) = s.track_mut(t).and_then(|t| t.playlist_mut()) {
+                tweak(&mut pl.clips[1]);
+            }
+            assert_eq!(heal(&mut s, t, Range::new(0, 10_000)), 0);
+            assert_eq!(s.track(t).unwrap().clips().len(), 2);
+        }
+    }
+
+    #[test]
+    fn heal_keeps_each_side_gain_envelope() {
+        let cases: [(Vec<(Samples, f32)>, Vec<(Samples, f32)>); 4] = [
+            (vec![(500, -3.0), (2500, -12.0)], vec![]),
+            (vec![], vec![(0, -6.0), (1000, 0.0)]),
+            (vec![(0, 0.0), (1999, -20.0)], vec![(-100, 4.0), (300, -9.0)]),
+            (vec![(500, -3.0), (2500, -12.0)], vec![(0, -9.75), (500, -12.0)]),
+        ];
+        for (left_env, right_env) in cases {
+            let (mut s, t) = session_with_clip();
+            separate_at(&mut s, t, 3000);
+            let pl = s.track_mut(t).and_then(|t| t.playlist_mut()).unwrap();
+            pl.clips[0].gain_env = left_env;
+            pl.clips[1].gain_env = right_env;
+            let (l, r) = (pl.clips[0].clone(), pl.clips[1].clone());
+            assert_eq!(heal(&mut s, t, Range::new(0, 10_000)), 1);
+            let healed = &s.track(t).unwrap().clips()[0];
+            for rel in 0..4000 {
+                let want = if rel < 2000 { l.gain_at(rel) } else { r.gain_at(rel - 2000) };
+                assert!((healed.gain_at(rel) - want).abs() < 1e-4, "sample {rel}: {} != {want}", healed.gain_at(rel));
+            }
+        }
+    }
+
+    #[test]
+    fn heal_keeps_gain_envelopes_across_a_gap() {
+        let (mut s, t) = session_with_clip();
+        clear_range(&mut s, t, Range::new(2000, 3000), false);
+        let pl = s.track_mut(t).and_then(|t| t.playlist_mut()).unwrap();
+        pl.clips[0].gain_env = vec![(0, 0.0), (999, -6.0)];
+        pl.clips[1].gain_env = vec![(0, -12.0), (1999, -3.0)];
+        let (l, r) = (pl.clips[0].clone(), pl.clips[1].clone());
+        assert_eq!(heal(&mut s, t, Range::new(1500, 3500)), 1);
+        let healed = &s.track(t).unwrap().clips()[0];
+        assert_eq!(healed.length, 4000);
+        for rel in (0..1000).chain(2000..4000) {
+            let want = if rel < 1000 { l.gain_at(rel) } else { r.gain_at(rel - 2000) };
+            assert!((healed.gain_at(rel) - want).abs() < 1e-4, "sample {rel}: {} != {want}", healed.gain_at(rel));
+        }
+    }
+
+    #[test]
+    fn split_then_heal_rejoins_stretched_clip() {
+        let (mut s, t) = session_with_clip();
+        if let Some(c) = s.track_mut(t).and_then(|t| t.playlist_mut()).and_then(|p| p.clips.first_mut()) {
+            c.stretch = 2.0;
+        }
+        assert_eq!(separate_at(&mut s, t, 3000), 1);
+        assert_eq!(clips(&s, t), vec![(1000, 2000, 1000), (3000, 2000, 2000)]);
+        assert_eq!(heal(&mut s, t, Range::new(0, 10_000)), 1);
+        assert_eq!(clips(&s, t), vec![(1000, 4000, 1000)]);
     }
 
     #[test]
@@ -1107,5 +1203,24 @@ mod tests {
         let got = clips(&s, t);
         assert!(got.windows(2).all(|w| w[0].0 <= w[1].0), "playlist not sorted: {got:?}");
         assert!(got.iter().all(|c| c.1 > 0), "empty clip: {got:?}");
+    }
+
+    #[test]
+    fn delete_fades_leaves_unrelated_overlaps_alone() {
+        let (mut s, t) = session_with_clip();
+        let ids: Vec<ClipId> = (0..4).map(|_| s.new_clip_id()).collect();
+        if let Some(pl) = s.track_mut(t).and_then(|t| t.playlist_mut()) {
+            pl.clips.clear();
+            for (id, start, len) in [(ids[0], 0, 1100), (ids[1], 1000, 1000), (ids[2], 5000, 1100), (ids[3], 6000, 1000)] {
+                let mut c = Clip::audio(id, "c", SourceId(500), start, start, len);
+                c.fade_in = Fade { len: 100, shape: FadeShape::Linear, curvature: 0.0 };
+                c.fade_out = Fade { len: 100, shape: FadeShape::Linear, curvature: 0.0 };
+                pl.clips.push(c);
+            }
+        }
+        assert_eq!(delete_fades(&mut s, t, Range::new(900, 1200)), 2);
+        assert_eq!(clips(&s, t), vec![(0, 1050, 0), (1050, 950, 1050), (5000, 1100, 5000), (6000, 1000, 6000)]);
+        let c = s.track(t).unwrap().clips();
+        assert_eq!((c[1].fade_in.len, c[2].fade_out.len, c[3].fade_in.len), (0, 100, 100));
     }
 }

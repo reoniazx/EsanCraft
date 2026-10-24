@@ -353,7 +353,8 @@ fn transport(app: &mut SoundApp, ui: &mut Ui) {
                 let (r, resp) = ui.allocate_exact_size(vec2(38.0, 28.0), Sense::click());
                 key(ui.painter(), r, &resp, if recording { Color32::from_rgb(110, 30, 30) } else { key_fill(&resp) });
                 icons::draw(ui.painter(), r.shrink(5.0), "record", t.rec);
-                let resp = resp.on_hover_text("Record (Cmd+Space)");
+                // macOS gives Cmd+Space to Spotlight unless the user frees it, so name F12 first.
+                let resp = resp.on_hover_text("Record (F12 or Cmd+Space)");
                 if let Some(why) = app.record_hint() {
                     // Below the whole group, so the hint covers none of its buttons.
                     let below = Rect::from_min_max(r.min, pos2(r.max.x, g.max.y));

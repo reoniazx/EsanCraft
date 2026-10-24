@@ -77,7 +77,13 @@ pub fn tracks_and_groups(app: &mut SoundApp, ui: &mut Ui) {
                 let _ = app.run("track.hide", json!({"tracks": [id], "hidden": shown}));
             }
             ui.painter().rect_filled(Rect::from_min_size(pos2(r.min.x + 20.0, r.min.y + 3.0), vec2(4.0, 11.0)), 0.0, rgb(color));
-            ui.painter().text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &name, regular(11.5), if shown { t.text } else { t.text_dim });
+            ui.painter().with_clip_rect(r).text(
+                pos2(r.min.x + 30.0, r.center().y),
+                Align2::LEFT_CENTER,
+                &name,
+                regular(11.5),
+                if shown { t.text } else { t.text_dim },
+            );
             if resp.clicked() {
                 crate::edit_window::click_track(app, soundcraft_model::TrackId(id), ui.input(|i| i.modifiers), |_, _| true);
             }
@@ -118,7 +124,7 @@ pub fn tracks_and_groups(app: &mut SoundApp, ui: &mut Ui) {
                 bold(10.0),
                 if active { t.text_dark } else { t.text_dim },
             );
-            ui.painter().text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &name, regular(11.5), t.text);
+            ui.painter().with_clip_rect(r).text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &name, regular(11.5), t.text);
             if resp.clicked() {
                 let _ = app.run("track.group_toggle", json!({"group": id}));
             }

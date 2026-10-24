@@ -122,11 +122,11 @@ where things are.
 - **Automation:** volume, pan, mute, send and every plugin parameter; Write, Touch, Latch and
   Trim passes recorded live from the faders; thin, glide, coalesce and convert to clip gain.
 - **Plugins:** 7-band and 1-band EQ, compressor/limiter, expander/gate, de-esser, maximizer,
-  channel strip, room and plate reverbs, mod delay, chorus, flanger, phaser, saturator, lo-fi,
-  rectifier, pitch shifter, time shift, gain, trim, invert, DC removal, signal generator, dither,
-  a subtractive synth, a drum synth and a sampler (plays any WAV, AIFF, FLAC, MP3 or OGG across the
-  keyboard), all original. **CLAP plugins** load too. Any processor
-  runs offline as AudioSuite, and user presets save per plugin.
+  channel strip, room and plate reverbs, mod delay, chorus, flanger, phaser, ring modulator,
+  saturator, lo-fi, rectifier, pitch shifter, time shift, gain, trim, invert, DC removal,
+  signal generator, dither, a subtractive synth, a drum synth and a sampler (plays any WAV,
+  AIFF, FLAC, MP3 or OGG across the keyboard), all original. **CLAP plugins** load too. Any
+  processor runs offline as AudioSuite, and user presets save per plugin.
 - **MIDI:** instrument and MIDI tracks, a piano-roll MIDI editor with a velocity lane, an event
   list, a score view, step input, quantize, transpose, real-time properties, Standard MIDI Files,
   and Audio-to-MIDI from a sung or played melody.
@@ -138,7 +138,7 @@ where things are.
   pitch-preserving Elastic warping.
 - **Audio files:** WAV/BWF/RF64, AIFF/AIFC and FLAC in and out; MP3, Ogg Vorbis, AAC, ALAC, CAF
   and the audio of MP4/MOV movies in. Any sample rate and bit depth.
-- **Bounce:** mix or stems to WAV, AIFF or FLAC at 16/24/32-bit float with dither and
+- **Bounce:** mix or stems to WAV, AIFF or FLAC at 16/24/32-bit float with optional dither and
   normalisation, reporting peak, true peak and integrated loudness (LUFS).
 - **Fast:** a parallel mix engine, copy-on-write undo, and a UI that holds 120 frames per second
   with seventy-odd tracks playing.

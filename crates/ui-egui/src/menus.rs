@@ -136,7 +136,7 @@ pub const AUDIOSUITE: &[(&str, &str)] = &[
     ("AudioSuite > Pitch Shift > Vari-Fi", "varispeed"),
     ("AudioSuite > Reverb > D-Verb", "room_reverb"),
     ("AudioSuite > Delay > Mod Delay III", "mod_delay"),
-    ("AudioSuite > Modulation > Sci-Fi", "flanger"),
+    ("AudioSuite > Modulation > Sci-Fi", "ring_mod"),
     ("AudioSuite > Harmonic > Eleven Lite", "saturator"),
     ("AudioSuite > Harmonic > Lo-Fi", "lofi"),
     ("AudioSuite > Harmonic > Recti-Fi", "rectifier"),
@@ -814,5 +814,14 @@ mod tests {
         assert_eq!(instrument_track(e.session()), None, "an audio track has no instrument");
         e.execute("edit.select", &json!({"tracks": [audio, inst]})).unwrap();
         assert_eq!(instrument_track(e.session()).map(|t| t.0), Some(inst));
+    }
+
+    #[test]
+    fn audiosuite_sci_fi_opens_the_ring_modulator() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, Services::default());
+        invoke_menu(&mut app, "audiosuite.process", "AudioSuite > Modulation > Sci-Fi");
+        assert_eq!(app.ui.audiosuite.as_deref(), Some("ring_mod"));
+        let info = soundcraft_dsp::plugin_info("ring_mod").unwrap();
+        assert!(info.audiosuite && info.category == soundcraft_dsp::Category::Modulation);
     }
 }

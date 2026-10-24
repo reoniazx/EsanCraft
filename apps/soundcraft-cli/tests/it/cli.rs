@@ -215,3 +215,28 @@ fn usage_lists_the_root_flags() {
     let help = String::from_utf8_lossy(&o.stdout).into_owned();
     assert!(help.contains("--automation-read-root DIR") && help.contains("--automation-write-root DIR"), "{help}");
 }
+
+/// Without `--start`/`--end`, `--bounce` covers the whole session, not a stray edit selection
+/// left by the script (a bare `19.2` in command params is 19 samples).
+#[test]
+fn script_bounce_without_range_covers_the_session() {
+    let base = tmpdir("bounce-range");
+    let script = base.join("cmds.txt");
+    std::fs::write(
+        &script,
+        concat!(
+            "track.new {\"count\":1,\"kind\":\"instrument\",\"name\":\"Keys\"}\n",
+            "midi.new_clip {\"track\":\"Keys\",\"start\":0,\"end\":{\"seconds\":19.2}}\n",
+            "edit.select {\"start\":0,\"end\":19.2}\n",
+        ),
+    )
+    .unwrap();
+    let out = base.join("out.wav");
+    let o = run(&["script", script.to_str().unwrap(), "--bounce", out.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
+    let last: Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    let secs = last["seconds"].as_f64().unwrap();
+    assert!((secs - 19.2).abs() < 0.01, "bounced {secs} s: {stdout}");
+    let _ = std::fs::remove_dir_all(base);
+}
