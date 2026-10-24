@@ -1,6 +1,5 @@
 //! A bounce of a bus keeps the requested timeline interval when an aux returns onto the bus
 //! (its insert's lookahead is compensated like the main mix's).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use soundcraft_audio_io::AudioBuffer;
 use soundcraft_mix::{render_bus, render_range};

@@ -3,8 +3,7 @@
 
 use soundcraft_dsp::{Category, Unit};
 
-mod common;
-use common::fixture_dir;
+use crate::common::fixture_dir;
 
 const GAIN: &str = "clap:org.soundcraft.test.gain";
 const SYNTH: &str = "clap:org.soundcraft.test.synth";

@@ -7,6 +7,10 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.soundcraft.png" width="128" height="128" alt="SoundCraft icon: a singing bird on a blue tile">
+</p>
+
 <h1 align="center">SoundCraft</h1>
 
 <p align="center">

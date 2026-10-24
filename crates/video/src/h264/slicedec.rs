@@ -6,11 +6,11 @@ use crate::h264::deblock;
 use crate::h264::error::{Result, ensure, invalid};
 use crate::h264::inter::{self, Weight};
 use crate::h264::intra::{self, Avail};
-use crate::h264::mbtypes::*;
+use crate::h264::mbtypes::{CBP_ME, MbTypeInfo, Part, SubMbInfo, SubPart, b_mb_type, b_sub_mb_type, intra_mb_type, p_mb_type, p_sub_mb_type};
 use crate::h264::params::{Pps, Sps};
-use crate::h264::picture::*;
+use crate::h264::picture::{Frame, FrameRef, MbKind, MbState, Planes, RefPic};
 use crate::h264::slice::{SliceHeader, SliceType};
-use crate::h264::tables::*;
+use crate::h264::tables::{BLK4_XY, QPC_TABLE, RASTER_TO_BLK4, ZIGZAG4, ZIGZAG8};
 use crate::h264::transform::{self, LevelScale};
 
 /// Per-slice data kept with the picture (deblocking, motion field export).

@@ -1,6 +1,5 @@
 //! Delay compensation covers the inserts of the master faders: a bounce of the main mix lines up
 //! with the same mix without them.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use soundcraft_audio_io::AudioBuffer;
 use soundcraft_mix::{MixEngine, render_range};

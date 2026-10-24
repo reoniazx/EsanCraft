@@ -65,16 +65,26 @@ pub fn normalize(ch: &mut [Vec<f32>], target_db: f32, per_channel: bool) {
         for c in ch.iter_mut() {
             let p = peak(std::slice::from_ref(c));
             if p > 0.0 {
-                let g = target / p;
-                c.iter_mut().for_each(|s| *s *= g);
+                scale_to(c.iter_mut(), target, p);
             }
         }
     } else {
         let p = peak(ch);
         if p > 0.0 {
-            let g = target / p;
-            ch.iter_mut().flatten().for_each(|s| *s *= g);
+            scale_to(ch.iter_mut().flatten(), target, p);
         }
+    }
+}
+
+/// Scales samples whose peak is `p` to `target`. A subnormal `p` makes the f32 gain overflow to
+/// infinity, so that case scales in f64.
+fn scale_to<'a>(samples: impl Iterator<Item = &'a mut f32>, target: f32, p: f32) {
+    let g = target / p;
+    if g.is_finite() {
+        samples.for_each(|s| *s *= g);
+    } else {
+        let g = f64::from(target) / f64::from(p);
+        samples.for_each(|s| *s = (f64::from(*s) * g) as f32);
     }
 }
 

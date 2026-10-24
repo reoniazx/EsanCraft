@@ -329,6 +329,18 @@ fn wav_info_entries_beyond_the_file_are_refused() {
 }
 
 #[test]
+fn a_wave_behind_another_riff_form_is_checked() {
+    let info = [&b"INFO"[..], b"INAM", &0x7fff_fff0u32.to_le_bytes(), b"hi"].concat();
+    let mut wav = riff(&[(b"fmt ", [fmt(6, 1, 8_000, 8), vec![0, 0]].concat()), (b"LIST", info), (b"data", vec![0xD5; 800])]);
+    wav[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    let list = wav.windows(4).position(|w| w == b"LIST").unwrap();
+    wav[list + 4..list + 8].copy_from_slice(&0x7fff_fffcu32.to_le_bytes());
+    // The probe skips the AVI form and reads the WAVE behind it.
+    let f = [&b"RIFF"[..], &4u32.to_le_bytes(), b"AVI ", &wav].concat();
+    assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
+}
+
+#[test]
 fn wav_info_entries_are_found_where_symphonia_reads_them() {
     let list = [&b"LIST"[..], &0x7fff_fffcu32.to_le_bytes(), b"INFO", b"INAM", &0x7fff_fff0u32.to_le_bytes(), b"hi"].concat();
     let alaw = |extra: u16| (b"fmt ", [fmt(6, 1, 8_000, 8), extra.to_le_bytes().to_vec()].concat());
@@ -449,6 +461,20 @@ fn garbage_in_compressed_containers_errors() {
         assert!(decode(&f, None).map(|(_, b)| b.frames()).unwrap_or(0) < 1_000_000);
     }
     assert!(decode(&[], None).is_err());
+}
+
+/// A marker that passes its container check must not let the probe select a different container
+/// without its own checks: the reader is refused when the probed format disagrees.
+#[test]
+fn a_probed_container_that_disagrees_with_the_checked_marker_is_refused() {
+    // The junk byte hides both magics, so the hint picks the marker: the FLAC is checked, but the
+    // probe reads the WAVE before it.
+    let bytes = [vec![0], small(FileFormat::Wav, BitDepth::Int24, 2), small(FileFormat::Flac, BitDepth::Int24, 2)].concat();
+    match decode(&bytes, Some("flac")) {
+        Err(AudioError::Malformed(message)) => assert!(message.contains("probed container"), "unexpected message: {message}"),
+        Err(other) => panic!("unexpected error kind: {other:?}"),
+        Ok(_) => panic!("the mismatched container must be refused"),
+    }
 }
 
 proptest! {

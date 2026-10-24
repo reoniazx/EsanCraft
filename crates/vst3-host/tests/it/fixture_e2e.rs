@@ -4,8 +4,7 @@
 
 use soundcraft_dsp::{Category, Taper, Unit};
 
-mod common;
-use common::fixture_dir;
+use crate::common::fixture_dir;
 
 fn id_of(name: &str) -> String {
     let found = soundcraft_vst3_host::scan_paths(&[fixture_dir().to_path_buf()]);

@@ -107,6 +107,6 @@ Resources: `soundcraft://session` (full session JSON), `soundcraft://commands`.
 - Tracks by name or id; clips by id.
 - Every command is undoable through `edit.undo` unless it is a query or a view setting.
 
-The acceptance test `crates/automation/tests/agent_tasks.rs` drives a realistic session end to end
+The acceptance test `crates/automation/tests/it/agent_tasks.rs` drives a realistic session end to end
 through MCP only (mixing, plugins, routing, editing with undo, markers, tempo, automation, bounce,
 save and reopen).

@@ -1392,7 +1392,9 @@ fn receives_solo(s: &Session, t: &Track) -> bool {
 /// Metronome: a short synthesized blip on every beat of the tempo map, accented on beat 1 of
 /// each bar. Settings come from `setup.click_countoff` (`click.*` values).
 mod click {
-    use super::*;
+    use super::db_to_gain;
+    use soundcraft_model::Session;
+    use soundcraft_time::Samples;
 
     /// Blip length in seconds.
     const LEN_S: f64 = 0.03;

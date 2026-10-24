@@ -1,8 +1,10 @@
 //! Mixer, insert, send and automation commands.
+use super::{
+    CommandSpec, always, bad, bool_or, f32_or, has_range, has_selection, has_tracks, i64_or, position_param, range_param, str_param, tracks_required,
+};
 
-use super::*;
-use crate::cmd;
-use serde_json::json;
+use crate::{Engine, EngineError, Result, cmd};
+use serde_json::{Value, json};
 use soundcraft_model::{AutoParam, AutomationMode, INSERT_SLOTS, Insert, SEND_SLOTS, SendSlot, Session, TrackId};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -444,7 +446,7 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
     let t = tracks_required(e, "mix.send", p)?.first().copied().ok_or_else(|| bad("mix.send", "no track"))?;
     let explicit = optional_slot(p, "mix.send", SEND_SLOTS)?;
     let s = e.session_mut();
-    let bid = s.add_bus(&bus, soundcraft_model::ChannelFormat::Stereo);
+    let bid = s.bus_by_name(&bus).map(|b| b.id).ok_or_else(|| bad("mix.send", format!("no bus named \"{bus}\"")))?;
     let tr = s.track_mut(t).ok_or_else(|| bad("mix.send", "no track"))?;
     let slot = explicit.or_else(|| tr.mixer.sends.iter().position(Option::is_none)).ok_or_else(|| bad("mix.send", "all send slots are in use"))?;
     // Re-targeting an existing send keeps its level, pan, mute and pre/post setting.
@@ -930,8 +932,10 @@ mod tests {
     fn retargeting_a_send_keeps_its_settings() {
         let mut e = Engine::default();
         e.execute("track.new", &json!({"count": 1, "name": "Gtr", "format": "mono"})).unwrap();
+        e.execute("mix.new_bus", &json!({"name": "Verb"})).unwrap();
         e.execute("mix.send", &json!({"track": "Gtr", "slot": 0, "bus": "Verb", "level_db": -9.0, "pre_fader": true})).unwrap();
         e.execute("mix.send_level", &json!({"track": "Gtr", "slot": 0, "pan": 0.5, "mute": true})).unwrap();
+        e.execute("mix.new_bus", &json!({"name": "Delay"})).unwrap();
         e.execute("mix.send", &json!({"track": "Gtr", "slot": 0, "bus": "Delay"})).unwrap();
         let sl = e.session().tracks[0].mixer.sends[0].clone().unwrap();
         let delay = e.session().busses.iter().find(|b| b.name == "Delay").unwrap().id;
@@ -986,9 +990,23 @@ mod tests {
     }
 
     #[test]
+    fn send_rejects_unknown_bus() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "Gtr", "format": "mono"})).unwrap();
+        e.execute("mix.new_bus", &json!({"name": "Verb"})).unwrap();
+        let err = e.execute("mix.send", &json!({"track": "Gtr", "bus": "Nowhere"})).unwrap_err();
+        assert!(err.to_string().contains("no bus named \"Nowhere\""), "{err}");
+        assert_eq!(e.session().busses.len(), 1);
+        assert!(e.session().tracks[0].mixer.sends.iter().all(Option::is_none));
+        e.execute("mix.send", &json!({"track": "Gtr", "bus": "verb"})).unwrap();
+        assert_eq!(e.session().busses.len(), 1);
+    }
+
+    #[test]
     fn insert_and_send_reject_invalid_slot() {
         let mut e = Engine::default();
         e.execute("track.new", &json!({"count": 1, "name": "Gtr", "format": "mono"})).unwrap();
+        e.execute("mix.new_bus", &json!({"name": "Verb"})).unwrap();
         for slot in [json!(12), json!("k"), json!("x1")] {
             let r = e.execute("mix.insert", &json!({"track": "Gtr", "slot": slot, "plugin": "compressor"}));
             assert!(r.is_err(), "insert slot {slot} accepted: {r:?}");

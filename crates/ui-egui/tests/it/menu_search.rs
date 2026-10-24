@@ -143,6 +143,7 @@ fn send_and_output_menus_search_buses_as_soon_as_they_open() {
     let mut engine = vox();
     let vox = engine.session().tracks[0].id;
     for (slot, bus) in [(0, "Verb"), (1, "Delay")] {
+        engine.execute("mix.new_bus", &json!({"name": bus})).unwrap();
         engine.execute("mix.send", &json!({"track": vox.0, "slot": slot, "bus": bus})).unwrap();
     }
     let mut h = harness(engine);

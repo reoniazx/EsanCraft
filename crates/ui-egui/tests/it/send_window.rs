@@ -12,6 +12,7 @@ fn harness() -> (Harness<'static, SoundApp>, soundcraft_model::TrackId) {
     engine.execute("track.new", &json!({"name": "Vox"})).unwrap();
     let vox = engine.session().tracks[0].id;
     for (slot, bus) in [(0, "Verb"), (1, "Delay")] {
+        engine.execute("mix.new_bus", &json!({"name": bus})).unwrap();
         engine.execute("mix.send", &json!({"track": vox.0, "slot": slot, "bus": bus, "level_db": -10.0})).unwrap();
     }
     let mut app = SoundApp::new(engine, None, Services::default());

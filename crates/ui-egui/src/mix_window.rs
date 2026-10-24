@@ -1254,10 +1254,14 @@ fn send_route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, slot: usize, cu
     ui.separator();
     if ui.button("new bus...").clicked() {
         let mut n = busses.len() + 1;
-        while busses.iter().any(|bus| bus.name == format!("Bus {n}")) || app.engine.session().track_by_name(&format!("Bus {n}")).is_some() {
+        while busses.iter().any(|bus| bus.name.eq_ignore_ascii_case(&format!("Bus {n}")))
+            || app.engine.session().track_by_name(&format!("Bus {n}")).is_some()
+        {
             n += 1;
         }
-        let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": format!("Bus {n}")}));
+        if app.run("mix.new_bus", json!({"name": format!("Bus {n}")})).is_ok() {
+            let _ = app.run("mix.send", json!({"track": id.0, "slot": slot, "bus": format!("Bus {n}")}));
+        }
         ui.close();
     }
 }

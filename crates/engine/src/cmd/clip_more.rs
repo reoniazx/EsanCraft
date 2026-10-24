@@ -1,10 +1,10 @@
 //! More Clip menu commands: Regroup, Unloop, Clip Effects bypass/render, Conform to Tempo and
 //! Remove Pitch Shift.
+use super::{CommandSpec, bad, clip_ids_param, has_selection, str_param};
 
 use super::more_util::{render_stretched, replace_clip};
-use super::*;
-use crate::cmd;
-use serde_json::json;
+use crate::{Engine, Result, cmd};
+use serde_json::{Value, json};
 use soundcraft_model::{Clip, ClipContent, ClipId, Session, TrackId};
 use soundcraft_time::Samples;
 

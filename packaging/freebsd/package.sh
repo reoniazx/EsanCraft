@@ -20,7 +20,7 @@ LINUX="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.soundcraft
 
 SKIP_BUILD=0
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
@@ -38,7 +38,7 @@ BASENAME="soundcraft-$VERSION-freebsd-$ARCH"
 
 echo "==> SoundCraft $VERSION for FreeBSD $ARCH"
 
-if [ "$SKIP_BUILD" = 0 ]; then
+if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli)
 fi
 BIN="$CARGO_TARGET_DIR/release"

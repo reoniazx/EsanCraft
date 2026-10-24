@@ -2,7 +2,7 @@
 
 use crate::bitstream::BitReader;
 use crate::h264::error::{Error, Result, ensure, unsupported};
-use crate::h264::tables::*;
+use crate::h264::tables::{DEFAULT_4X4_INTER, DEFAULT_4X4_INTRA, DEFAULT_8X8_INTER, DEFAULT_8X8_INTRA, ZIGZAG4, ZIGZAG8};
 
 /// `v + k` for a coded `*_minus*` field, or the error its range check gives.
 fn plus(v: u32, k: u32, err: &str) -> Result<u32> {

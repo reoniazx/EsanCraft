@@ -122,7 +122,7 @@ impl TickConv {
             let [hi, lo] = division.to_be_bytes();
             let fps = -i128::from(hi as i8);
             let tpf = i128::from(lo);
-            if fps <= 0 || tpf == 0 {
+            if !matches!(fps, 24 | 25 | 29 | 30) || tpf == 0 {
                 return Err(MidiError::Invalid { offset, reason: "invalid SMPTE division" });
             }
             let two_ppq = 2 * i128::from(PPQ);

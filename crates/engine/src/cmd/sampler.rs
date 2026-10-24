@@ -4,11 +4,11 @@
 //! The source is saved in `Audio Files/` with the session like any other audio, so a session that
 //! uses a sample reopens with it. Sampler parameters (root note, key range, ADSR, loop…) are set
 //! with `mix.instrument_param`, or all at once with `params` here.
+use super::{CommandSpec, bad, has_selection, str_param, tracks_required};
 
-use super::*;
-use crate::cmd;
-use serde_json::json;
-use soundcraft_model::{Insert, TrackKind};
+use crate::{Engine, EngineError, Result, cmd};
+use serde_json::{Value, json};
+use soundcraft_model::{Insert, TrackId, TrackKind};
 use std::path::Path;
 
 const SAMPLER: &str = "sampler";

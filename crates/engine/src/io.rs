@@ -68,13 +68,7 @@ pub fn file_found(path: impl AsRef<Path>) -> bool {
 /// Paths the person picks in this session (imports) are not stored paths and skip this.
 pub fn stored_path(stored: &str, session: &Path) -> std::result::Result<PathBuf, String> {
     let session = std::path::absolute(session).unwrap_or_else(|_| session.to_path_buf());
-    let path = craft_docpath::resolve(stored, Some(&session)).map_err(|why| format!("not opened: {why}"))?;
-    // A path that is still relative would be taken from the working directory, which the session
-    // does not choose.
-    if path.is_relative() {
-        return Err("not opened: the path is not absolute".into());
-    }
-    Ok(path)
+    craft_docpath::resolve_absolute(stored, Some(&session)).map_err(|why| format!("not opened: {why}"))
 }
 
 /// Create `dir` and its parents, inside the automation write root when there is one.
@@ -1946,6 +1940,16 @@ mod open_tests {
         assert_eq!(std::fs::read_dir(dir.join("copy/Audio Files")).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
+    #[test]
+    fn stored_paths_are_taken_from_the_session_folder() {
+        let session = std::env::temp_dir().join("s").join("Song.scraft");
+        assert_eq!(stored_path("Audio Files/k.wav", &session), Ok(session.with_file_name("Audio Files").join("k.wav")));
+        #[cfg(windows)]
+        assert_eq!(stored_path("Audio Files/take:2.wav", &session), Err("not opened: the path is not valid".into()));
+        #[cfg(not(windows))]
+        assert_eq!(stored_path(r"C:\Audio\k.wav", &session), Err("not opened: the path is not valid".into()));
+    }
+
     #[test]
     fn stored_media_paths_are_followed_only_on_this_computer() {
         let dir = std::env::temp_dir().join(format!("soundcraft-stored-paths-{}", std::process::id()));

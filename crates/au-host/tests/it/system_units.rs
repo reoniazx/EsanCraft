@@ -1,6 +1,5 @@
 //! End to end against the Audio Units Apple ships with macOS: scan → instantiate → params →
 //! process → state, plus an instrument playing a note. Skips (passes) when a unit is missing.
-#![cfg(target_os = "macos")]
 
 use soundcraft_dsp::{Category, Plugin};
 

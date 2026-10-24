@@ -57,6 +57,44 @@ fn tab_leaves_the_keys_to_the_shortcuts() {
 }
 
 #[test]
+fn bare_plus_and_minus_nudge_the_selected_clip_in_edit() {
+    // A laptop keyboard has no dedicated "+": typing it needs Shift, which is already claimed by
+    // the Grid-value shortcut (#125 above). So nudge must fire on the bare, unshifted key the "+"
+    // symbol sits on, same as "-" already does; `Key::Plus` stays bound too for a keyboard (e.g. a
+    // numpad) that does send it on its own.
+    let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    let kick = app.engine.session().track_by_name("Kick").unwrap().clips()[0].id;
+    app.engine.execute("edit.select", &json!({"clips": [kick.0]})).unwrap();
+    let ctx = egui::Context::default();
+    let start = |app: &SoundApp| app.engine.session().find_clip(kick).unwrap().1.start;
+    let original = start(&app);
+
+    press(&ctx, &mut app, Key::Minus, Modifiers::NONE);
+    let after_minus = start(&app);
+    assert!(after_minus < original, "bare Minus must nudge left");
+
+    press(&ctx, &mut app, Key::Equals, Modifiers::NONE);
+    assert_eq!(start(&app), original, "bare Equals must nudge back right, same step as Minus");
+
+    press(&ctx, &mut app, Key::Plus, Modifiers::NONE);
+    assert!(start(&app) > original, "Key::Plus (e.g. a numpad +) must still nudge right");
+
+    // Shift+Equals is the pre-existing, separate Grid-value shortcut: it must not also nudge.
+    let before_shift = start(&app);
+    let grid = app.engine.session().edit.grid;
+    press(&ctx, &mut app, Key::Equals, Modifiers::SHIFT);
+    assert_eq!(start(&app), before_shift, "Shift+Equals steps the Grid value, not the clip");
+    assert_ne!(app.engine.session().edit.grid, grid, "Shift+Equals must still step the Grid value");
+
+    // Alt+Equals is the registered `window.event_list` shortcut: it must not also nudge.
+    let before_alt = start(&app);
+    assert!(!app.ui.show_event_list);
+    press(&ctx, &mut app, Key::Equals, Modifiers::ALT);
+    assert_eq!(start(&app), before_alt, "Alt+Equals opens the MIDI Event List, not a nudge");
+    assert!(app.ui.show_event_list, "Alt+Equals must still open the MIDI Event List");
+}
+
+#[test]
 fn cmd_equals_toggles_mix_and_edit_without_zooming() {
     let mac_cmd = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
     let pc_ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };

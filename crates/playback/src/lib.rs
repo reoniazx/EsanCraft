@@ -546,14 +546,14 @@ impl Player {
         match open_device(want, want_ch, cfg) {
             Ok((device, config, format, name)) => {
                 // The chosen buffer size first; if the device refuses it, its default.
-                let mut attempts = vec![config.clone()];
+                let mut attempts = vec![config];
                 if config.buffer_size != cpal::BufferSize::Default {
                     attempts.push(cpal::StreamConfig { buffer_size: cpal::BufferSize::Default, ..config });
                 }
                 let opened = first_started(
                     attempts,
-                    |config: &cpal::StreamConfig| -> Result<Opened, cpal::BuildStreamError> {
-                        let rate = config.sample_rate.0;
+                    |config: &cpal::StreamConfig| -> Result<Opened, cpal::Error> {
+                        let rate = config.sample_rate;
                         let channels = usize::from(config.channels);
                         let (tx, rx) = channel();
                         let (gtx, grx) = channel();
@@ -570,7 +570,7 @@ impl Player {
                 );
                 match opened {
                     Some((config, Opened { stream, tx, grx, fault })) => {
-                        let rate = config.sample_rate.0;
+                        let rate = config.sample_rate;
                         let channels = usize::from(config.channels);
                         let buffer = match config.buffer_size {
                             cpal::BufferSize::Fixed(n) => Some(n),
@@ -950,7 +950,7 @@ fn build_output<T>(
     channels: usize,
     fault: &Arc<Fault>,
     shared: &Arc<Shared>,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
@@ -960,7 +960,7 @@ where
     let chunk = scratch.len();
     let (failed, guard, gone) = (Arc::clone(fault), Arc::clone(shared), Arc::clone(fault));
     device.build_output_stream(
-        config,
+        *config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             mark_audio_thread();
             for out in data.chunks_mut(chunk) {
@@ -973,9 +973,9 @@ where
         },
         // cpal may call this on the audio thread (on ALSA in a loop while the device stays
         // broken): marked, so the logger hands the record off instead of writing it.
-        move |e: cpal::StreamError| {
+        move |e: cpal::Error| {
             mark_audio_thread();
-            if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+            if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
                 gone.gone.store(true, Ordering::Relaxed);
             }
             log::warn!("audio stream error: {e}");
@@ -992,8 +992,7 @@ fn open_device(want_rate: u32, want_ch: u16, cfg: &AudioConfig) -> Result<(cpal:
     use cpal::traits::DeviceTrait;
     let host = devices::host(cfg);
     let device = devices::device(&host, cfg.output.as_deref(), true).ok_or_else(|| "no output device".to_string())?;
-    #[allow(deprecated)]
-    let name = device.name().unwrap_or_else(|_| "Audio device".into());
+    let name = devices::device_name(&device).unwrap_or_else(|| "Audio device".into());
     // Prefer a config at the chosen (else session) rate; else the device default (we resample).
     let want_ch = want_ch.max(2);
     let rates: Vec<u32> = cfg.sample_rate.into_iter().chain(Some(want_rate)).collect();
@@ -1008,13 +1007,13 @@ fn open_device(want_rate: u32, want_ch: u16, cfg: &AudioConfig) -> Result<(cpal:
         for rate in rates {
             for c in &configs {
                 if devices::format_rank(c.sample_format()).is_some()
-                    && c.min_sample_rate().0 <= rate
-                    && c.max_sample_rate().0 >= rate
+                    && c.min_sample_rate() <= rate
+                    && c.max_sample_rate() >= rate
                     && c.channels() >= 2
                     && c.channels() <= want_ch
                     && chosen.as_ref().is_none_or(|x| better(c, x))
                 {
-                    chosen = Some((c.with_sample_rate(cpal::SampleRate(rate)).config(), *c.buffer_size(), c.sample_format()));
+                    chosen = Some((c.with_sample_rate(rate).config(), *c.buffer_size(), c.sample_format()));
                 }
             }
             if chosen.is_some() {
@@ -1053,11 +1052,21 @@ mod tests {
     }
 
     impl cpal::traits::StreamTrait for Fake {
-        fn play(&self) -> Result<(), cpal::PlayStreamError> {
-            if self.starts { Ok(()) } else { Err(cpal::PlayStreamError::DeviceNotAvailable) }
+        /// Play reports the device's refusal when `starts` is false.
+        fn play(&self) -> Result<(), cpal::Error> {
+            if self.starts { Ok(()) } else { Err(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable)) }
         }
-        fn pause(&self) -> Result<(), cpal::PauseStreamError> {
+        /// Pause always succeeds on the fake stream.
+        fn pause(&self) -> Result<(), cpal::Error> {
             Ok(())
+        }
+        /// The fake stream claims one fixed buffer.
+        fn buffer_size(&self) -> Result<cpal::FrameCount, cpal::Error> {
+            Ok(1024)
+        }
+        /// The fake stream has no clock.
+        fn now(&self) -> cpal::StreamInstant {
+            cpal::StreamInstant::new(0, 0)
         }
     }
 
