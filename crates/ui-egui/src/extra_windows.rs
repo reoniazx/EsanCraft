@@ -162,7 +162,7 @@ fn ui_customization(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.end_row();
                 ui.label("Theme");
                 let mut chosen = None;
-                egui::ComboBox::from_id_salt("theme_mode").selected_text(app.ui.theme.label()).show_ui(ui, |ui| {
+                crate::dropdown::ComboBox::from_id_salt("theme_mode").selected_text(app.ui.theme.label()).show_ui(ui, |ui| {
                     for mode in crate::theme::ThemeMode::ALL {
                         if ui.selectable_label(app.ui.theme == mode, mode.label()).clicked() {
                             chosen = Some(mode);

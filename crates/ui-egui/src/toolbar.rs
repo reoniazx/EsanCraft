@@ -244,13 +244,15 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
     ui.painter().text(pos2(main_r.max.x - 18.0, main_r.center().y), Align2::RIGHT_CENTER, txt, mono(26.0), t.counter_text);
     let resp = ui.interact(main_r, ui.id().with("main_counter"), Sense::click());
     icons::draw(ui.painter(), Rect::from_center_size(pos2(main_r.max.x - 9.0, main_r.center().y), vec2(10.0, 10.0)), "triangle_down", t.text_dim);
-    egui::Popup::menu(&resp).show(|ui| {
-        for f in TimeFormat::ALL {
-            if ui.selectable_label(main_fmt == f, f.label()).clicked() {
-                let _ = app.run("view.main_counter", json!({"format": f.id()}));
+    if !crate::context_menu::dropdown(app, &resp, crate::context_menu::Target::Counter) {
+        egui::Popup::menu(&resp).show(|ui| {
+            for f in TimeFormat::ALL {
+                if ui.selectable_label(main_fmt == f, f.label()).clicked() {
+                    let _ = app.run("view.main_counter", json!({"format": f.id()}));
+                }
             }
-        }
-    });
+        });
+    }
     // Start / End / Length.
     let s = app.engine.session();
     let rows = [
@@ -303,26 +305,67 @@ fn grid_nudge(app: &mut SoundApp, ui: &mut Ui) {
 }
 
 fn value_menu(app: &mut SoundApp, resp: &egui::Response, cmd: &str) {
-    egui::Popup::menu(resp).show(|ui| {
-        for v in ["1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64", "1/8t", "1/16t", "1/4."] {
-            if ui.button(v).clicked() {
-                let _ = app.run(cmd, json!({"value": v}));
+    if !crate::context_menu::dropdown(app, resp, crate::context_menu::Target::Grid { nudge: cmd == "view.nudge" }) {
+        egui::Popup::menu(resp).show(|ui| {
+            for v in ["1 bar", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64", "1/8t", "1/16t", "1/4."] {
+                if ui.button(v).clicked() {
+                    let _ = app.run(cmd, json!({"value": v}));
+                }
             }
-        }
-        ui.separator();
-        for (label, v) in [
-            ("1 msec", json!({"seconds": 0.001})),
-            ("10 msec", json!({"seconds": 0.01})),
-            ("100 msec", json!({"seconds": 0.1})),
-            ("1 second", json!({"seconds": 1.0})),
-            ("1 frame", json!({"frames": 1})),
-            ("100 samples", json!({"samples": 100})),
-        ] {
-            if ui.button(label).clicked() {
-                let _ = app.run(cmd, json!({"value": v}));
+            ui.separator();
+            for (label, v) in [
+                ("1 msec", json!({"seconds": 0.001})),
+                ("10 msec", json!({"seconds": 0.01})),
+                ("100 msec", json!({"seconds": 0.1})),
+                ("1 second", json!({"seconds": 1.0})),
+                ("1 frame", json!({"frames": 1})),
+                ("100 samples", json!({"samples": 100})),
+            ] {
+                if ui.button(label).clicked() {
+                    let _ = app.run(cmd, json!({"value": v}));
+                }
             }
-        }
-    });
+        });
+    }
+}
+
+pub(crate) fn native_value_menu(app: &SoundApp, nudge: bool) -> Vec<crate::context_menu::Entry> {
+    use crate::context_menu::Entry;
+    use soundcraft_time::{GridValue, NoteValue};
+    let command = if nudge { "view.nudge" } else { "view.grid" };
+    let current = if nudge { app.engine.session().edit.nudge } else { app.engine.session().edit.grid };
+    let notes = [
+        ("1 bar", NoteValue::Bar, false, false),
+        ("1/2", NoteValue::Half, false, false),
+        ("1/4", NoteValue::Quarter, false, false),
+        ("1/8", NoteValue::Eighth, false, false),
+        ("1/16", NoteValue::Sixteenth, false, false),
+        ("1/32", NoteValue::ThirtySecond, false, false),
+        ("1/64", NoteValue::SixtyFourth, false, false),
+        ("1/8t", NoteValue::Eighth, false, true),
+        ("1/16t", NoteValue::Sixteenth, false, true),
+        ("1/4.", NoteValue::Quarter, true, false),
+    ];
+    let mut entries: Vec<_> = notes
+        .into_iter()
+        .map(|(label, value, dotted, triplet)| {
+            Entry::command(label, command, json!({"value": label})).checked(current == GridValue::Note { value, dotted, triplet })
+        })
+        .collect();
+    entries.push(Entry::Separator);
+    entries.extend(
+        [
+            ("1 msec", json!({"seconds": 0.001}), GridValue::Seconds(0.001)),
+            ("10 msec", json!({"seconds": 0.01}), GridValue::Seconds(0.01)),
+            ("100 msec", json!({"seconds": 0.1}), GridValue::Seconds(0.1)),
+            ("1 second", json!({"seconds": 1.0}), GridValue::Seconds(1.0)),
+            ("1 frame", json!({"frames": 1}), GridValue::Frames(1)),
+            ("100 samples", json!({"samples": 100}), GridValue::Samples(100)),
+        ]
+        .into_iter()
+        .map(|(label, value, grid)| Entry::command(label, command, json!({"value": value})).checked(current == grid)),
+    );
+    entries
 }
 
 fn transport(app: &mut SoundApp, ui: &mut Ui) {

@@ -220,7 +220,7 @@ fn contributors_toolbar(ui: &mut egui::Ui, v: &mut View) {
         }
         ui.separator();
         ui.label("Sort");
-        egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
+        crate::dropdown::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
             for k in SortKey::ALL {
                 if ui.selectable_label(v.key == k, k.label().0).clicked() {
                     v.key = k;

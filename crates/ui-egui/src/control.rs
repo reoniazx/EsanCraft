@@ -121,6 +121,8 @@ fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Opti
                             "{track: id, slot: index, instruments?: false, scan?: CLAP|VST3} — focused plugin search; slot is ignored for instruments"
                         }
                         "window.send_controls" => "{track: id, slot: index} — detailed controls for an assigned Send",
+                        "window.routing_search" => "{track: id, input?: false, send?: slot} — searchable input, output or Send destinations",
+                        "window.save_preset" => "{track: id, slot: index} — save the current insert parameters as a user preset",
                         "ui.midi_scroll" => "{by_px?: 0, by_y_px?: 0} — pan time/pitch in window points",
                         "ui.midi_zoom_at" => "{factor?: 1, anchor_px?: centre} — zoom around the anchor measured from the piano roll's left edge",
                         "ui.midi_velocity_height" => "{height?: number} — preferred Velocity lane height in window points (24–4096); omit to inspect",

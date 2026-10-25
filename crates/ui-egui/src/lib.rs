@@ -11,6 +11,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod docking;
+pub mod dropdown;
 pub mod edit_window;
 pub mod extra_windows;
 pub mod fonts;
@@ -1435,6 +1436,8 @@ impl SoundApp {
 
     pub(crate) fn floating_ui(&mut self, ctx: &egui::Context) {
         mix_window::plugin_search_window(self, ctx);
+        mix_window::routing_search_window(self, ctx);
+        panels::save_preset_window(self, ctx);
         panels::floating(self, ctx);
         windows::show(self, ctx);
         video_window::show(self, ctx);

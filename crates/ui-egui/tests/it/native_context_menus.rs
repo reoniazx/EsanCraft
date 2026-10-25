@@ -1,4 +1,4 @@
-//! Native presentation owns right clicks while the inline pickers still own left clicks.
+//! Native presentation owns context menus and left-click dropdowns without an egui popup.
 #![cfg(not(target_arch = "wasm32"))]
 
 use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
@@ -64,7 +64,7 @@ fn edit_and_mix_track_names_open_one_native_menu_without_an_egui_popup() {
 }
 
 #[test]
-fn inserts_and_sends_use_native_context_menus_and_keep_left_click_search() {
+fn inserts_and_sends_use_native_context_menus_and_left_click_dropdowns() {
     let (mut h, requests) = harness();
     h.state().state.borrow_mut().ui.window = MainWindow::Mix;
     h.run_steps(4);
@@ -79,9 +79,24 @@ fn inserts_and_sends_use_native_context_menus_and_keep_left_click_search() {
     let n = requests.borrow().len();
     h.get_by_label("Insert A").click();
     h.run_steps(3);
-    h.event(Event::Text("reverb".into()));
-    h.run_steps(2);
-    let reverb = soundcraft_dsp::plugins().iter().find(|p| !p.is_instrument && p.name.to_lowercase().contains("reverb")).unwrap();
-    assert!(h.query_by_label(reverb.name).is_some());
-    assert_eq!(requests.borrow().len(), n);
+    assert_eq!(requests.borrow().len(), n + 1);
+    assert!(matches!(requests.borrow().last().unwrap().target, Target::Insert { slot: 0, .. }));
+    assert!(matches!(requests.borrow().last().unwrap().anchor, soundcraft_ui_egui::context_menu::Anchor::Below { .. }));
+    assert!(h.query_by_label("Search plugins…").is_none());
+}
+
+#[test]
+fn track_view_dropdown_requests_a_native_menu() {
+    let (mut h, requests) = harness();
+    let row = h.state().state.borrow().edit_layout.rows[0].1;
+    let point = pos2(row[0] + 70.0, row[1] + 47.0);
+    h.hover_at(point);
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(3);
+    let requests = requests.borrow();
+    assert!(matches!(requests.last().unwrap().target, Target::TrackView(_)));
+    assert!(matches!(requests.last().unwrap().anchor, soundcraft_ui_egui::context_menu::Anchor::Below { .. }));
+    assert!(h.query_by_label("blocks").is_none(), "the egui menu must not open behind the native menu");
 }

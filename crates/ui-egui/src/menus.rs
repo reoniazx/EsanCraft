@@ -65,6 +65,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.search", "Search", "Window > Pro Tools Search", Some("Cmd+Ctrl+S")),
     ("window.plugin_search", "Search Plugins…", "", None),
     ("window.send_controls", "Open Send Controls…", "", None),
+    ("window.routing_search", "Search Buses…", "", None),
+    ("window.save_preset", "Save Preset…", "", None),
     ("window.score", "Score Editor", "Window > Score Editor", Some("Cmd+Ctrl+=")),
     ("window.beat_detective", "Beat Detective", "", None),
     ("window.tempo_ops", "Tempo Operations", "", None),
@@ -515,6 +517,12 @@ fn wants_dialog(id: &str) -> bool {
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
 pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if id == "window.save_preset" {
+        return Some(crate::panels::save_preset_command(app, p));
+    }
+    if id == "window.routing_search" {
+        return Some(crate::mix_window::routing_search_command(app, p));
+    }
     if matches!(id, "window.plugin_search" | "window.send_controls") {
         return Some(crate::mix_window::context_window_command(app, id, p));
     }

@@ -125,23 +125,27 @@ toward later ticks and lower pitches. The returned view contains `zoom`, `scroll
 `top_pitch`. MIDI view state persists when the dock is closed/reopened; selecting another clip
 starts with that clip fitted and its notes centred vertically.
 
-### Context-menu auxiliary windows
+### Native-menu auxiliary windows
 
-On macOS the desktop host presents right-click menus with AppKit. The menu descriptions and
+On macOS the desktop host presents right-click menus and dropdowns with AppKit. The menu descriptions and
 command actions are shared with egui fallback hosts. Native tracking never owns an app-state
 borrow; cancelling a menu executes nothing, and replacing the session invalidates its result.
-Left-click pickers retain their existing inline UI.
+Dropdowns anchor below their controls. Ordinary form choices return a row identity and apply
+once on the next frame, after validating the session, row label and result age. Other hosts
+retain their existing egui UI.
 
-Two UI-only commands expose the auxiliary controls used by these menus:
+These UI-only commands expose the auxiliary controls used by native menus:
 
 | Command | Parameters | Result |
 |---|---|---|
 | `window.plugin_search` | `{track: id, slot: index, instruments?: false, scan?: "CLAP" or "VST3"}` | Opens a focused plugin picker with an empty search. With `instruments: true`, the track must be an instrument track and `slot` is ignored. `scan` explicitly scans the requested format before showing results. |
 | `window.send_controls` | `{track: id, slot: index}` | Opens the existing detailed controls for an assigned Send. |
+| `window.routing_search` | `{track: id, input?: false, send?: index}` | Opens a focused bus-search picker for the input/output route, or for a Send when `send` is present. |
+| `window.save_preset` | `{track: id, slot: index}` | Opens Save Preset controls for an occupied insert slot. |
 
 Invalid or missing targets and out-of-range slots return an error. Choosing a plugin uses the
 same insertion command, Undo history and automatic editor opening as the inline picker.
-When opened from a context menu, plugin search belongs to that menu's viewport; a programmatic
+When opened from a native menu, auxiliary controls belong to that menu's viewport; a programmatic
 call opens it in the root viewport.
 
 ### MIDI Editor playback and scrolling

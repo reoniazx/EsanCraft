@@ -375,16 +375,21 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if tb.small_button("Quantize").on_hover_text("Quantize to the grid").clicked() {
             op = Some(("event.quantize", json!({"grid": grid_ticks, "strength": 100})));
         }
-        tb.menu_button(format!("Scrolling: {}", app.ui.midi_scrolling.label()), |ui| {
-            for mode in MidiScrollingMode::ALL {
-                if ui.selectable_label(app.ui.midi_scrolling == mode, mode.label()).clicked() {
-                    let _ = app.run("ui.midi_scrolling", json!({"mode": mode.id()}));
-                    ui.close();
+        if app.context_menus.enabled {
+            let response = tb.button(format!("Scrolling: {}", app.ui.midi_scrolling.label()));
+            crate::context_menu::dropdown(app, &response, crate::context_menu::Target::MidiScrolling);
+        } else {
+            tb.menu_button(format!("Scrolling: {}", app.ui.midi_scrolling.label()), |ui| {
+                for mode in MidiScrollingMode::ALL {
+                    if ui.selectable_label(app.ui.midi_scrolling == mode, mode.label()).clicked() {
+                        let _ = app.run("ui.midi_scrolling", json!({"mode": mode.id()}));
+                        ui.close();
+                    }
                 }
-            }
-        })
-        .response
-        .on_hover_text("MIDI Editor scrolling is independent of the Edit window. Select the current mode again to resume following playback.");
+            })
+            .response
+            .on_hover_text("MIDI Editor scrolling is independent of the Edit window. Select the current mode again to resume following playback.");
+        }
     });
     if let Some((id, mut p)) = op {
         p["clips"] = json!([cid.0]);

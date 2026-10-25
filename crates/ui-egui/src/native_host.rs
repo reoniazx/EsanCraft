@@ -50,7 +50,9 @@ impl NativeUiHost {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 return;
             };
+            crate::dropdown::prepare(&app, &ctx);
             app.guarded(|app| app.ui(ui));
+            crate::dropdown::collect(&mut app, &ctx);
             // Compare across frames, including commands drained by logic before
             // drawing. Clone preferences only when their visible state changes.
             let changed = if let Ok(mut cache) = self.view_state.try_borrow_mut() {
@@ -132,7 +134,9 @@ fn render_secondary(id: u64, ui: &mut egui::Ui) {
         return;
     };
     let started = std::time::Instant::now();
+    crate::dropdown::prepare(&app, ui.ctx());
     app.guarded(|app| main_windows::show_secondary(app, ui));
+    crate::dropdown::collect(&mut app, ui.ctx());
     app.main_windows.secondary_ui_ms = started.elapsed().as_secs_f64() * 1000.0;
     drop(app);
     present_pending(id, ui.ctx());
@@ -162,7 +166,12 @@ fn present_pending(id: u64, ctx: &egui::Context) {
         app.context_menus.active = false;
         match result {
             Ok(Some(selection)) if request.epoch == app.context_menus.epoch && crate::context_menu::valid(&app, &request.target) => {
-                app.guarded(|app| crate::context_menu::execute(app, selection.action, selection.modifiers, request.viewport));
+                if let crate::context_menu::Action::Choice { control, index, label } = selection.action {
+                    let pass = ctx.cumulative_pass_nr();
+                    ctx.data_mut(|data| data.insert_temp(control, crate::dropdown::Pick { index, label, epoch: request.epoch, pass }));
+                } else {
+                    app.guarded(|app| crate::context_menu::execute(app, selection.action, selection.modifiers, request.viewport));
+                }
             }
             Err(error) => {
                 log::warn!("Native context menu: {error}");
@@ -234,6 +243,7 @@ mod context_menu_tests {
             target,
             viewport: main_windows::secondary_id(),
             epoch: app.context_menus.epoch,
+            anchor: crate::context_menu::Anchor::Pointer,
         });
         drop(app);
         (host, presenter, track)
@@ -296,5 +306,19 @@ mod context_menu_tests {
         }));
         present_pending(host.id, &egui::Context::default());
         assert_eq!(host.state.borrow().context_menus.search.as_ref().unwrap().viewport, viewport);
+    }
+
+    #[test]
+    fn native_choices_are_delivered_without_reentering_the_context_lock() {
+        let (host, presenter, _) = setup(Ok(None), false);
+        let control = egui::Id::new("form-control");
+        *presenter.result.borrow_mut() =
+            Ok(Some(Selection { action: Action::Choice { control, index: 1, label: "Stereo".into() }, modifiers: Modifiers::NONE }));
+        let ctx = egui::Context::default();
+        present_pending(host.id, &ctx);
+        let pick = ctx.data(|data| data.get_temp::<crate::dropdown::Pick>(control)).unwrap();
+        assert_eq!(pick.index, 1);
+        assert_eq!(pick.label, "Stereo");
+        assert!(!host.state.borrow().context_menus.active);
     }
 }

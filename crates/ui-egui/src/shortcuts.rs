@@ -62,6 +62,8 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
         || app.import.is_some()
         || app.context_menus.active
         || app.context_menus.search.as_ref().is_some_and(|search| search.viewport == ctx.viewport_id())
+        || app.context_menus.routing.as_ref().is_some_and(|search| search.viewport == ctx.viewport_id())
+        || app.context_menus.preset.is_some_and(|preset| preset.2 == ctx.viewport_id())
     {
         return;
     }

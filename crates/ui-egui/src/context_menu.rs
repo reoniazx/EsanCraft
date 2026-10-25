@@ -8,6 +8,20 @@ use soundcraft_model::{ClipId, GroupId, SourceId, TrackHeight, TrackId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
+    Control(egui::Id),
+    TrackView(TrackId),
+    Playlists(TrackId),
+    Voice(TrackId),
+    Automation(TrackId),
+    Timebase(TrackId),
+    Elastic(TrackId),
+    EditColumns,
+    Route { track: TrackId, input: bool },
+    SendRoute { track: TrackId, slot: usize },
+    Counter,
+    Grid { nudge: bool },
+    MidiScrolling,
+    Presets { track: TrackId, slot: usize, plugin: String },
     Track(TrackId),
     Clip(Option<ClipId>),
     Group(Option<GroupId>),
@@ -19,6 +33,9 @@ pub enum Target {
 
 #[derive(Clone, Debug)]
 pub enum Action {
+    Choice { control: egui::Id, index: usize, label: String },
+    NewBus { track: TrackId, send: Option<usize>, input: bool },
+    LoadPreset { track: TrackId, slot: usize, name: String },
     Command(String, Value),
     RenameTrack(TrackId),
     RenameClip(ClipId),
@@ -63,6 +80,13 @@ pub struct Request {
     pub entries: Vec<Entry>,
     pub viewport: egui::ViewportId,
     pub epoch: u64,
+    pub anchor: Anchor,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Anchor {
+    Pointer,
+    Below { rect: egui::Rect, zoom: f32 },
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +109,16 @@ pub struct State {
     pub(crate) pending: Option<Request>,
     pub(crate) epoch: u64,
     pub(crate) search: Option<Search>,
+    pub(crate) routing: Option<RoutingSearch>,
+    pub(crate) preset: Option<(TrackId, usize, egui::ViewportId)>,
+}
+
+pub(crate) struct RoutingSearch {
+    pub track: TrackId,
+    pub send: Option<usize>,
+    pub input: bool,
+    pub viewport: egui::ViewportId,
+    pub fresh: bool,
 }
 
 pub(crate) struct Search {
@@ -100,12 +134,26 @@ impl State {
         self.epoch = self.epoch.saturating_add(1);
         self.pending = None;
         self.search = None;
+        self.routing = None;
+        self.preset = None;
     }
 }
 
 pub fn valid(app: &SoundApp, target: &Target) -> bool {
     let s = app.engine.session();
     match target {
+        Target::Presets { track, slot, plugin } => {
+            s.track(*track).and_then(|t| t.mixer.inserts.get(*slot)).and_then(Option::as_ref).is_some_and(|insert| insert.plugin == *plugin)
+        }
+        Target::Control(_) | Target::EditColumns | Target::Counter | Target::Grid { .. } | Target::MidiScrolling => true,
+        Target::TrackView(id)
+        | Target::Playlists(id)
+        | Target::Voice(id)
+        | Target::Automation(id)
+        | Target::Timebase(id)
+        | Target::Elastic(id)
+        | Target::Route { track: id, .. } => s.track(*id).is_some(),
+        Target::SendRoute { track, slot } => s.track(*track).is_some_and(|t| t.mixer.sends.get(*slot).is_some()),
         Target::Track(id) => s.track(*id).is_some(),
         Target::Instrument(id) => s.track(*id).is_some_and(|t| t.kind == soundcraft_model::TrackKind::Instrument),
         Target::Clip(id) => id.is_none_or(|id| s.find_clip(id).is_some()),
@@ -124,8 +172,27 @@ pub fn native(app: &mut SoundApp, ui: &Ui, response: &Response, target: Target) 
     }
     if response.secondary_clicked() && !app.context_menus.active && valid(app, &target) {
         let entries = describe(app, &target);
-        app.context_menus.pending = Some(Request { target, entries, viewport: ui.ctx().viewport_id(), epoch: app.context_menus.epoch });
+        app.context_menus.pending =
+            Some(Request { target, entries, viewport: ui.ctx().viewport_id(), epoch: app.context_menus.epoch, anchor: Anchor::Pointer });
         ui.ctx().request_repaint();
+    }
+    true
+}
+
+/// Left-click selectors keep their existing closed controls and use the same native presenter.
+pub fn dropdown(app: &mut SoundApp, response: &Response, target: Target) -> bool {
+    if !app.context_menus.enabled {
+        return false;
+    }
+    if response.clicked() && !app.context_menus.active && valid(app, &target) {
+        app.context_menus.pending = Some(Request {
+            entries: describe(app, &target),
+            target,
+            viewport: response.ctx.viewport_id(),
+            epoch: app.context_menus.epoch,
+            anchor: Anchor::Below { rect: response.rect, zoom: response.ctx.zoom_factor() },
+        });
+        response.ctx.request_repaint();
     }
     true
 }
@@ -176,7 +243,28 @@ fn render(app: &mut SoundApp, ui: &mut Ui, entries: &[Entry]) {
 
 pub fn execute(app: &mut SoundApp, action: Action, modifiers: Modifiers, viewport: egui::ViewportId) {
     let opening_search = matches!(&action, Action::Command(id, _) if id == "window.plugin_search");
+    let opening_routing = matches!(&action, Action::Command(id, _) if id == "window.routing_search");
+    let opening_preset = matches!(&action, Action::Command(id, _) if id == "window.save_preset");
     let result = match action {
+        Action::Choice { .. } => Err("Dropdown selection requires a window host".into()),
+        Action::LoadPreset { track, slot, name } => crate::panels::load_preset(app, track, slot, &name),
+        Action::NewBus { track, send, input } => {
+            let s = app.engine.session();
+            let mut n = s.busses.len().saturating_add(1);
+            while s.busses.iter().any(|bus| bus.name.eq_ignore_ascii_case(&format!("Bus {n}"))) || s.track_by_name(&format!("Bus {n}")).is_some() {
+                let Some(next) = n.checked_add(1) else { return };
+                n = next;
+            }
+            let name = format!("Bus {n}");
+            if let Some(slot) = send {
+                app.run("mix.new_bus", json!({"name": name}))
+                    .and_then(|_| app.run("mix.send", json!({"track": track.0, "slot": slot, "bus": name})))
+                    .map(|_| ())
+            } else {
+                let key = if input { "input" } else { "output" };
+                app.run(if input { "track.input" } else { "track.output" }, json!({"track": track.0, key: name})).map(|_| ())
+            }
+        }
         Action::Command(id, params) => app.run(&id, params).map(|_| ()),
         Action::RenameTrack(id) => {
             if let Some(track) = app.engine.session().track(id) {
@@ -236,6 +324,12 @@ pub fn execute(app: &mut SoundApp, action: Action, modifiers: Modifiers, viewpor
     if opening_search && let Some(search) = app.context_menus.search.as_mut() {
         search.viewport = viewport;
     }
+    if opening_routing && let Some(routing) = app.context_menus.routing.as_mut() {
+        routing.viewport = viewport;
+    }
+    if opening_preset && let Some(preset) = app.context_menus.preset.as_mut() {
+        preset.2 = viewport;
+    }
     if let Err(error) = result {
         app.ui.status = error;
     }
@@ -246,6 +340,80 @@ pub fn describe(app: &SoundApp, target: &Target) -> Vec<Entry> {
         return vec![];
     }
     let mut entries = match *target {
+        Target::Control(_) => vec![],
+        Target::Presets { track, slot, .. } => crate::panels::native_preset_menu(app, track, slot),
+        Target::TrackView(id) => crate::edit_window::native_view_menu(app, id),
+        Target::Playlists(id) => crate::edit_window::native_playlist_menu(app, id),
+        Target::Voice(id) => app
+            .engine
+            .session()
+            .track(id)
+            .map(|track| {
+                [("dyn", false), ("off", true)]
+                    .into_iter()
+                    .map(|(label, inactive)| {
+                        Entry::command(label, "track.make_inactive", json!({"tracks": [id.0], "inactive": inactive}))
+                            .checked(track.inactive == inactive)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Target::Automation(id) => app
+            .engine
+            .session()
+            .track(id)
+            .map(|track| {
+                soundcraft_model::AutomationMode::ALL
+                    .into_iter()
+                    .map(|mode| {
+                        Entry::command(mode.label(), "mix.automation_mode", json!({"track": id.0, "mode": mode.label()}))
+                            .checked(track.mixer.automation_mode == mode)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Target::Timebase(id) => app
+            .engine
+            .session()
+            .track(id)
+            .map(|track| {
+                [("Samples", false), ("Ticks", true)]
+                    .into_iter()
+                    .map(|(label, ticks)| {
+                        Entry::command(label, "track.timebase", json!({"tracks": [id.0], "ticks": ticks})).checked(track.ticks_timebase == ticks)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Target::Elastic(id) => app
+            .engine
+            .session()
+            .track(id)
+            .map(|track| {
+                ["none", "polyphonic", "rhythmic", "monophonic", "varispeed", "x-form"]
+                    .into_iter()
+                    .map(|algorithm| {
+                        Entry::command(algorithm, "track.elastic", json!({"tracks": [id.0], "algorithm": algorithm}))
+                            .checked(track.elastic.as_deref().unwrap_or("none") == algorithm)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Target::EditColumns => crate::edit_window::native_columns_menu(app),
+        Target::Route { track, input } => crate::mix_window::native_route_menu(app, track, input, None),
+        Target::SendRoute { track, slot } => crate::mix_window::native_route_menu(app, track, false, Some(slot)),
+        Target::Counter => soundcraft_time::TimeFormat::ALL
+            .into_iter()
+            .map(|format| {
+                Entry::command(format.label(), "view.main_counter", json!({"format": format.id()}))
+                    .checked(app.engine.session().edit.main_counter == format)
+            })
+            .collect(),
+        Target::Grid { nudge } => crate::toolbar::native_value_menu(app, nudge),
+        Target::MidiScrolling => crate::midi_playback::MidiScrollingMode::ALL
+            .into_iter()
+            .map(|mode| Entry::command(mode.label(), "ui.midi_scrolling", json!({"mode": mode.id()})).checked(app.ui.midi_scrolling == mode))
+            .collect(),
         Target::Track(id) => track_menu(app, id),
         Target::Clip(clip) => clip_menu(app, clip),
         Target::Group(id) => group_menu(app, id),
@@ -539,5 +707,44 @@ mod tests {
         assert!(app.run("window.plugin_search", json!({"track": track.0, "instruments": true})).is_err());
         assert!(app.context_menus.search.is_none());
         assert!(app.ui.send_window.is_none());
+    }
+
+    #[test]
+    fn dropdown_track_view_and_routing_actions_target_the_requested_track() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, crate::Services::default());
+        let track = app.engine.session().tracks[0].id;
+        let other = app.engine.session().tracks[1].id;
+        let other_view = app.engine.session().track(other).unwrap().view.clone();
+        let view = action(&describe(&app, &Target::TrackView(track)), "blocks");
+        execute(&mut app, view, Modifiers::NONE, egui::ViewportId::ROOT);
+        assert_eq!(app.engine.session().track(track).unwrap().view, "blocks");
+        assert_eq!(app.engine.session().track(other).unwrap().view, other_view);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.engine.session().track(track).unwrap().view, "waveform");
+
+        app.run("mix.new_bus", json!({"name": "Dropdown Bus"})).unwrap();
+        let bus = app.engine.session().busses.iter().find(|bus| bus.name == "Dropdown Bus").unwrap().id;
+        let route = action(&describe(&app, &Target::Route { track, input: false }), "Dropdown Bus");
+        execute(&mut app, route, Modifiers::NONE, egui::ViewportId::ROOT);
+        assert_eq!(app.engine.session().track(track).unwrap().mixer.output, soundcraft_model::Route::Bus(bus));
+        let send = action(&describe(&app, &Target::SendRoute { track, slot: 0 }), "Dropdown Bus");
+        execute(&mut app, send, Modifiers::NONE, egui::ViewportId::ROOT);
+        assert_eq!(app.engine.session().track(track).unwrap().mixer.sends[0].as_ref().unwrap().target, soundcraft_model::Route::Bus(bus));
+    }
+
+    #[test]
+    fn dropdown_auxiliary_windows_validate_their_targets() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, crate::Services::default());
+        let track = app.engine.session().tracks[0].id;
+        for params in [json!({}), json!({"track": u64::MAX}), json!({"track": track.0, "send": -1}), json!({"track": track.0, "send": u64::MAX})] {
+            assert!(app.run("window.routing_search", params).is_err());
+        }
+        for params in [json!({}), json!({"track": u64::MAX, "slot": 0}), json!({"track": track.0, "slot": u64::MAX})] {
+            assert!(app.run("window.save_preset", params).is_err());
+        }
+        app.run("window.routing_search", json!({"track": track.0, "send": 0})).unwrap();
+        assert_eq!(app.context_menus.routing.as_ref().unwrap().send, Some(0));
+        app.run("session.new", json!({})).unwrap();
+        assert!(app.context_menus.routing.is_none());
     }
 }
