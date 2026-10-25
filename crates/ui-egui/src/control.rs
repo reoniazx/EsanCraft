@@ -117,6 +117,10 @@ fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlRequest) -> Opti
             if let Some(arr) = list.as_array_mut() {
                 for (id, label, path, sc) in crate::menus::UI_COMMANDS.iter().filter(|c| matches(c.0, c.1)) {
                     let params = match *id {
+                        "window.plugin_search" => {
+                            "{track: id, slot: index, instruments?: false, scan?: CLAP|VST3} — focused plugin search; slot is ignored for instruments"
+                        }
+                        "window.send_controls" => "{track: id, slot: index} — detailed controls for an assigned Send",
                         "ui.midi_scroll" => "{by_px?: 0, by_y_px?: 0} — pan time/pitch in window points",
                         "ui.midi_zoom_at" => "{factor?: 1, anchor_px?: centre} — zoom around the anchor measured from the piano roll's left edge",
                         "ui.midi_velocity_height" => "{height?: number} — preferred Velocity lane height in window points (24–4096); omit to inspect",

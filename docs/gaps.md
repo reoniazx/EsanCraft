@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** trivial (merge upstream updates; retain local features, fixes and progress history) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (native macOS context menus) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -218,6 +218,8 @@ settings command only. Needs an openly licensed local speech model. ≈ 30–50 
 
 ### G-19. UI feel
 
+**Done (2026-10-25):** macOS context menus now use AppKit for Track, Clip, Groups, Clip List, Insert, Instrument and Send, with system appearance and Liquid Glass on supported macOS/SDK combinations. Plugin Search preserves filtering and keyboard selection in a separate picker; Send opens its existing detailed controls and exposes native quick actions. Cancellation, stale targets, one-shot dispatch and egui fallback are covered. Other UI fidelity work and estimates remain unchanged.
+
 **Fixed (2026-10-20):** Native audio imports report reading, decoding, rate conversion and waveform preparation in a modal while a worker does the sample processing. Cancel/Esc discards the batch; a failed file leaves the session unchanged; completed batches use one Undo step. Multi-file drops are grouped. Browser byte imports still process synchronously; full Task Manager parity remains outside this change. Estimates unchanged.
 
 **Fixed (2026-10-18):** Meter colour boundaries align with the -10 and -5 dB rules and scale
@@ -252,6 +254,7 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Native macOS context menus with plugin search and Send controls; readiness estimates unchanged |
 | 2026-10-25 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
 | 2026-10-24 | trivial | G-08: 27 processors + 3 instruments, as the plugin registry holds; G-20: the sampler shipped (#108), so it is no longer listed as missing |
 | 2026-10-24 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |

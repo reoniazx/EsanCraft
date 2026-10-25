@@ -1,6 +1,6 @@
 # SoundCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** trivial (merge upstream updates; retain local features, fixes and progress history) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (native macOS context menus) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Forward-looking plan. Status and numbers: [`../ROADMAP.md`](../ROADMAP.md) and
 [`target-app-parity.md`](target-app-parity.md); the ranked work list: [`gaps.md`](gaps.md).
@@ -91,6 +91,7 @@ There is no `cargo xtask scorecard` in this repo; the measured number is `cargo 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Native macOS context menus with plugin search and Send controls; readiness estimates unchanged |
 | 2026-10-25 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
 | 2026-10-24 | trivial | 27 built-in processors, as the plugin registry holds; the sampler (#108) is no longer listed under plugin essentials |
 | 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |

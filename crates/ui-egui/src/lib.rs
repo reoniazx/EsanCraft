@@ -6,6 +6,7 @@
 
 pub mod appearance;
 pub mod bounce;
+pub mod context_menu;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
@@ -300,6 +301,7 @@ pub struct SoundApp {
     pub services: Services,
     /// Set only by a desktop host after installing an OS menu bar.
     pub native_menu_bar: bool,
+    pub context_menus: context_menu::State,
     /// Folder for crash-recovery autosaves (native apps set it).
     pub autosave_dir: Option<std::path::PathBuf>,
     /// Writes the open session's autosaves in the background, once there is something to write.
@@ -426,6 +428,7 @@ impl SoundApp {
             audio_health_report: None,
             services,
             native_menu_bar: false,
+            context_menus: context_menu::State::default(),
             autosave_dir: None,
             autosaver: None,
             autosaved_rev: 0,
@@ -506,6 +509,7 @@ impl SoundApp {
                     midi_playback::release_transport(self);
                 }
                 if replacing {
+                    self.context_menus.invalidate();
                     // Note indices and gestures belong to the old session's clips.
                     self.midi = midi_editor::MidiEditorState::default();
                 }
@@ -1430,6 +1434,7 @@ impl SoundApp {
     }
 
     pub(crate) fn floating_ui(&mut self, ctx: &egui::Context) {
+        mix_window::plugin_search_window(self, ctx);
         panels::floating(self, ctx);
         windows::show(self, ctx);
         video_window::show(self, ctx);

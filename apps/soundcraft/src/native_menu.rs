@@ -19,6 +19,7 @@ pub struct NativeMenu {
     events: Receiver<MenuEvent>,
     /// When `sync` last walked the entries; see `SYNC_EVERY`.
     last_sync: Option<std::time::Instant>,
+    pub context_menu: Option<std::rc::Rc<crate::native_context_menu::NativeContextMenu>>,
 }
 
 /// `sync` walks every menu leaf (~500), so it runs a few times a second rather than every frame,
@@ -30,7 +31,7 @@ impl NativeMenu {
     pub fn new(app: &SoundApp, ctx: &egui::Context) -> muda::Result<Self> {
         let menu = Menu::new();
         let (tx, events) = channel();
-        let mut native = Self { menu, entries: Vec::new(), events, last_sync: None };
+        let mut native = Self { menu, entries: Vec::new(), events, last_sync: None, context_menu: None };
         let app_menu = Submenu::new("SoundCraft", true);
         native.add_item(app, &app_menu, "About SoundCraft", "", Some("window.about".into()))?;
         native.add_item(app, &app_menu, "Session Info", "", Some("window.session_info".into()))?;
@@ -51,9 +52,19 @@ impl NativeMenu {
             native.menu.append(&submenu)?;
         }
         native.menu.init_for_nsapp();
+        let (context_tx, context_events) = channel();
+        match crate::native_context_menu::NativeContextMenu::install(&native.menu, context_events) {
+            Ok(menu) => native.context_menu = Some(menu),
+            Err(error) => log::warn!("Native context menus unavailable, using in-window menus: {error}"),
+        }
         let ctx = ctx.clone();
-        MenuEvent::set_event_handler(Some(move |event| {
-            if tx.send(event).is_ok() {
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let sent = if event.id.0.starts_with(crate::native_context_menu::EVENT_PREFIX) {
+                context_tx.send(crate::native_context_menu::ContextEvent { id: event.id, modifiers: crate::native_context_menu::modifiers() }).is_ok()
+            } else {
+                tx.send(event).is_ok()
+            };
+            if sent {
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
             }
         }));

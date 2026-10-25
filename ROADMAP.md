@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** trivial (merge upstream updates; retain local features, fixes and progress history) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (native macOS context menus) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -124,6 +124,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 ## Progress log
 
+- **2026-10-25:** macOS right-click menus use native AppKit menus, adopting the system appearance (Liquid Glass on supported macOS/SDK combinations). Track, Clip, Groups, Clip List, Insert, Instrument and Send retain their existing actions; plugin Search and detailed Send controls open from the native menus. Other platforms and left-click pickers retain egui. Stage and readiness estimates unchanged.
 - **2026-10-24:** Clip List › Auto Rename (`clip.auto_rename`) sets the names that editing gives the clips it separates from the selected clips: a name, a starting number, a number of places (zeros before the number) and a suffix. The piece after each cut takes the next name, the piece before it keeps its name, and all the pieces count up one number sequence. Pieces that Strip Silence names with its own Rename fields, or removes, take no Auto Rename name. Copied clips keep their scheme when they are pasted, saved sessions hold the schemes, and Import Session Data brings them along. No readiness percentage change.
 - **2026-10-24:** While the Strip Silence window is open, the Edit window draws a rectangle around each range that Strip would keep on the selected tracks, padded by Clip Start Pad and Clip End Pad, and the rectangles follow the sliders as they move. They are removed when the window closes. `edit.strip_silence_preview` returns the same ranges without changing the session. No readiness percentage change.
 - **2026-10-24:** The Strip Silence window has a Rename button. It opens Rename Selected Clips, where a name, a starting number, a count of zeros and a suffix set the names of the clips that Strip, Extract and Separate leave in the selection (for example SFX023.Reel1, SFX024.Reel1). The app keeps the scheme for later uses of Strip Silence until the app quits, or until Clear and then OK empty it. No readiness percentage change.
@@ -185,6 +186,7 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Native macOS context menus with plugin search and Send controls; readiness estimates unchanged |
 | 2026-10-25 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
 | 2026-10-24 | trivial | Progress log: Clip List Auto Rename; readiness estimates unchanged |
 | 2026-10-24 | trivial | Progress log: Strip Silence rectangles; readiness estimates unchanged |

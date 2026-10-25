@@ -125,6 +125,25 @@ toward later ticks and lower pitches. The returned view contains `zoom`, `scroll
 `top_pitch`. MIDI view state persists when the dock is closed/reopened; selecting another clip
 starts with that clip fitted and its notes centred vertically.
 
+### Context-menu auxiliary windows
+
+On macOS the desktop host presents right-click menus with AppKit. The menu descriptions and
+command actions are shared with egui fallback hosts. Native tracking never owns an app-state
+borrow; cancelling a menu executes nothing, and replacing the session invalidates its result.
+Left-click pickers retain their existing inline UI.
+
+Two UI-only commands expose the auxiliary controls used by these menus:
+
+| Command | Parameters | Result |
+|---|---|---|
+| `window.plugin_search` | `{track: id, slot: index, instruments?: false, scan?: "CLAP" or "VST3"}` | Opens a focused plugin picker with an empty search. With `instruments: true`, the track must be an instrument track and `slot` is ignored. `scan` explicitly scans the requested format before showing results. |
+| `window.send_controls` | `{track: id, slot: index}` | Opens the existing detailed controls for an assigned Send. |
+
+Invalid or missing targets and out-of-range slots return an error. Choosing a plugin uses the
+same insertion command, Undo history and automatic editor opening as the inline picker.
+When opened from a context menu, plugin search belongs to that menu's viewport; a programmatic
+call opens it in the root viewport.
+
 ### MIDI Editor playback and scrolling
 
 The playback cursor is clipped to the piano roll and stops above the Velocity lane. It uses the shared transport position,

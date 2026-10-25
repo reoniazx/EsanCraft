@@ -36,3 +36,13 @@ fn absent_or_empty_filter_lists_every_ui_command() {
         assert!(ids.contains(&"track.new"));
     }
 }
+
+#[test]
+fn context_window_commands_publish_their_target_parameters() {
+    for id in ["window.plugin_search", "window.send_controls"] {
+        let rows = commands(json!({"filter": id}));
+        assert_eq!(ids(&rows), [id]);
+        let params = rows[0]["params"].as_str().unwrap();
+        assert!(params.contains("track: id") && params.contains("slot: index"));
+    }
+}

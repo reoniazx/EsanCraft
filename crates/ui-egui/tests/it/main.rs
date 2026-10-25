@@ -30,6 +30,7 @@ mod midi_panel;
 mod midi_quantize;
 mod mix_narrow_headers;
 mod mix_separate;
+mod native_context_menus;
 mod new_midi_clip;
 mod new_tracks;
 mod open_on_insert;

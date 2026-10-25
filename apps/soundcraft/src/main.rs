@@ -17,6 +17,8 @@ mod control_server;
 mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
+mod native_context_menu;
+#[cfg(target_os = "macos")]
 mod native_menu;
 
 use soundcraft_engine::Engine;
@@ -298,8 +300,15 @@ fn main() -> eframe::Result {
                     None
                 }
             };
+            let host = NativeUiHost::new(app).map_err(std::io::Error::other)?;
+            #[cfg(target_os = "macos")]
+            if let Some(presenter) = menu.as_ref().and_then(|menu| menu.context_menu.clone())
+                && let Err(error) = host.set_context_menu_presenter(presenter)
+            {
+                log::warn!("Native context menus unavailable: {error}");
+            }
             Ok(Box::new(App(
-                NativeUiHost::new(app).map_err(std::io::Error::other)?,
+                host,
                 logger,
                 #[cfg(target_os = "macos")]
                 menu,

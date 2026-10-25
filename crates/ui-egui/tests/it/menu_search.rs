@@ -75,6 +75,38 @@ fn an_insert_menu_searches_as_soon_as_it_opens() {
 }
 
 #[test]
+fn native_search_action_opens_a_focused_picker_and_inserts_once() {
+    let reverbs = built_in(false, "reverb");
+    let mut h = harness(vox());
+    let track = h.state().engine.session().tracks[0].id;
+    h.state_mut().run("window.plugin_search", json!({"track": track.0, "slot": 0})).unwrap();
+    h.run_steps(3);
+    type_text(&mut h, "reverb");
+    assert!(h.query_by_label(reverbs[0].name).is_some());
+    press(&mut h, Key::Enter);
+    assert_eq!(h.state().engine.session().tracks[0].mixer.inserts[0].as_ref().unwrap().plugin, reverbs[0].id);
+    assert!(h.query_by_label("Search Plugins").is_none());
+}
+
+#[test]
+fn native_search_reopens_empty_and_handles_no_matches_and_escape() {
+    let mut h = harness(vox());
+    let track = h.state().engine.session().tracks[0].id;
+    h.state_mut().run("window.plugin_search", json!({"track": track.0, "slot": 0})).unwrap();
+    h.run_steps(3);
+    type_text(&mut h, "zzzz-no-plugin");
+    assert!(h.query_by_label("No matches").is_some());
+    press(&mut h, Key::Enter);
+    assert!(h.state().engine.session().tracks[0].mixer.inserts[0].is_none());
+    press(&mut h, Key::Escape);
+    assert!(h.query_by_label("Search Plugins").is_none());
+    h.state_mut().run("window.plugin_search", json!({"track": track.0, "slot": 0})).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("No matches").is_none());
+    assert!(h.query_by_label(built_in(false, "")[0].name).is_some());
+}
+
+#[test]
 fn a_menu_opens_with_an_empty_search() {
     let mut h = harness(vox());
     open(&mut h, "Insert B");

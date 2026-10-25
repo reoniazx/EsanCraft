@@ -63,6 +63,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.clip_effects", "Clip Effects", "Window > Clip Effects", None),
     ("window.clip_effects_dock", "Clip Effects", "View > Other Displays > Lower Dock > Clip Effects", Some("Alt+6")),
     ("window.search", "Search", "Window > Pro Tools Search", Some("Cmd+Ctrl+S")),
+    ("window.plugin_search", "Search Plugins…", "", None),
+    ("window.send_controls", "Open Send Controls…", "", None),
     ("window.score", "Score Editor", "Window > Score Editor", Some("Cmd+Ctrl+=")),
     ("window.beat_detective", "Beat Detective", "", None),
     ("window.tempo_ops", "Tempo Operations", "", None),
@@ -513,6 +515,9 @@ fn wants_dialog(id: &str) -> bool {
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
 pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if matches!(id, "window.plugin_search" | "window.send_controls") {
+        return Some(crate::mix_window::context_window_command(app, id, p));
+    }
     if id == "ui.midi_velocity_height" {
         return Some(crate::midi_editor::velocity_height_command(app, p));
     }

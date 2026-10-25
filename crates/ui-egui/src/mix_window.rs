@@ -31,6 +31,7 @@ pub fn show_separate(app: &mut SoundApp, ctx: &egui::Context) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         show(app, ui);
+        plugin_search_window(app, ui.ctx());
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             separate_closed(app);
         }
@@ -496,7 +497,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     if nresp.double_clicked() {
         app.dialogs.open_rename_track(id, &track.name);
     }
-    nresp.context_menu(|ui| crate::edit_window::track_context_menu(app, ui, id));
+    crate::context_menu::attach(app, ui, &nresp, crate::context_menu::Target::Track(id));
     if app.ui.mix_views.iter().any(|v| v == "color") {
         ui.painter().rect_filled(Rect::from_min_size(pos2(r.min.x, r.max.y - 5.0), vec2(w, 5.0)), 0.0, rgb(track.color));
     }
@@ -522,9 +523,11 @@ pub(crate) fn instrument_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, r:
         app.ui.plugin_windows.push((id, slot));
     }
     let menu_resp = if hosted { resp.clone().on_hover_text("Click: open instrument · right-click: change") } else { resp.clone() };
-    let popup = if hosted { egui::Popup::context_menu(&menu_resp) } else { egui::Popup::menu(&menu_resp) };
-    let popup = popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    popup.show(|ui| instrument_menu(app, ui, id));
+    let native = crate::context_menu::native(app, ui, &menu_resp, crate::context_menu::Target::Instrument(id));
+    if !native || !hosted {
+        let popup = if hosted { egui::Popup::context_menu(&menu_resp) } else { egui::Popup::menu(&menu_resp) };
+        popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| instrument_menu(app, ui, id));
+    }
     crate::sampler_window::drop_target(app, ui.ctx(), r, id);
 }
 
@@ -624,9 +627,11 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
     let cmd = if ui.ctx().os().is_mac() { "⌘" } else { "Ctrl+" };
     let tip = format!("{name}: click to open · {cmd}click to bypass · right-click to change");
     let menu_resp = if ins.is_none() { resp.clone() } else { resp.clone().on_hover_text(tip) };
-    let popup = if ins.is_none() { egui::Popup::menu(&menu_resp) } else { egui::Popup::context_menu(&menu_resp) };
-    let popup = popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    popup.show(|ui| plugin_menu(app, ui, id, slot, ins.is_some()));
+    let native = crate::context_menu::native(app, ui, &menu_resp, crate::context_menu::Target::Insert { track: id, slot });
+    if !native || ins.is_none() {
+        let popup = if ins.is_none() { egui::Popup::menu(&menu_resp) } else { egui::Popup::context_menu(&menu_resp) };
+        popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| plugin_menu(app, ui, id, slot, ins.is_some()));
+    }
 }
 
 /// An insert's menu: a search field that takes typing at once, then (until something is typed)
@@ -665,6 +670,198 @@ pub fn plugin_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, slot: usize, oc
     }
     if let Some(plugin) = hosted_menus(ui, false) {
         pick_insert(app, ui, id, slot, &plugin);
+    }
+}
+
+/// Native menus use the same plugin catalog and command parameters as the inline pickers.
+/// Scanning a format is explicit, after menu tracking has ended.
+pub(crate) fn native_plugin_menu(app: &SoundApp, track: TrackId, slot: usize, instruments: bool) -> Vec<crate::context_menu::Entry> {
+    use crate::context_menu::{Action, Entry};
+    let Some(t) = app.engine.session().track(track) else {
+        return vec![];
+    };
+    let current = if instruments { t.instrument.as_ref() } else { t.mixer.inserts.get(slot).and_then(Option::as_ref) };
+    let mut entries = vec![Entry::command("Search…", "window.plugin_search", json!({"track": track.0, "slot": slot, "instruments": instruments}))];
+    if let Some(current) = current {
+        if instruments {
+            if !soundcraft_mix::is_third_party(&current.plugin) {
+                entries.push(Entry::item("Edit Parameters…", Action::PluginWindow { track, slot }));
+            }
+            if let Some(player) = &app.player
+                && player.has_editor(track, slot)
+            {
+                let open = !player.editor_open(track, slot);
+                entries
+                    .push(Entry::item(if open { "Open Plugin Editor" } else { "Close Plugin Editor" }, Action::PluginEditor { track, slot, open }));
+            }
+        } else {
+            entries.push(Entry::command("Bypass", "mix.insert_bypass", json!({"track": track.0, "slot": slot})).checked(current.bypass));
+            entries.push(Entry::command("no insert", "mix.insert_remove", json!({"track": track.0, "slot": slot})));
+        }
+    }
+    entries.push(Entry::Separator);
+    let pick = |id: &str| {
+        if instruments {
+            Action::Command("mix.instrument".into(), json!({"track": track.0, "plugin": id}))
+        } else {
+            Action::Insert { track, slot, plugin: id.into() }
+        }
+    };
+    let mut built_in: Vec<(String, Vec<Entry>)> = Vec::new();
+    for plugin in soundcraft_dsp::plugins().iter().filter(|p| p.is_instrument == instruments) {
+        let category = if instruments { "Built-in".into() } else { format!("{:?}", plugin.category) };
+        let item = Entry::item(plugin.name, pick(plugin.id)).checked(current.is_some_and(|c| c.plugin == plugin.id));
+        if let Some((_, list)) = built_in.iter_mut().find(|(name, _)| *name == category) {
+            list.push(item);
+        } else {
+            built_in.push((category, vec![item]));
+        }
+    }
+    entries.extend(built_in.into_iter().map(|(label, entries)| Entry::Submenu { label, entries }));
+    let clap = soundcraft_clap_host::cached().map(|list| {
+        list.into_iter()
+            .filter(|d| d.is_instrument == instruments)
+            .map(|d| MenuPlugin { id: d.id, name: d.name, vendor: d.vendor })
+            .collect::<Vec<_>>()
+    });
+    let vst3 = soundcraft_vst3_host::cached().map(|list| {
+        list.into_iter()
+            .filter(|d| d.is_instrument == instruments)
+            .map(|d| MenuPlugin { id: d.id, name: d.name, vendor: d.vendor })
+            .collect::<Vec<_>>()
+    });
+    let mut formats = vec![("CLAP", clap), ("VST3", vst3)];
+    if cfg!(target_os = "macos") {
+        formats.push((
+            "Audio Units",
+            Some(
+                soundcraft_au_host::scan()
+                    .into_iter()
+                    .filter(|d| d.is_instrument == instruments)
+                    .map(|d| MenuPlugin { id: d.id, name: d.name, vendor: d.vendor })
+                    .collect(),
+            ),
+        ));
+    }
+    for (format, list) in formats {
+        let children = match list {
+            Some(list) if !list.is_empty() => {
+                let mut vendors = std::collections::BTreeMap::<String, Vec<MenuPlugin>>::new();
+                for plugin in list {
+                    let vendor = if plugin.vendor.is_empty() { "Unknown vendor".into() } else { plugin.vendor.clone() };
+                    vendors.entry(vendor).or_default().push(plugin);
+                }
+                vendors
+                    .into_iter()
+                    .map(|(label, mut list)| {
+                        list.sort_by_cached_key(|p| p.name.to_lowercase());
+                        Entry::Submenu {
+                            label,
+                            entries: list
+                                .into_iter()
+                                .map(|p| Entry::item(p.name, pick(&p.id)).checked(current.is_some_and(|c| c.plugin == p.id)))
+                                .collect(),
+                        }
+                    })
+                    .collect()
+            }
+            Some(_) => {
+                vec![Entry::Item { label: format!("No {format} plugins found"), action: pick(""), enabled: false, checked: None, color: None }]
+            }
+            None => vec![Entry::command(
+                format!("Scan {format}…"),
+                "window.plugin_search",
+                json!({"track": track.0, "slot": slot, "instruments": instruments, "scan": format}),
+            )],
+        };
+        entries.push(Entry::Submenu { label: format.into(), entries: children });
+    }
+    entries
+}
+
+pub(crate) fn context_window_command(app: &mut SoundApp, id: &str, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let track = TrackId(p.get("track").and_then(serde_json::Value::as_u64).ok_or("track must be an unsigned integer")?);
+    let instruments = p.get("instruments").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let slot = if instruments {
+        soundcraft_mix::INSTRUMENT_SLOT
+    } else {
+        p.get("slot").and_then(serde_json::Value::as_u64).and_then(|n| usize::try_from(n).ok()).ok_or("slot must be an unsigned integer")?
+    };
+    let t = app.engine.session().track(track).ok_or("Track no longer exists")?;
+    if id == "window.send_controls" {
+        if !t.mixer.sends.get(slot).is_some_and(Option::is_some) {
+            return Err("Send no longer exists".into());
+        }
+        app.ui.send_window = Some((track, slot));
+    } else {
+        if instruments {
+            if t.kind != TrackKind::Instrument {
+                return Err("Track is not an instrument track".into());
+            }
+        } else if t.mixer.inserts.get(slot).is_none() {
+            return Err("Invalid insert slot".into());
+        }
+        let scan = p.get("scan").and_then(serde_json::Value::as_str);
+        if scan.is_some_and(|s| !matches!(s, "CLAP" | "VST3")) {
+            return Err("scan must be CLAP or VST3".into());
+        }
+        app.context_menus.search = Some(crate::context_menu::Search { track, slot, instruments, viewport: egui::ViewportId::ROOT, fresh: true });
+        match scan {
+            Some("CLAP") => {
+                soundcraft_clap_host::scan();
+            }
+            Some("VST3") => {
+                soundcraft_vst3_host::scan();
+            }
+            _ => {}
+        }
+    }
+    Ok(json!({"track": track.0, "slot": slot}))
+}
+
+pub(crate) fn plugin_search_window(app: &mut SoundApp, ctx: &egui::Context) {
+    let Some(search) = app.context_menus.search.as_mut() else { return };
+    if search.viewport != ctx.viewport_id() {
+        return;
+    }
+    let (track, slot, instruments) = (search.track, search.slot, search.instruments);
+    let fresh = std::mem::take(&mut search.fresh);
+    let valid = app
+        .engine
+        .session()
+        .track(track)
+        .is_some_and(|t| if instruments { t.kind == TrackKind::Instrument } else { t.mixer.inserts.get(slot).is_some() });
+    if !valid || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        app.context_menus.search = None;
+        return;
+    }
+    let mut open = true;
+    let mut picked = None;
+    egui::Window::new(if instruments { "Search Instruments" } else { "Search Plugins" })
+        .id(egui::Id::new(("plugin_search_window", track.0, slot)))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(420.0)
+        .show(ctx, |ui| {
+            let id = egui::Id::new(("native-plugin-search", track.0, slot));
+            if fresh {
+                ui.data_mut(|data| data.remove::<(String, usize, u64)>(id));
+            }
+            let search = MenuSearch::show(ui, id, if instruments { "Search instruments…" } else { "Search plugins…" });
+            picked = plugin_search(ui, &search, instruments);
+        });
+    if !open {
+        app.context_menus.search = None;
+    }
+    if let Some(plugin) = picked {
+        app.context_menus.search = None;
+        let action = if instruments {
+            crate::context_menu::Action::Command("mix.instrument".into(), json!({"track": track.0, "plugin": plugin}))
+        } else {
+            crate::context_menu::Action::Insert { track, slot, plugin }
+        };
+        crate::context_menu::execute(app, action, egui::Modifiers::NONE, ctx.viewport_id());
     }
 }
 
@@ -975,7 +1172,9 @@ pub(crate) fn send_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: us
                 "Send {which} to {name}: {} dB\nClick for the send fader · drag vertically to adjust · Shift-drag for fine control · Alt-click for 0 dB · right-click for options",
                 db_text(s.level_db)
             ));
-            level_resp.context_menu(|ui| send_options_menu(app, ui, id, slot, s));
+            if !crate::context_menu::native(app, ui, &level_resp, crate::context_menu::Target::Send { track: id, slot }) {
+                level_resp.context_menu(|ui| send_options_menu(app, ui, id, slot, s));
+            }
         }
         None => empty_slot(ui.painter(), r, ui.rect_contains_pointer(r), mark),
     }

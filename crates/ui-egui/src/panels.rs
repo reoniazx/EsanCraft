@@ -4,7 +4,6 @@ use crate::SoundApp;
 use crate::theme::{Tokens, bold, mono, regular, rgb};
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
-use soundcraft_model::{ClipId, SourceId};
 
 /// Drag a Tracks list row to reorder the tracks: a line marks the gap it will land in.
 fn drag_track(app: &mut SoundApp, ui: &Ui, row: Rect, id: u64, dropped: bool) {
@@ -105,12 +104,7 @@ pub fn tracks_and_groups(app: &mut SoundApp, ui: &mut Ui) {
         if all.double_clicked() {
             let _ = app.run("edit.select_all", json!({}));
         }
-        all.context_menu(|ui| {
-            if ui.button("New Group…").clicked() {
-                let _ = app.dialogs.open_for_command(&app.engine, "track.group");
-                ui.close();
-            }
-        });
+        crate::context_menu::attach(app, ui, &all, crate::context_menu::Target::Group(None));
         for (id, letter, name, active, color) in groups {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, active, &name));
@@ -133,24 +127,7 @@ pub fn tracks_and_groups(app: &mut SoundApp, ui: &mut Ui) {
             if resp.double_clicked() {
                 let _ = app.run("edit.select", json!({"tracks": members, "exact": true}));
             }
-            resp.context_menu(|ui| {
-                if ui.button("Select Tracks in Group").clicked() {
-                    let _ = app.run("edit.select", json!({"tracks": members, "exact": true}));
-                    ui.close();
-                }
-                if ui.button(if active { "Disable" } else { "Enable" }).clicked() {
-                    let _ = app.run("track.group_toggle", json!({"group": id}));
-                    ui.close();
-                }
-                if ui.button("Modify Group…").clicked() {
-                    let _ = app.dialogs.open_modify_group(&app.engine, soundcraft_model::GroupId(id));
-                    ui.close();
-                }
-                if ui.button("Delete Group").clicked() {
-                    let _ = app.run("track.ungroup", json!({"group": id}));
-                    ui.close();
-                }
-            });
+            crate::context_menu::attach(app, ui, &resp, crate::context_menu::Target::Group(Some(soundcraft_model::GroupId(id))));
         }
     });
     gutter_scroll(ui, gutter, &out);
@@ -259,33 +236,7 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
         };
         for (id, name, whole, color, selected) in items {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), if whole { Sense::click_and_drag() } else { Sense::click() });
-            resp.context_menu(|ui| {
-                if whole {
-                    if ui.button("Place on New Track").clicked() {
-                        let _ = app.run("clip.place_source", json!({"source": id}));
-                        ui.close();
-                    }
-                    let sel_track = app.engine.session().edit.selected_tracks.first().map(|t| t.0);
-                    if let Some(t) = sel_track
-                        && ui.button("Place on Selected Track").clicked()
-                    {
-                        let _ = app.run("clip.place_source", json!({"source": id, "track": t}));
-                        ui.close();
-                    }
-                    ui.separator();
-                }
-                if !whole && ui.button("Auto Rename…").clicked() {
-                    // The selected clips when the row is one of them, otherwise the row's clip.
-                    let clips = if selected { app.engine.session().edit.selected_clips.clone() } else { vec![ClipId(id)] };
-                    app.dialogs.open_auto_rename(&app.engine, clips);
-                    ui.close();
-                }
-                if ui.button("Clear…").clicked() {
-                    let (clips, sources) = if whole { (vec![], vec![SourceId(id)]) } else { (vec![ClipId(id)], vec![]) };
-                    app.dialogs.open_clear(&app.engine, clips, sources);
-                    ui.close();
-                }
-            });
+            crate::context_menu::attach(app, ui, &resp, crate::context_menu::Target::ClipList { id, source: whole });
             if whole {
                 // Whole files drag onto tracks.
                 resp.dnd_set_drag_payload(crate::DragSource(id));
@@ -788,6 +739,7 @@ fn preset_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soundcraft_model::SourceId;
     use soundcraft_model::{ChannelFormat, Clip, Session, TrackKind};
 
     #[test]

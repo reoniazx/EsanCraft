@@ -57,7 +57,12 @@ fn search_chord(m: Modifiers, mac: bool) -> bool {
 pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
     // Cmd+= and Cmd+0 are Mix/Edit and Quantize to Grid, not egui's built-in interface zoom.
     ctx.options_mut(|o| o.zoom_with_keyboard = false);
-    if ctx.egui_wants_keyboard_input() || app.dialogs.open.is_some() || app.import.is_some() {
+    if ctx.egui_wants_keyboard_input()
+        || app.dialogs.open.is_some()
+        || app.import.is_some()
+        || app.context_menus.active
+        || app.context_menus.search.as_ref().is_some_and(|search| search.viewport == ctx.viewport_id())
+    {
         return;
     }
     let events: Vec<(Key, Modifiers)> = ctx.input(|i| {

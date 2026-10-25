@@ -1075,7 +1075,7 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
     if bg.clicked() {
         click_track(app, id, ui.input(|i| i.modifiers), in_edit_window);
     }
-    bg.context_menu(|ui| track_context_menu(app, ui, id));
+    crate::context_menu::attach(app, ui, &bg, crate::context_menu::Target::Track(id));
     let at = |x: f32, y: f32, w: f32, h: f32| Rect::from_min_size(pos2(head.min.x + x, head.min.y + y), vec2(w, h));
     let strip = rgb(track.color);
     let ink = shade(strip, -0.8);
@@ -1131,7 +1131,7 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
     } else if nresp.clicked() {
         click_track(app, id, ui.input(|i| i.modifiers), in_edit_window);
     }
-    nresp.context_menu(|ui| track_context_menu(app, ui, id));
+    crate::context_menu::attach(app, ui, &nresp, crate::context_menu::Target::Track(id));
     // Drag the name plate to reorder tracks.
     if nresp.dragged()
         && let Some(p) = ui.ctx().pointer_latest_pos()
@@ -1566,76 +1566,7 @@ fn view_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track) {
 }
 
 pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId) {
-    let tid = id.0;
-    let items: [(&str, &str); 10] = [
-        ("Rename...", "ui.rename_track"),
-        ("Duplicate...", "track.duplicate"),
-        ("Make Inactive", "track.make_inactive"),
-        ("Hide", "track.hide"),
-        ("Delete", "track.delete"),
-        ("Split into Mono", "track.split_into_mono"),
-        ("Commit...", "track.commit"),
-        ("Freeze", "track.freeze"),
-        ("Move to New Folder...", "track.move_to_new_folder"),
-        ("Group...", "track.group"),
-    ];
-    let selection: Vec<u64> = {
-        let selected = &app.engine.session().edit.selected_tracks;
-        if selected.contains(&id) { selected.iter().map(|track| track.0).collect() } else { vec![tid] }
-    };
-    for (label, cmd) in items {
-        if ui.button(label).clicked() {
-            if cmd == "ui.rename_track" {
-                let name = app.engine.session().track(id).map(|t| t.name.clone()).unwrap_or_default();
-                app.dialogs.open_rename_track(id, &name);
-            } else {
-                let _ = app.run(cmd, json!({"tracks": selection}));
-            }
-        }
-    }
-    let folders: Vec<(u64, String)> = app
-        .engine
-        .session()
-        .tracks
-        .iter()
-        .filter(|track| track.is_folder() && !selection.contains(&track.id.0))
-        .map(|track| (track.id.0, track.name.clone()))
-        .collect();
-    if !folders.is_empty() {
-        ui.menu_button("Move to Folder", |ui| {
-            for (folder, name) in &folders {
-                if ui.button(name).clicked() {
-                    let _ = app.run("track.move_to_folder", json!({"tracks": selection, "folder": folder}));
-                }
-            }
-        });
-    }
-    if app.engine.session().track(id).is_some_and(|track| track.folder.is_some()) && ui.button("Remove from Folder").clicked() {
-        let _ = app.run("track.remove_from_folder", json!({"tracks": selection}));
-    }
-    // Only the track clicked: the command has one target, and the selection stays as it is.
-    if ui.button("Scroll Into View").clicked() {
-        let _ = app.run("view.scroll_into_view", json!({"track": id.0}));
-    }
-    ui.separator();
-    ui.menu_button("Track Height", |ui| {
-        for h in TrackHeight::ALL {
-            if ui.button(h.label()).clicked() {
-                let own: Vec<TrackId> = selection.iter().map(|&t| TrackId(t)).collect();
-                let tracks = height_targets(app.engine.session(), ui.input(|i| i.modifiers), &own);
-                let _ = app.run("track.height", json!({"tracks": tracks, "height": h.label()}));
-            }
-        }
-    });
-    ui.menu_button("Track Color", |ui| {
-        for (i, c) in soundcraft_model::TRACK_COLORS.iter().enumerate() {
-            let (r, resp) = ui.allocate_exact_size(vec2(120.0, 14.0), Sense::click());
-            ui.painter().rect_filled(r, 2.0, rgb(*c));
-            if resp.clicked() {
-                let _ = app.run("track.color", json!({"tracks": selection, "color": i}));
-            }
-        }
-    });
+    crate::context_menu::show(app, ui, &crate::context_menu::Target::Track(id));
 }
 
 fn grid_lines(painter: &egui::Painter, s: &Session, tl: Rect, lane: Rect) {
@@ -2160,7 +2091,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     }
     // The clip may have been removed or moved since the right-click; only use it if it still exists.
     let menu_clip = ui.ctx().data(|d| d.get_temp::<Option<ClipId>>(menu_clip_id)).flatten().filter(|c| track.clips().iter().any(|x| x.id == *c));
-    resp.context_menu(|ui| clip_context_menu(app, ui, menu_clip));
+    crate::context_menu::attach(app, ui, &resp, crate::context_menu::Target::Clip(menu_clip));
     // Audio files dropped from the Clip List.
     if let Some(src) = resp.dnd_release_payload::<crate::DragSource>()
         && let Some(p) = ui.ctx().pointer_latest_pos()
@@ -2778,38 +2709,6 @@ fn new_midi_clip(app: &mut SoundApp, s: &Session, track: TrackId, from: Samples,
         && let Ok(v) = app.run("midi.new_clip", json!({"track": track.0, "start": r.start, "end": r.end}))
     {
         let _ = app.run("edit.select", json!({"clips": [v["clip"]]}));
-    }
-}
-
-fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
-    let Some(c) = clip else {
-        if ui.button("Paste").clicked() {
-            let _ = app.run("edit.paste", json!({}));
-        }
-        return;
-    };
-    let ids = json!([c.0]);
-    for (label, cmd) in [
-        ("Mute/Unmute", "edit.mute_clips"),
-        ("Edit Lock/Unlock", "clip.edit_lock"),
-        ("Time Lock/Unlock", "clip.time_lock"),
-        ("Quantize to Grid", "clip.quantize_to_grid"),
-        ("Render Clip Gain", "clip.gain_render"),
-        ("Bring to Front", "clip.bring_to_front"),
-        ("Send to Back", "clip.send_to_back"),
-    ] {
-        if ui.button(label).clicked() {
-            let _ = app.run(cmd, json!({"clips": ids}));
-        }
-    }
-    ui.separator();
-    if ui.button("Rename...").clicked() {
-        let name = app.engine.session().find_clip(c).map(|(_, x)| x.name.clone()).unwrap_or_default();
-        app.dialogs.open_rename_clip(c, &name);
-    }
-    if ui.button("Delete").clicked() {
-        let _ = app.run("edit.select", json!({"clips": ids}));
-        let _ = app.run("edit.clear", json!({}));
     }
 }
 
