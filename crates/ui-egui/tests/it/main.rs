@@ -5,9 +5,11 @@
 
 mod appearance;
 mod audio_device;
+mod auto_rename;
 mod bounce;
 mod bounce_dialog;
 mod clip_gain_fader;
+mod clip_looping;
 mod clip_menu;
 mod command_reachability;
 mod commands_filter;
@@ -45,6 +47,9 @@ mod shared_controls;
 mod shortcuts;
 mod side_lists_access;
 mod side_lists_text;
+mod strip_silence_dialog;
+mod strip_silence_rectangles;
+mod strip_silence_rename;
 mod toolbar_scroll;
 mod toolbar_tempo;
 mod track_height;

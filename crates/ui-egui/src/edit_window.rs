@@ -970,9 +970,32 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
             painter.rect_filled(Rect::from_min_max(pos2(x0, lane.min.y), pos2(x1, lane.max.y)), 0.0, t.selection);
         }
     }
+    let strip = crate::dialogs::strip_silence_rectangles(app, ui.ctx());
+    if let Some((_, ranges)) = strip.iter().find(|(t, _)| *t == id) {
+        draw_strip_silence(&painter, &s, tl, lane, ranges);
+    }
     lane_interaction(app, ui, track, lane, tl);
     if track.view == "playlists" {
         playlist_lanes(app, ui, track, row, main_h, tl);
+    }
+}
+
+/// The outline of the Strip Silence rectangles.
+pub fn strip_silence_stroke() -> Stroke {
+    Stroke::new(1.5, Tokens::current().accent)
+}
+
+/// The Strip Silence rectangles on one lane, while the Strip Silence window is open: one around each
+/// range Strip keeps.
+fn draw_strip_silence(painter: &egui::Painter, s: &Session, tl: Rect, lane: Rect, ranges: &[Range]) {
+    let stroke = strip_silence_stroke();
+    for r in ranges {
+        let x0 = x_of(s, tl, r.start).max(lane.min.x);
+        let x1 = x_of(s, tl, r.end).min(lane.max.x);
+        if x1 > x0 {
+            let rect = Rect::from_min_max(pos2(x0, lane.min.y + 1.0), pos2(x1, lane.max.y - 1.0));
+            painter.rect(rect, 0.0, stroke.color.gamma_multiply(0.12), stroke, StrokeKind::Inside);
+        }
     }
 }
 

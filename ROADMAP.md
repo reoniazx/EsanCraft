@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** trivial (merge upstream updates; retain local features) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** trivial (merge upstream updates; retain local features, fixes and progress history) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -124,6 +124,14 @@ mutated and truncated movies. Field reports from the first public week are track
 
 ## Progress log
 
+- **2026-10-24:** Clip List › Auto Rename (`clip.auto_rename`) sets the names that editing gives the clips it separates from the selected clips: a name, a starting number, a number of places (zeros before the number) and a suffix. The piece after each cut takes the next name, the piece before it keeps its name, and all the pieces count up one number sequence. Pieces that Strip Silence names with its own Rename fields, or removes, take no Auto Rename name. Copied clips keep their scheme when they are pasted, saved sessions hold the schemes, and Import Session Data brings them along. No readiness percentage change.
+- **2026-10-24:** While the Strip Silence window is open, the Edit window draws a rectangle around each range that Strip would keep on the selected tracks, padded by Clip Start Pad and Clip End Pad, and the rectangles follow the sliders as they move. They are removed when the window closes. `edit.strip_silence_preview` returns the same ranges without changing the session. No readiness percentage change.
+- **2026-10-24:** The Strip Silence window has a Rename button. It opens Rename Selected Clips, where a name, a starting number, a count of zeros and a suffix set the names of the clips that Strip, Extract and Separate leave in the selection (for example SFX023.Reel1, SFX024.Reel1). The app keeps the scheme for later uses of Strip Silence until the app quits, or until Clear and then OK empty it. No readiness percentage change.
+- **2026-10-24:** The Strip Silence window has Extract and Separate buttons. Extract removes the audio and keeps the silent parts of the selection, and Separate separates the clips at the edges of the silence without removing anything. Minimum Strip Duration goes up to 4,000 ms. No readiness percentage change.
+- **2026-10-24:** Clip › Loop… (Cmd+Alt+L) opens the Clip Looping dialog: Number of Loops, Loop Length in the main counter's time format, or Loop Until End of Session or Next Clip. A loop length that is not a whole number of loops cuts the last loop short, and Unloop removes that short loop too. No readiness percentage change.
+- **2026-10-24:** AudioSuite ▸ Pitch Shift ▸ Vari-Fi slows the selected clips down to a complete stop or speeds them up from one, and the pitch follows the speed. Fit To keeps each clip's length and plays two-thirds of it; Extend plays all of it and makes the clip 150 % long. Fades On fades the audio out with the slowdown or in with the speedup. Before, the menu item resampled the clip at a constant speed. No readiness percentage change.
+- **2026-10-24:** A built-in Auto Pan plugin pans the mono sum of a stereo track between left and right. An LFO with seven waveforms moves it at a rate in BPM or at the session tempo, running free, once, in step with the transport, or when the level crosses a threshold or a manual trigger changes; an envelope follower can move it by level instead. Width, Manual and Path set the field, and Output sets the level. No readiness percentage change.
+- **2026-10-24:** A built-in Subharmonic (`subharmonic`) adds the octave below a lower and an upper band of the input, chosen from four frequency ranges, with a direct bass band, a gain and a solo for each band, Drive with six characters, HP and LP filters, and a Mix that keeps one path at full level. No readiness percentage change.
 - **2026-10-23:** A built-in Ring Modulator (`ring_mod`) applies ring modulation, frequency modulation or a positive or negative resonator, and an LFO, an envelope follower or sample and hold moves its frequency. AudioSuite › Modulation › Sci-Fi now runs it instead of the Flanger. No readiness percentage change.
 - **2026-10-22:** Clip Effects primes its lookahead and reads media ahead within each clip, retaining timeline placement and the final samples in playback, bounce, Consolidate and Render Clip Effects. Overlapping clips keep independent delays; seek/reset, lookahead changes, bypass, clip edits, track inserts, Undo/Redo and saved audio are regression-tested. No readiness percentage change.
 - **2026-10-22:** MIDI notes release at the clip end even when it falls exactly on a render-block boundary. Terminal note-offs precede adjacent same-pitch note-ons, including unsorted playlists. Regression tests cover exact event timing, MIDI Track Offsets and audible synth releases across playback and bounce block sizes. No readiness percentage change.
@@ -177,6 +185,15 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: Clip List Auto Rename; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: Strip Silence rectangles; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: Strip Silence Rename; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: Strip Silence Extract and Separate; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: Clip Looping dialog; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: AudioSuite Vari-Fi speed ramps; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: Auto Pan plugin; readiness estimates unchanged |
+| 2026-10-24 | trivial | Progress log: Subharmonic plugin; readiness estimates unchanged |
 | 2026-10-24 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
 | 2026-10-23 | trivial | Progress log: Ring Modulator plugin; readiness estimates unchanged |
 | 2026-10-22 | trivial | Clip Effects lookahead preserves clip timing and final samples across playback, bounce and rendered audio; readiness estimates unchanged |

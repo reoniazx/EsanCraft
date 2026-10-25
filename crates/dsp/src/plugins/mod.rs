@@ -1,5 +1,6 @@
 //! The built-in plugins and their registry.
 
+pub mod auto_pan;
 pub mod drums;
 pub mod dynamics;
 pub mod eq;
@@ -26,6 +27,7 @@ pub(crate) static REGISTRY: &[&PluginInfo] = &[
     &reverb::ROOM_INFO,
     &reverb::PLATE_INFO,
     &modulation::DELAY_INFO,
+    &auto_pan::AUTOPAN_INFO,
     &modulation::CHORUS_INFO,
     &modulation::FLANGER_INFO,
     &modulation::PHASER_INFO,
@@ -33,6 +35,7 @@ pub(crate) static REGISTRY: &[&PluginInfo] = &[
     &harmonic::SAT_INFO,
     &harmonic::LOFI_INFO,
     &harmonic::RECT_INFO,
+    &harmonic::SUB_INFO,
     &pitch::PITCH_INFO,
     &utility::SHIFT_INFO,
     &utility::GAIN_INFO,
@@ -59,6 +62,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "room_reverb" => Box::new(reverb::Reverb::room()),
         "plate_reverb" => Box::new(reverb::Reverb::plate()),
         "mod_delay" => Box::new(modulation::ModDelay::new()),
+        "auto_pan" => Box::new(auto_pan::AutoPan::new()),
         "chorus" => Box::new(modulation::ModFx::chorus()),
         "flanger" => Box::new(modulation::ModFx::flanger()),
         "phaser" => Box::new(modulation::Phaser::new()),
@@ -66,6 +70,7 @@ pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
         "saturator" => Box::new(harmonic::Saturator::new()),
         "lofi" => Box::new(harmonic::LoFi::new()),
         "rectifier" => Box::new(harmonic::Rectifier::new()),
+        "subharmonic" => Box::new(harmonic::SubHarmonic::new()),
         "pitch_shifter" => Box::new(pitch::PitchShifter::new()),
         "time_shift" => Box::new(utility::TimeShift::new()),
         "gain" => Box::new(utility::Gain::new()),

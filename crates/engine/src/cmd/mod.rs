@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 
 mod audio_midi;
 mod audiosuite;
+mod auto_rename;
 mod clap;
 mod clip;
 mod clip_list;
@@ -64,6 +65,7 @@ mod panic_probe {
 pub use file::{audio_import_params, bounce_job};
 
 pub(crate) use edit::remember_selection;
+pub use edit::strip_silence_scan;
 
 pub type Run = fn(&mut Engine, &Value) -> Result<Value>;
 /// `Err(reason)` = disabled.
@@ -151,6 +153,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(track_more::specs());
         v.extend(clip_more::specs());
         v.extend(clip_list::specs());
+        v.extend(auto_rename::specs());
         v.extend(event_more::specs());
         v.extend(setup_more::specs());
         v.extend(clap::specs());

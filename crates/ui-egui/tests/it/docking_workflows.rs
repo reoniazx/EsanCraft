@@ -43,25 +43,29 @@ fn real_drag_float_close_reopen_reload_retains_transport_and_mixer_commands() {
     assert_eq!(h.state().ui.docking.layout.location(&Panel::Clips).unwrap().anchor, Some(Panel::Tracks));
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Clips").click_button(PointerButton::Secondary);
     h.run_steps(3);
-    h.get_by_label("Float panel").click();
+    h.get_by_label("Float Panel").click();
     h.run_steps(5);
-    let rect = h.state().ui.docking.layout.floating.iter().find(|g| g.panels.contains(&Panel::Clips)).unwrap().rect;
+    let rect = h.state().ui.docking.layout.floating.iter().find(|g| g.contains(&Panel::Clips)).unwrap().rect;
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Clips").click_button(PointerButton::Secondary);
     h.run_steps(3);
-    h.get_by_label("Close panel").click();
+    h.get_by_label("Close Panel").click();
     h.run_steps(4);
     assert!(!h.state().ui.show_clip_list);
     h.state_mut().run("ui.dock", json!({"operation":"open","panel":"clips"})).unwrap();
     h.run_steps(4);
-    assert_eq!(h.state().ui.docking.layout.floating.iter().find(|g| g.panels.contains(&Panel::Clips)).unwrap().rect, rect);
+    assert_eq!(h.state().ui.docking.layout.floating.iter().find(|g| g.contains(&Panel::Clips)).unwrap().rect, rect);
     let saved = serde_json::to_string(&h.state().ui).unwrap();
     let expected = serde_json::to_value(&h.state().ui.docking).unwrap();
     let mut reloaded = harness(Some(serde_json::from_str(&saved).unwrap()), 1400.0, 1.0);
     assert_eq!(serde_json::to_value(&reloaded.state().ui.docking).unwrap(), expected);
     reloaded.state_mut().run("ui.dock", json!({"operation":"move","panel":"clips","target":"tracks","zone":"center"})).unwrap();
     reloaded.run_steps(4);
-    reloaded.get_by_role_and_label(egui::accesskit::Role::Tab, "Tracks and Groups").click();
+    // The narrow Tracks frame shows the active Clips tab and lists Tracks under "…".
+    reloaded.get_by_label("Panels").click();
     reloaded.run_steps(3);
+    reloaded.get_by_label("Tracks and Groups").click();
+    reloaded.run_steps(3);
+    assert_eq!(reloaded.state().ui.docking.layout.panel_state(&Panel::Tracks), craft_ui::docking::PanelState::Front);
     reloaded.get_by_label("Trim (F6)").click();
     reloaded.run_steps(3);
     assert_eq!(reloaded.state().engine.session().edit.tool, soundcraft_model::Tool::Trim);
@@ -80,6 +84,18 @@ fn real_drag_float_close_reopen_reload_retains_transport_and_mixer_commands() {
     reloaded.run_steps(3);
     assert!(reloaded.state().engine.session().tracks[0].mixer.record_arm);
     assert!(!reloaded.state().engine.transport.recording);
+}
+
+#[test]
+fn activating_a_hidden_panel_shows_it_and_its_window_flag() {
+    let mut h = harness(None, 1400.0, 1.0);
+    h.state_mut().run("ui.dock", json!({"operation":"close","panel":"tracks"})).unwrap();
+    h.run_steps(4);
+    assert!(!h.state().ui.show_tracks_list);
+    h.state_mut().run("ui.dock", json!({"operation":"activate","panel":"tracks"})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().ui.show_tracks_list);
+    assert_eq!(h.state().ui.docking.layout.panel_state(&Panel::Tracks), craft_ui::docking::PanelState::Front);
 }
 
 #[test]
@@ -118,8 +134,8 @@ fn docking_renders_edit_and_mix_default_floating_and_redocked() {
                         h.state_mut().run("ui.dock", json!({"operation":"move","panel":"tracks","target":"canvas","zone":"left"})).unwrap();
                     }
                     h.run_steps(5);
-                    h.state().ui.docking.validate().unwrap();
-                    h.state().ui.mix_docking.validate().unwrap();
+                    soundcraft_ui_egui::docking::validate(&h.state().ui.docking).unwrap();
+                    soundcraft_ui_egui::docking::validate(&h.state().ui.mix_docking).unwrap();
                     if let Ok(directory) = std::env::var("CRAFT_UI_DOCKING_DIR") {
                         std::fs::create_dir_all(&directory).unwrap();
                         h.render().unwrap().save(format!("{directory}/sound-{window:?}-{width}-{scale}-{state}.png")).unwrap();
@@ -143,7 +159,7 @@ fn reset_is_enabled_and_resolves_in_native_and_in_window_menu_trees() {
     assert!(menus::item_state(&app, path, Some("ui.dock.reset")).0);
     app.run("ui.dock", json!({"operation":"float","panel":"tracks","rect":[50,60,260,420]})).unwrap();
     menus::invoke_menu(&mut app, "ui.dock.reset", path);
-    assert!(!app.ui.docking.layout.floating.iter().any(|group| group.panels.contains(&Panel::Tracks)));
+    assert!(!app.ui.docking.layout.floating.iter().any(|group| group.contains(&Panel::Tracks)));
 }
 
 #[test]
@@ -154,6 +170,116 @@ fn legacy_preferences_restore_the_theme_and_validate_default_docking() {
     object.remove("mix_docking");
     let restored: UiState = serde_json::from_value(value).unwrap();
     assert_eq!(restored.theme, soundcraft_ui_egui::theme::ThemeMode::Light);
-    restored.docking.validate().unwrap();
-    restored.mix_docking.validate_mix().unwrap();
+    soundcraft_ui_egui::docking::validate(&restored.docking).unwrap();
+    soundcraft_ui_egui::docking::validate_mix(&restored.mix_docking).unwrap();
+}
+
+/// The tab group holding `panel` in the docked frames.
+fn docked_group(node: &craft_ui::docking::Node<Panel>, panel: Panel) -> Option<Vec<Panel>> {
+    use craft_ui::docking::Node;
+    match node {
+        Node::Split { first, second, .. } => docked_group(first, panel).or_else(|| docked_group(second, panel)),
+        Node::Tabs { panels, .. } if panels.contains(&panel) => Some(panels.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn v1_workspace_settings_load_with_their_layout_and_hidden_places() {
+    use craft_ui::docking::Node;
+    // A workspace as releases before the shared docking model saved it: no version, and a
+    // floating window as one `{panels, active, rect}` group.
+    let v1 = json!({
+        "layout": {
+            "root": {"Split": {
+                "axis": "Horizontal",
+                "size": {"FixedFirst": 200.0},
+                "first": {"Tabs": {"panels": ["tracks"], "active": 0}},
+                "second": {"Tabs": {"panels": ["canvas"], "active": 0}}
+            }},
+            "floating": [{"panels": ["clips", "midi"], "active": 1, "rect": [300.0, 120.0, 420.0, 360.0]}]
+        },
+        "hidden": [
+            ["memory", {"floating": [160.0, 120.0, 480.0, 280.0], "anchor": null, "placement": {"Tab": {"before": null}}, "size": null, "stack": null}],
+            ["history", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 260.0}, "stack": null, "sibling": ["canvas"]}]
+        ]
+    });
+    let mut settings = serde_json::to_value(UiState::default()).unwrap();
+    settings["docking"] = v1;
+    settings["show_memory_locations"] = json!(false);
+    settings["show_undo_history"] = json!(false);
+    settings["show_midi_editor"] = json!(true);
+    let state: UiState = serde_json::from_value(settings).unwrap();
+    soundcraft_ui_egui::docking::validate(&state.docking).unwrap();
+    let floating = &state.docking.layout.floating;
+    assert_eq!(floating.len(), 1);
+    assert_eq!(floating[0].root, Node::Tabs { panels: vec![Panel::Clips, Panel::Midi], active: 1 });
+    assert_eq!(floating[0].rect, [300.0, 120.0, 420.0, 360.0]);
+    let root = state.docking.layout.root.clone().unwrap();
+    assert!(matches!(&root, Node::Split { size: craft_ui::layout::SplitSize::FixedFirst(200.0), .. }));
+
+    let mut h = harness(Some(state), 1400.0, 1.0);
+    assert_eq!(h.state().ui.docking.layout.root.as_ref(), Some(&root), "drawing the loaded layout must not rearrange it");
+    assert_eq!(h.state().ui.docking.layout.floating[0].rect, [300.0, 120.0, 420.0, 360.0]);
+    h.state_mut().run("ui.dock", json!({"operation":"open","panel":"memory"})).unwrap();
+    h.state_mut().run("ui.dock", json!({"operation":"open","panel":"history"})).unwrap();
+    h.run_steps(3);
+    let layout = &h.state().ui.docking.layout;
+    assert_eq!(layout.floating.iter().find(|w| w.contains(&Panel::Memory)).unwrap().rect, [160.0, 120.0, 480.0, 280.0]);
+    assert_eq!(docked_group(layout.root.as_ref().unwrap(), Panel::History), Some(vec![Panel::History]));
+    assert!(h.state().ui.show_memory_locations && h.state().ui.show_undo_history);
+
+    // Written back, a one-group window keeps the v1 shape older builds read.
+    let saved = serde_json::to_value(&h.state().ui.docking).unwrap();
+    let window = saved["layout"]["floating"].as_array().unwrap().iter().find(|w| w["panels"] == json!(["clips", "midi"])).unwrap();
+    assert_eq!(window["active"], json!(1));
+    assert_eq!(window["rect"], json!([300.0, 120.0, 420.0, 360.0]));
+}
+
+#[test]
+fn dragging_a_group_by_its_drag_bar_joins_it_to_another_group() {
+    use craft_ui::docking::{DockArea, Hit};
+    let mut h = harness(None, 1400.0, 1.0);
+    let root = h.state().ui.docking.layout.root.clone().unwrap();
+    assert_eq!(docked_group(&root, Panel::Tracks), Some(vec![Panel::Tracks]));
+    let hits = DockArea::<Panel>::hit_rects(&h.ctx, soundcraft_ui_egui::docking::area_id(MainWindow::Edit));
+    let bar = hits.iter().find(|(hit, _)| *hit == Hit::DragBar(Panel::Clips)).expect("the Clips group has a drag bar").1;
+    let target = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tracks and Groups").rect().center();
+    drag(&mut h, bar.center(), target);
+    let layout = &h.state().ui.docking.layout;
+    let group = docked_group(layout.root.as_ref().unwrap(), Panel::Tracks).unwrap();
+    assert_eq!(group.len(), 2, "the dropped group joins the Tracks tabs: {group:?}");
+    assert!(group.contains(&Panel::Clips));
+    assert!(h.state().ui.show_clip_list);
+    soundcraft_ui_egui::docking::validate(&h.state().ui.docking).unwrap();
+}
+
+#[test]
+fn malformed_dock_operations_name_the_field() {
+    let mut h = harness(None, 1400.0, 1.0);
+    for (params, error) in [
+        (json!({"operation":"close"}), "panel is required"),
+        (json!({"operation":"close","panel":"mixer"}), "Unknown panel: mixer"),
+        (
+            json!({"operation":"move","panel":"clips","target":"tracks","zone":"middle"}),
+            "zone must be tab, center, left, right, top, bottom, above or below",
+        ),
+    ] {
+        assert_eq!(h.state_mut().run("ui.dock", params).unwrap_err(), error);
+    }
+}
+
+#[test]
+fn a_panel_without_a_recorded_place_opens_beside_the_session_view() {
+    use craft_ui::docking::{Action, Permissions, Placement, Zone};
+    let mut state = UiState::default();
+    state.docking.apply(Action::Close { panel: Panel::Tracks }, |_| Permissions::default()).unwrap();
+    state.docking.hidden.clear();
+    state.show_tracks_list = false;
+    let mut h = harness(Some(state), 1400.0, 1.0);
+    h.state_mut().run("ui.dock", json!({"operation":"open","panel":"tracks"})).unwrap();
+    h.run_steps(4);
+    let location = h.state().ui.docking.layout.location(&Panel::Tracks).unwrap();
+    assert_eq!((location.anchor, location.placement), (Some(Panel::Canvas), Placement::Split(Zone::Left)));
+    assert!(h.state().ui.show_tracks_list);
 }

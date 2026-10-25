@@ -274,6 +274,12 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                     }
                     ui.separator();
                 }
+                if !whole && ui.button("Auto Rename…").clicked() {
+                    // The selected clips when the row is one of them, otherwise the row's clip.
+                    let clips = if selected { app.engine.session().edit.selected_clips.clone() } else { vec![ClipId(id)] };
+                    app.dialogs.open_auto_rename(&app.engine, clips);
+                    ui.close();
+                }
                 if ui.button("Clear…").clicked() {
                     let (clips, sources) = if whole { (vec![], vec![SourceId(id)]) } else { (vec![ClipId(id)], vec![]) };
                     app.dialogs.open_clear(&app.engine, clips, sources);

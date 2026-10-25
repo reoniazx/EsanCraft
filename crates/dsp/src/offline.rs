@@ -452,6 +452,78 @@ pub fn pitch_shift(ch: &[Vec<f32>], semitones: f32, sample_rate: f32) -> Vec<Vec
     out
 }
 
+/// Which way [`speed_ramp`] ramps the playback speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeedRampChange {
+    /// From normal speed down to a complete stop.
+    SlowDown,
+    /// From a complete stop up to normal speed.
+    SpeedUp,
+}
+
+/// How much of the input [`speed_ramp`] plays, and how long the result is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeedRampSelection {
+    /// The result is as long as the input. Two thirds of the input are played: the first two
+    /// thirds for Slow Down, the last two thirds for Speed Up, so each joins its neighbour
+    /// without a jump.
+    FitTo,
+    /// All of the input is played, and the result is 150 % of its length.
+    Extend,
+}
+
+/// Plays `ch` with the speed ramping between normal speed and a complete stop, so the pitch follows
+/// the speed. The speed is `1 - u²` for Slow Down and `1 - (1 - u)²` for Speed Up, where `u`
+/// runs from 0 to 1 over the result; both curves average 2/3 of normal speed. With `fades`, the
+/// gain follows the same curve: a fade-out for Slow Down and a fade-in for Speed Up. Every channel
+/// is read at the same positions, and a channel shorter than the others is silent past its end.
+pub fn speed_ramp(ch: &[Vec<f32>], change: SpeedRampChange, selection: SpeedRampSelection, fades: bool) -> Vec<Vec<f32>> {
+    let len = max_len(ch) as f64;
+    let (total, first, played) = match selection {
+        SpeedRampSelection::Extend => ((len * 1.5).round(), 0.0, len),
+        SpeedRampSelection::FitTo => {
+            let played = len * 2.0 / 3.0;
+            (len, if change == SpeedRampChange::SlowDown { 0.0 } else { len - played }, played)
+        }
+    };
+    let out_len = (total as usize).min(MAX_OFFLINE_SAMPLES);
+    let table = SincTable::new(0.97);
+    let hw = table.half_width;
+    // The fraction of the played input reached at `u`, and the speed there (0 to 1).
+    let at = |u: f64| -> (f64, f64) {
+        match change {
+            SpeedRampChange::SlowDown => ((3.0 * u - u * u * u) / 2.0, 1.0 - u * u),
+            SpeedRampChange::SpeedUp => {
+                let r = 1.0 - u;
+                (1.0 - (3.0 * r - r * r * r) / 2.0, 1.0 - r * r)
+            }
+        }
+    };
+    // The interpolation reads the first or last sample of the input for taps before or after it.
+    let last = (len as i64 - 1).max(0);
+    ch.iter()
+        .map(|x| {
+            (0..out_len)
+                .map(|n| {
+                    let (pos, speed) = at(n as f64 / total);
+                    let t = first + played * pos;
+                    let lo = (t - hw).ceil() as i64;
+                    let hi = (t + hw).floor() as i64;
+                    let mut acc = 0.0f32;
+                    let mut j = lo;
+                    while j <= hi {
+                        if let Some(&v) = x.get(j.clamp(0, last) as usize) {
+                            acc += v * table.at(t - j as f64);
+                        }
+                        j += 1;
+                    }
+                    if fades { acc * speed as f32 } else { acc }
+                })
+                .collect()
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------------------------
 // Generators and analysis
 

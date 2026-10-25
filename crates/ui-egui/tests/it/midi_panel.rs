@@ -140,13 +140,24 @@ fn check_held_replacement(operation: &str) {
         }
         _ => panic!("unknown synthetic operation"),
     }
+    // Arrange opens both main views, changing the available dock height. The
+    // shared docking renderer stores a dragged split as a ratio, so compare
+    // against its settled height in the arranged view rather than 440 points.
+    let expected = if operation == "arrange" {
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![]);
+        panel(&ctx).height()
+    } else if operation == "reset" {
+        320.0
+    } else {
+        440.0
+    };
     let reset = serde_json::to_value(&app.ui.docking).unwrap();
     let after_reset = start - vec2(0.0, 160.0);
     frame(&ctx, &mut app, vec![Event::PointerMoved(after_reset)]);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(serde_json::to_value(&app.ui.docking).unwrap(), reset, "old held divider must not resize the replacement layout");
-    let expected = if operation == "reset" { 320.0 } else { 440.0 };
-    assert!((panel(&ctx).height() - expected).abs() < 1.0);
+    assert!((panel(&ctx).height() - expected).abs() < 1.0, "{operation}: expected {expected}, panel: {:?}, layout: {reset}", panel(&ctx));
     frame(&ctx, &mut app, vec![button(after_reset, false)]);
     for _ in 0..4 {
         frame(&ctx, &mut app, vec![]);

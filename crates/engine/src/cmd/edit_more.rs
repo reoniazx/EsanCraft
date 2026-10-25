@@ -452,7 +452,7 @@ fn paste_merge_midi(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "edit.paste_merge_midi";
     let tracks = tracks_required(e, id, p)?;
     let at = position_param(e, id, p, "at")?.unwrap_or(e.session().edit.selection.start).max(0);
-    let cb = e.clipboard.clone();
+    let cb = super::edit::clipboard_for_paste(e);
     let s = e.session_mut();
     let tempo = s.tempo.clone();
     let sr = s.sample_rate;

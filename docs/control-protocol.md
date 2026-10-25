@@ -233,7 +233,7 @@ Tracks and Groups, Clips, MIDI Editor, Memory Locations, and Undo History use mo
 
 Panel IDs: `tracks`, `clips`, `midi`, `memory`, `history`. The protected center is `canvas`.
 
-`ui.dock` accepts `operation` and `panel`. Operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
+`ui.dock` accepts `operation` and `panel`. Operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: tab|center|left|right|top|bottom|above|below`; PascalCase names such as `Left` also parse). `open` and `activate` show a hidden panel at its saved location, or beside the session view when it has none, and bring a visible panel to the front. Center and `tab` group with the target; side zones split beside it; `above` and `below` stack the panel in a new group above or below a floating target's group. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
 
 Invoke these UI commands through `engine.execute`, for example `{"command":"ui.dock","params":{"operation":"float","panel":"tracks","rect":[100,100,320,440]}}`.
 

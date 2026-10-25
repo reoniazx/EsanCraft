@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** trivial (merge upstream updates; retain local fixes) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** trivial (merge upstream updates; retain local features, fixes and progress history) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -34,7 +34,7 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 | G-17 | Video: HEVC/DNx decode, video export, external timecode | Features / Formats | [file-format-parity.md](file-format-parity.md) | 30–50 |
 | G-18 | Speech-to-text transcription | AI | this file | 30–50 |
 | G-19 | UI feel: generic plugin windows, shortcut collisions, pro-grade meters and scaling | UI/UX | [ui-parity.md](ui-parity.md) | 60–100 |
-| G-20 | MIDI/instrument depth: MIDI learn, sampler, notation editing | Features | [target-app-parity.md](target-app-parity.md) | 40–60 |
+| G-20 | MIDI/instrument depth: MIDI learn, notation editing | Features | [target-app-parity.md](target-app-parity.md) | 40–60 |
 | G-21 | Compressed export (MP3, AAC/M4A, Ogg/Opus) | File formats | [file-format-parity.md](file-format-parity.md) | 10–20 |
 | G-22 | Avid cloud services (collaboration, Sketch, Splice, sign-in) | Ecosystem | — | not estimated (owner decision) |
 
@@ -152,7 +152,7 @@ launch #142; Linux #45, #107.
 
 ### G-08. Built-in plugins
 
-See [`plugin-parity.md`](plugin-parity.md): 26 processors + 2 instruments against Pro Tools'
+See [`plugin-parity.md`](plugin-parity.md): 27 processors + 3 instruments against Pro Tools'
 roughly 80 bundled processors and instruments; no fidelity checks; generic parameter UIs; EQ
 parametric request #139. ≈ 80–120 h.
 
@@ -235,7 +235,7 @@ See [`ui-parity.md`](ui-parity.md). ≈ 60–100 h.
 
 ### G-20. MIDI and instrument depth
 
-MIDI learn, a sampler (PR #108), drum machine depth, notation editing (tuplets, lyrics,
+MIDI learn, drum machine depth, notation editing (tuplets, lyrics,
 articulations, parts). ≈ 40–60 h.
 
 ### G-21. Compressed export
@@ -252,6 +252,8 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
+| 2026-10-24 | trivial | G-08: 27 processors + 3 instruments, as the plugin registry holds; G-20: the sampler shipped (#108), so it is no longer listed as missing |
 | 2026-10-24 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
 | 2026-10-22 | trivial | G-04: Clip Effects lookahead preserves clip timing and final samples in playback, bounce and rendered audio |
 | 2026-10-22 | trivial | G-04: MIDI clip-end note-offs preserved at block boundaries, with adjacent-note ordering and playback/bounce regression coverage |

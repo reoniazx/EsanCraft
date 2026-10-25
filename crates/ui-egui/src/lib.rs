@@ -159,7 +159,7 @@ impl Default for UiState {
     fn default() -> Self {
         UiState {
             recent_sessions: Vec::new(),
-            docking: docking::Workspace::default(),
+            docking: docking::edit_default(),
             mix_docking: docking::mix_default(),
             window: MainWindow::Edit,
             both_windows: false,

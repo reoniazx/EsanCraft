@@ -78,8 +78,16 @@ fn rebase_midi_start(clip: &mut Clip, old_start: Samples, t: TimeCtx<'_>) {
     }
 }
 
-/// Split every clip on a track's active playlist that spans `at`.
+/// Split every clip on a track's active playlist that spans `at`. The piece before `at` keeps the
+/// clip's name. The piece after it is a new clip, and takes the next name of the clip's Auto Rename
+/// scheme when it has one.
 pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
+    separate_at_if(s, track, at, |_| true)
+}
+
+/// [`separate_at`], giving the piece after `at` the next Auto Rename name only when `auto_name`
+/// returns true for it. Any other piece keeps the clip's name, and its scheme does not count up.
+pub fn separate_at_if(s: &mut Session, track: TrackId, at: Samples, auto_name: impl Fn(&Clip) -> bool) -> usize {
     let tc_tempo = s.tempo.clone();
     let sr = s.sample_rate;
     let t = TimeCtx { tempo: &tc_tempo, sr };
@@ -88,15 +96,22 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     for _ in 0..n_split {
         ids.push(s.new_clip_id());
     }
-    let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
+    let mut schemes = std::mem::take(&mut s.auto_names);
+    let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else {
+        s.auto_names = schemes;
+        return 0;
+    };
     let mut out = Vec::with_capacity(pl.clips.len() + ids.len());
     let mut count = 0;
     for c in pl.clips.drain(..) {
         if at > c.start
             && at < c.end()
             && let Some(id) = ids.pop()
-            && let Some((l, r)) = split_clip(&c, at, id, t)
+            && let Some((l, mut r)) = split_clip(&c, at, id, t)
         {
+            if auto_name(&r) {
+                take_auto_name(&mut schemes, &mut r);
+            }
             out.push(l);
             out.push(r);
             count += 1;
@@ -106,7 +121,32 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     }
     pl.clips = out;
     pl.sort();
+    s.auto_names = schemes;
     count
+}
+
+/// Gives `c` the next name of its Auto Rename scheme, when it has one, and counts the scheme up.
+fn take_auto_name(schemes: &mut std::collections::BTreeMap<u64, soundcraft_model::AutoName>, c: &mut Clip) {
+    if let Some(scheme) = c.auto_name.and_then(|k| schemes.get_mut(&k)) {
+        c.name = crate::io::StripNames::from(&*scheme).clip_name(0);
+        scheme.number = scheme.number.saturating_add(1);
+    }
+}
+
+/// Gives each clip on a track's active playlist whose id is not in `old`, and for which `auto_name`
+/// returns true, the next name of its Auto Rename scheme, in time order. Pieces cut with
+/// [`separate_at_if`] and `|_| false` take their names here once the caller has removed the ones it
+/// does not keep.
+pub fn auto_name_new_clips(s: &mut Session, track: TrackId, old: &HashSet<ClipId>, auto_name: impl Fn(&Clip) -> bool) {
+    let mut schemes = std::mem::take(&mut s.auto_names);
+    if let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) {
+        let mut new: Vec<&mut Clip> = pl.clips.iter_mut().filter(|c| !old.contains(&c.id) && auto_name(c)).collect();
+        new.sort_by_key(|c| (c.start, c.id.0));
+        for c in new {
+            take_auto_name(&mut schemes, c);
+        }
+    }
+    s.auto_names = schemes;
 }
 
 /// Remove material inside `range` on a track. In Shuffle mode later clips move left, up to the

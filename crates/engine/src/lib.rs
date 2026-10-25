@@ -33,6 +33,22 @@ pub fn shutdown_plugin_hosts() {
     soundcraft_vst3_host::shutdown();
 }
 
+/// A new [`soundcraft_model::AutoName::id`] for a scheme in `s`: a hash of a counter, never 0 and
+/// not held by another scheme in `s`. Native builds seed the hash from the system, so each run of
+/// the app gives other ids.
+pub fn new_scheme_id(s: &Session) -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    loop {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let id = h.finish();
+        if id != 0 && !s.auto_names.values().any(|a| a.id == id) {
+            return id;
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EngineError {
     #[error("unknown command `{0}`")]
@@ -96,6 +112,8 @@ pub struct Clipboard {
     pub grid_offset: Samples,
     /// Copy Special › Automation: pasting it leaves the clips alone, in Shuffle mode too.
     pub automation_only: bool,
+    /// The Auto Rename schemes of the copied clips, keyed as in their `auto_name`.
+    pub auto_names: std::collections::BTreeMap<u64, soundcraft_model::AutoName>,
 }
 
 impl Clipboard {
@@ -103,6 +121,39 @@ impl Clipboard {
     pub fn of_range(s: &Session, range: soundcraft_time::Range) -> Clipboard {
         let line = s.edit.grid.line_at_or_before(range.start, s.sample_rate, &s.tempo, s.frame_rate);
         Clipboard { length: range.len(), grid_offset: range.start.saturating_sub(line), ..Clipboard::default() }
+    }
+
+    /// Keep a copy of the Auto Rename schemes that the copied clips use, as `s` holds them.
+    pub fn keep_auto_names(&mut self, s: &Session) {
+        self.auto_names = self.tracks.iter().flatten().filter_map(|c| c.auto_name).filter_map(|k| Some((k, s.auto_names.get(&k)?.clone()))).collect();
+    }
+
+    /// Before a paste into `s`: point the copied clips at schemes that `s` holds. A scheme that `s`
+    /// holds with the same [`AutoName::id`](soundcraft_model::AutoName::id), name, zeros and suffix
+    /// is used as it is, and its numbers count on. Any other goes into `s` under a new key, counting
+    /// on from where it was when it was copied.
+    pub fn adopt_auto_names(&mut self, s: &mut Session) {
+        let mut keys = std::collections::BTreeMap::new();
+        for (k, a) in &self.auto_names {
+            let held = s
+                .auto_names
+                .iter()
+                .find(|(_, h)| a.id != 0 && h.id == a.id && h.name == a.name && h.zeros == a.zeros && h.suffix == a.suffix)
+                .map(|(key, _)| *key);
+            let key = match held {
+                Some(key) => key,
+                None => {
+                    let key = s.alloc();
+                    s.auto_names.insert(key, a.clone());
+                    key
+                }
+            };
+            keys.insert(*k, key);
+        }
+        for c in self.tracks.iter_mut().flatten() {
+            c.auto_name = c.auto_name.and_then(|k| keys.get(&k).copied());
+        }
+        self.auto_names = keys.values().filter_map(|k| Some((*k, s.auto_names.get(k)?.clone()))).collect();
     }
 }
 

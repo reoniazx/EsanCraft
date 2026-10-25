@@ -391,7 +391,7 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button(format!("{}  {name}", i + 1)).clicked()
                     && let Ok(mut st) = serde_json::from_value::<crate::UiState>(v.clone())
                 {
-                    if let Err(error) = st.docking.validate().and_then(|()| st.mix_docking.validate_mix()) {
+                    if let Err(error) = crate::docking::validate(&st.docking).and_then(|()| crate::docking::validate_mix(&st.mix_docking)) {
                         app.ui.status = format!("Window configuration could not be restored: {error}");
                     } else {
                         st.configurations = app.ui.configurations.clone();

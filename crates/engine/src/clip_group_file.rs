@@ -176,6 +176,8 @@ pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -
             c.sync_point = scale(c.sync_point);
             c.gain_env.iter_mut().for_each(|(at, _)| *at = scale(*at));
             c.group = Some(group_id);
+            // The file does not hold the Auto Rename schemes of the session it came from.
+            c.auto_name = None;
             c.sanitize();
             placed.push(c.id);
             prepared.push(c);
@@ -228,6 +230,21 @@ mod tests {
         e.undo();
         assert_eq!(e.session().tracks.len(), before);
         assert!(e.session().find_clip(soundcraft_model::ClipId(placed[0])).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imported_clips_carry_no_auto_rename_scheme() {
+        let dir = std::env::temp_dir().join(format!("sc-grp-names-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("named.scgrp").to_string_lossy().to_string();
+        let mut e = crate::demo::demo_engine();
+        let kick = e.session().track_by_name("Kick").unwrap().clips()[0].id.0;
+        e.execute("clip.auto_rename", &json!({"clips": [kick], "name": "Hit"})).unwrap();
+        e.execute("file.export_clip_groups", &json!({"path": path, "clips": [kick]})).unwrap();
+        let r = e.execute("file.import_clip_groups", &json!({"path": path, "at": 30_000_000, "track": "Bass"})).unwrap();
+        let placed = soundcraft_model::ClipId(r["clips"][0].as_u64().unwrap());
+        assert_eq!(e.session().find_clip(placed).unwrap().1.auto_name, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
