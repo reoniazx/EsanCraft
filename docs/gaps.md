@@ -1,6 +1,6 @@
 # Where SoundCraft falls short of Pro Tools
 
-> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (native macOS dropdown menus) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** trivial (merge upstream main while retaining local features) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Every known shortfall, one entry each, ranked by how much it stops a Pro Tools user from doing
 real work in SoundCraft. This is the work list: pick from the top. Rows marked **alpha blocker**
@@ -114,6 +114,10 @@ one-sample callbacks and several block sizes. Interior automation breakpoints re
 **Fixed (2026-10-16):** Split into Mono now gives each output track its own source channel,
 including surround channels, instead of repeating channel zero. Clip edits, source timestamps,
 Undo/Redo and save/reopen are covered by regression tests; missing or empty media fails atomically.
+
+**Open (2026-10-25):** the Clip Looping dialog (#1030) has no option to crossfade the loops into
+each other, and its Number of Loops field stops at 512, while Loop Length and Loop Until End of
+Session or Next Clip make up to 1000 loops.
 
 Open on 2026-10-10 (several have PRs open):
 editing #3, #5, #140, #144; clip/session #86 (PR #123), #88 (PR #130), #91 (PR #124), #92 (PR #132);
@@ -256,9 +260,11 @@ missing. Out of scope unless the owner decides otherwise.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | trivial | Merge upstream egui 0.37, dock columns, update prompts and audio fixes while retaining local native menus, import progress and editor improvements; readiness estimates unchanged |
 | 2026-10-26 | minor | Native macOS dropdowns across track controls, routing, forms and settings; readiness estimates unchanged |
 | 2026-10-25 | minor | Native macOS context menus with plugin search and Send controls; readiness estimates unchanged |
 | 2026-10-25 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
+| 2026-10-25 | trivial | G-04: Clip Looping (#1030) lacks the loop crossfade option, and Number of Loops stops at 512 while length and fill make up to 1000 loops |
 | 2026-10-24 | trivial | G-08: 27 processors + 3 instruments, as the plugin registry holds; G-20: the sampler shipped (#108), so it is no longer listed as missing |
 | 2026-10-24 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |
 | 2026-10-22 | trivial | G-04: Clip Effects lookahead preserves clip timing and final samples in playback, bounce and rendered audio |

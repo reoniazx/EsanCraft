@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (native macOS dropdown menus) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** trivial (merge upstream main while retaining local features) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 How SoundCraft feels in the hands of a Pro Tools user: tools, modes, modifiers, shortcuts,
 windows, meters. Measured from `crates/model/src/session.rs` (tools, modes), the command
@@ -42,7 +42,7 @@ Legend: ✅ matches · 🟡 partial · ❌ missing.
 
 | Window | Status | Notes |
 |---|---|---|
-| Edit window: rulers, track headers, view columns, Clip List, Groups, Tracks list | ✅ | Track Pin (new in 2026.4) ✅ (`track.pin`) |
+| Edit window: rulers, track headers, view columns, Clip List, Groups, Tracks list | ✅ | Track Pin (new in 2026.4) ✅ (`track.pin`); Tracks and Groups and the Clip List sit in full-height dock columns at the window's sides |
 | Mix window: strips, views (inserts, sends, I/O, comments, EQ curve, preamps, instruments, object) | ✅ | Narrow Mix ✅; Mix and Edit on screen at once (Window › Mix in Separate Window, its own native window) ✅; Delay Compensation view and HEAT missing |
 | MIDI Editor, Score Editor, Event List | 🟡 | Dock height bug fixed (#113); notation editing shallow |
 | MIDI Velocity lane | ✅ | Saved height with draggable divider, focused Up/Down adjustment and divider double-click reset. Each stem has a note-length tail that follows zoom/pan; both stem and tail support velocity dragging and double-click reset to 100. Selected handles draw last in white and win equal-distance hits. Drag retains its note, with Undo |
@@ -87,6 +87,7 @@ menu and Undo History; frame timing remains available through `ui.inspect`.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | trivial | Merge upstream egui 0.37, dock columns, update prompts and audio fixes while retaining local native menus, import progress and editor improvements; readiness estimates unchanged |
 | 2026-10-26 | minor | Native macOS dropdowns across track controls, routing, forms and settings; readiness estimates unchanged |
 | 2026-10-25 | minor | Native macOS context menus with plugin search and Send controls; readiness estimates unchanged |
 | 2026-10-24 | trivial | Integrate upstream Scroll Into View while retaining local import progress, playback and editing improvements; readiness estimates unchanged |
@@ -96,6 +97,7 @@ menu and Undo History; frame timing remains available through `ui.inspect`.
 | 2026-10-20 | minor | Native audio import prepares decoding, rate conversion and waveforms in the background; progress modal, cancellation, atomic batch import and one-step Undo; readiness estimates unchanged |
 | 2026-10-19 | trivial | Merge upstream updates while retaining local progress and revision history; readiness estimates unchanged |
 | 2026-10-18 | trivial | Meter bands align with -10/-5 dB rules and scale ticks, clip lights sit inside the wells, and peak holds stay inside the bars. Edit shares the Mix/output renderer; mono/stereo/multichannel, themes and fractional display scales covered. Readiness estimate unchanged |
+| 2026-10-25 | minor | Edit and Mix windows: Tracks and Groups and Clips in full-height dock columns. Readiness estimate unchanged |
 | 2026-10-16 | minor | Track name menu: Scroll Into View brings the track to the top of the Edit window and the left of the Mix. Readiness estimate unchanged |
 | 2026-10-14 | minor | Note-length Velocity tails enlarge the drag/reset target; nearby stems, zoom/pan, viewport clipping and selection visibility covered |
 | 2026-10-14 | minor | Velocity stems reset to 100 on double-click; overlapping handles, continuous drag targeting, Undo and empty-space clicks covered |

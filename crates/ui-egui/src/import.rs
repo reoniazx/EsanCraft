@@ -231,7 +231,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     }
     let name = job.names.get(progress.file).map(String::as_str).unwrap_or("Audio");
     let mut cancel = false;
-    egui::Modal::new(egui::Id::new("import_progress")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("import_progress")).show(ctx, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
         ui.set_width(360.0_f32.min((ctx.content_rect().width() - 48.0).max(160.0)));
         ui.label(

@@ -98,12 +98,12 @@ impl NativeUiHost {
             return;
         }
         let Ok(mut app) = self.state.try_borrow_mut() else { return };
-        if raw.viewport_id == egui::ViewportId::ROOT {
-            app.raw_input_hook(raw);
-        }
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
         if app.ui.mix_separate {
             main_windows::consume_focus_keys(&mut app, &mut raw.events);
+            if raw.viewport_id == egui::ViewportId::ROOT {
+                app.raw_input_hook(ctx, raw);
+            }
             return;
         }
         if raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. })) {
@@ -117,6 +117,9 @@ impl NativeUiHost {
         // focus keys here, and consume them so they cannot replay when an
         // occluded root later draws, or wait behind a secondary repaint.
         main_windows::consume_focus_keys(&mut app, &mut raw.events);
+        if raw.viewport_id == egui::ViewportId::ROOT {
+            app.raw_input_hook(ctx, raw);
+        }
     }
 }
 
@@ -311,7 +314,7 @@ mod context_menu_tests {
     #[test]
     fn native_choices_are_delivered_without_reentering_the_context_lock() {
         let (host, presenter, _) = setup(Ok(None), false);
-        let control = egui::Id::new("form-control");
+        let control = egui::Id::unique("form-control");
         *presenter.result.borrow_mut() =
             Ok(Some(Selection { action: Action::Choice { control, index: 1, label: "Stereo".into() }, modifiers: Modifiers::NONE }));
         let ctx = egui::Context::default();

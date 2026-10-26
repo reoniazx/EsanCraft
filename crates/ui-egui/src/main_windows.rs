@@ -422,9 +422,8 @@ pub(crate) fn show_secondary(app: &mut SoundApp, ui: &mut Ui) {
             && (app.main_windows.primary_hidden || ctx.input(|i| i.raw.viewports.get(&ViewportId::ROOT).is_some_and(|v| v.visible() == Some(false))))
         {
             // The visible Mixer needs current shared transport/meters even
-            // while the root only runs logic. Add predicted_dt back so this
-            // remains a paced tick without VSync on the hidden root.
-            let delay = 1.0 / 60.0 + ctx.input(|i| i.predicted_dt);
+            // while the root only runs logic, paced without VSync on that root.
+            let delay = 1.0 / 60.0;
             ctx.request_repaint_after_for(std::time::Duration::from_secs_f32(delay), ViewportId::ROOT);
         }
     }
@@ -473,7 +472,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     app.main_windows.primary_rect = Some(area);
     let root_title = title(app, primary);
-    let title_id = egui::Id::new("window_title");
+    let title_id = egui::Id::unique("window_title");
     if ctx.data(|data| data.get_temp::<String>(title_id)).as_deref() != Some(root_title.as_str()) {
         ctx.data_mut(|data| data.insert_temp(title_id, root_title.clone()));
         ctx.send_viewport_cmd(ViewportCommand::Title(root_title));
@@ -504,7 +503,7 @@ fn embedded_windows(app: &mut SoundApp, ui: &mut Ui, primary: MainWindow) {
         }
         let mut open = true;
         let mut pane = egui::Window::new(title(app, window))
-            .id(egui::Id::new(("main_window", window.label())))
+            .id(egui::Id::unique(("main_window", window.label())))
             .open(&mut open)
             .collapsible(false)
             .min_size([320.0, 220.0])
@@ -534,7 +533,7 @@ fn embedded_windows(app: &mut SoundApp, ui: &mut Ui, primary: MainWindow) {
         }
     }
     if let Some(window) = app.main_windows.focus {
-        ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, egui::Id::new(("main_window", window.label()))));
+        ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, egui::Id::unique(("main_window", window.label()))));
     }
     app.main_windows.focus = None;
 }

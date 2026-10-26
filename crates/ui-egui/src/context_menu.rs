@@ -221,7 +221,7 @@ fn render(app: &mut SoundApp, ui: &mut Ui, entries: &[Entry]) {
                 if let Some(color) = color {
                     let (rect, response) = ui.allocate_exact_size(egui::vec2(120.0, 14.0), egui::Sense::click());
                     ui.painter().rect_filled(rect, 2.0, crate::theme::rgb(*color));
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, *enabled, label));
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, *enabled, label));
                     if *enabled && response.clicked() {
                         execute(app, action.clone(), ui.input(|i| i.modifiers), ui.ctx().viewport_id());
                         ui.close();

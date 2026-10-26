@@ -327,12 +327,12 @@ fn cut_track(s: &mut Session, t: TrackId, r: soundcraft_time::Range, sh: bool, f
 }
 
 /// The clipboard for a paste, with the Auto Rename schemes of its clips put into the session first
-/// ([`Clipboard::adopt_auto_names`]).
+/// ([`Clipboard::adopt_auto_names`]). A paste that succeeds stores it back in `e.clipboard`, so later
+/// pastes find its schemes under their session keys; a refused paste leaves the clipboard as it was.
 pub(super) fn clipboard_for_paste(e: &mut Engine) -> Clipboard {
     let mut cb = e.clipboard.clone();
     if cb.tracks.iter().flatten().any(|c| c.auto_name.is_some()) {
         cb.adopt_auto_names(e.session_mut());
-        e.clipboard = cb.clone();
     }
     cb
 }
@@ -373,6 +373,7 @@ fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     s.edit.selection = soundcraft_time::Range::new(at, at + cb.length);
+    e.clipboard = cb;
     Ok(json!({"pasted": pasted}))
 }
 
@@ -462,6 +463,7 @@ fn repeat_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
         at += len;
         n += 1;
     }
+    e.clipboard = cb;
     Ok(json!({"repeats": n}))
 }
 
@@ -471,6 +473,38 @@ fn select_all(e: &mut Engine, _: &Value) -> Result<Value> {
     let end = s.content_end();
     s.edit.selection = soundcraft_time::Range::new(0, end);
     Ok(json!({"tracks": s.edit.selected_tracks.len(), "end": end}))
+}
+
+/// Adds the members of every active edit group that touches `t`, then puts `t` in track order.
+fn add_group_members(s: &Session, t: &mut Vec<TrackId>) {
+    let extra: Vec<TrackId> =
+        s.groups.iter().filter(|g| g.active && g.edit && g.members.iter().any(|m| t.contains(m))).flat_map(|g| g.members.clone()).collect();
+    for m in extra {
+        if !t.contains(&m) {
+            t.push(m);
+        }
+    }
+    let order: Vec<TrackId> = s.tracks.iter().map(|x| x.id).collect();
+    t.sort_by_key(|x| order.iter().position(|o| o == x).unwrap_or(usize::MAX));
+}
+
+/// Selecting clips also selects their range and tracks (Grabber click).
+fn select_clip_ids(s: &Session, ed: &mut soundcraft_model::EditState, c: Vec<ClipId>) {
+    let mut range: Option<soundcraft_time::Range> = None;
+    let mut trs = Vec::new();
+    for id in &c {
+        if let Some((tid, clip)) = s.find_clip(*id) {
+            range = Some(range.map_or(clip.range(), |r| soundcraft_time::Range::new(r.start.min(clip.start), r.end.max(clip.end()))));
+            if !trs.contains(&tid) {
+                trs.push(tid);
+            }
+        }
+    }
+    if let Some(r) = range {
+        ed.selection = r;
+        ed.selected_tracks = trs;
+    }
+    ed.selected_clips = c;
 }
 
 fn select(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -488,15 +522,7 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(mut t) = tracks {
         // Active edit groups select all their members together.
         if !exact {
-            let extra: Vec<soundcraft_model::TrackId> =
-                s.groups.iter().filter(|g| g.active && g.edit && g.members.iter().any(|m| t.contains(m))).flat_map(|g| g.members.clone()).collect();
-            for m in extra {
-                if !t.contains(&m) {
-                    t.push(m);
-                }
-            }
-            let order: Vec<soundcraft_model::TrackId> = s.tracks.iter().map(|x| x.id).collect();
-            t.sort_by_key(|x| order.iter().position(|o| o == x).unwrap_or(usize::MAX));
+            add_group_members(s, &mut t);
         }
         ed.selected_tracks = t;
     }
@@ -506,22 +532,7 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
         _ => {}
     }
     if let Some(c) = clips {
-        // Selecting clips also selects their range and tracks (Grabber click).
-        let mut range: Option<soundcraft_time::Range> = None;
-        let mut trs = Vec::new();
-        for id in &c {
-            if let Some((tid, clip)) = s.find_clip(*id) {
-                range = Some(range.map_or(clip.range(), |r| soundcraft_time::Range::new(r.start.min(clip.start), r.end.max(clip.end()))));
-                if !trs.contains(&tid) {
-                    trs.push(tid);
-                }
-            }
-        }
-        if let Some(r) = range {
-            ed.selection = r;
-            ed.selected_tracks = trs;
-        }
-        ed.selected_clips = c;
+        select_clip_ids(s, &mut ed, c);
     } else if list_changes {
         ed.selected_clips.clear();
     }

@@ -45,11 +45,53 @@ const OLD_SESSIONS: usize = 16;
 /// renders on worker threads; the cpal callbacks here set it.
 pub use soundcraft_mix::{mark_audio_thread, on_audio_thread};
 
-/// Meter values for the UI.
+/// Meter values for the UI: the highest peak (and gain reduction) of every block rendered since
+/// the UI last took them with [`Player::take_meters`]. The audio thread renders blocks faster than
+/// the UI draws (about 94 blocks a second at 512 frames and 48 kHz against 20-60 polls), so
+/// keeping only the latest block would miss most transients.
 #[derive(Debug, Clone, Default)]
 pub struct MeterSnapshot {
     pub tracks: HashMap<TrackId, StripMeter>,
     pub main: StripMeter,
+    /// Something was written since the UI last took the values.
+    fresh: bool,
+}
+
+impl MeterSnapshot {
+    /// Fold one rendered block's meters in (max). Allocation-free once the tracks are known.
+    fn accumulate(&mut self, main: &StripMeter, tracks: &HashMap<TrackId, StripMeter>) {
+        self.main.accumulate(main);
+        for (k, v) in tracks {
+            match self.tracks.get_mut(k) {
+                Some(d) => d.accumulate(v),
+                None => {
+                    self.tracks.insert(*k, v.clone());
+                }
+            }
+        }
+        self.fresh = true;
+    }
+
+    /// Start a new accumulation period, keeping every entry and its storage.
+    fn reset_levels(&mut self) {
+        self.main.reset_levels();
+        self.tracks.values_mut().for_each(StripMeter::reset_levels);
+        self.fresh = false;
+    }
+
+    /// Nothing is playing or monitored: every meter reads silence. Levels are zeroed in place,
+    /// so starting again does not allocate the tracks' entries anew.
+    fn silence(&mut self) {
+        self.reset_levels();
+        self.fresh = true;
+    }
+
+    /// Drop the entries of deleted tracks.
+    fn forget(&mut self, gone: &[TrackId]) {
+        for id in gone {
+            self.tracks.remove(id);
+        }
+    }
 }
 
 /// Plugin states read from the live instances: `(track, slot or INSTRUMENT_SLOT, state)`.
@@ -72,6 +114,8 @@ enum Cmd {
     },
     Stop,
     Locate(Samples),
+    /// Tracks the latest session no longer has (worked out on the UI thread): their meters go.
+    Forget(Vec<TrackId>),
 }
 
 struct Shared {
@@ -87,7 +131,7 @@ struct Shared {
 pub enum OutputTrouble {
     /// A block panicked; the output stays silent.
     Bug,
-    /// The device went away.
+    /// The device went away, or the stream was invalidated and must be rebuilt.
     Gone,
     /// The device stopped asking for audio while playing.
     Stalled,
@@ -98,6 +142,7 @@ pub enum OutputTrouble {
 struct Fault {
     /// A block panicked: output stays silent from then on.
     failed: AtomicBool,
+    /// The device went away or the stream was invalidated: only a reconnect can restore audio.
     gone: AtomicBool,
     /// Blocks so far, to tell a device that stopped asking for audio.
     beats: std::sync::atomic::AtomicU64,
@@ -173,6 +218,11 @@ struct AudioState {
     /// Retired plugin instances go back to the UI thread to be dropped there.
     garbage: Sender<Vec<Box<dyn Plugin>>>,
     old_sessions: Option<SyncSender<Arc<Session>>>,
+    /// Meters of blocks rendered while the UI held the shared snapshot (`try_lock` failed), so
+    /// their peaks reach it with the next block instead of being lost.
+    unsent: MeterSnapshot,
+    /// Deleted tracks still to drop from the shared snapshot (it was locked when they went).
+    forget_shared: Vec<TrackId>,
 }
 
 fn new_engine(sr: f32) -> MixEngine {
@@ -205,6 +255,8 @@ impl AudioState {
             device_rate,
             input: None,
             recording: false,
+            unsent: MeterSnapshot::default(),
+            forget_shared: Vec::new(),
         }
     }
 
@@ -213,6 +265,15 @@ impl AudioState {
         while let Ok(c) = self.rx.try_recv() {
             match c {
                 Cmd::Input(r) => self.input = Some(r),
+                Cmd::Forget(gone) => {
+                    self.unsent.forget(&gone);
+                    if self.forget_shared.is_empty() {
+                        self.forget_shared = gone;
+                    } else {
+                        self.forget_shared.extend_from_slice(&gone);
+                    }
+                    self.forget_meters();
+                }
                 Cmd::Recording(r) => self.recording = r,
                 Cmd::Session(s, instances) => {
                     changed = true;
@@ -314,20 +375,31 @@ impl AudioState {
         self.mix.render(&self.session, self.pos, n, &mut self.pending);
         self.send_garbage();
         self.pending_len = n;
-        if let Ok(mut m) = self.shared.meters.try_lock() {
-            m.main.copy_from(&self.mix.main_meter);
-            for (k, v) in &self.mix.meters {
-                match m.tracks.get_mut(k) {
-                    Some(d) => d.copy_from(v),
-                    None => {
-                        m.tracks.insert(*k, v.clone());
-                    }
-                }
-            }
-        }
+        self.publish_meters();
         if self.playing {
             self.pos += n as i64;
             self.shared.position.store(self.pos, Ordering::Relaxed);
+        }
+    }
+
+    /// Drop deleted tracks' meters from the shared snapshot, unless the UI holds it right now.
+    fn forget_meters(&mut self) {
+        if !self.forget_shared.is_empty()
+            && let Ok(mut m) = self.shared.meters.try_lock()
+        {
+            m.forget(&self.forget_shared);
+            self.forget_shared.clear();
+        }
+    }
+
+    /// Hand this block's meters to the UI without blocking: they are folded (max) into what the
+    /// UI has not taken yet. If the UI holds the snapshot right now, they wait in `unsent`.
+    fn publish_meters(&mut self) {
+        self.unsent.accumulate(&self.mix.main_meter, &self.mix.meters);
+        self.forget_meters();
+        if let Ok(mut m) = self.shared.meters.try_lock() {
+            m.accumulate(&self.unsent.main, &self.unsent.tracks);
+            self.unsent.reset_levels();
         }
     }
 
@@ -338,9 +410,10 @@ impl AudioState {
         let monitoring = self.input.is_some() && self.session.tracks.iter().any(|t| t.mixer.input_monitor || t.mixer.record_arm);
         if !self.playing && !monitoring {
             out.iter_mut().for_each(|x| *x = 0.0);
+            self.unsent.silence();
+            self.forget_meters();
             if let Ok(mut m) = self.shared.meters.try_lock() {
-                m.main = StripMeter::default();
-                m.tracks.clear();
+                m.silence();
             }
             return;
         }
@@ -390,34 +463,40 @@ impl AudioState {
                     a * (1.0 - fr) + b * fr
                 }
             };
-            if channels < nch {
-                // Fold surround to stereo first; a mono device averages the two sides.
-                let (mut l, mut r) = (0.0f32, 0.0f32);
-                if sounding {
-                    if nch == 2 {
-                        (l, r) = (sample(0), sample(1));
-                    } else {
-                        for (c, (gl, gr)) in self.fold.iter().enumerate().take(nch) {
-                            let v = sample(c);
-                            l += v * gl;
-                            r += v * gr;
-                        }
-                    }
-                }
-                for (c, o) in frame.iter_mut().enumerate() {
-                    *o = match c {
-                        0 if channels == 1 => out_sample(0.5 * l + 0.5 * r),
-                        0 => out_sample(l),
-                        1 => out_sample(r),
-                        _ => 0.0,
-                    };
-                }
+            write_frame(frame, channels, nch, sounding, &self.fold, sample);
+            self.read += step;
+        }
+    }
+}
+
+/// Write one device frame from `nch` rendered channels: fold surround to stereo (a mono device
+/// averages the two sides), or copy the channels straight through. `sample(c)` is channel `c`.
+fn write_frame(frame: &mut [f32], channels: usize, nch: usize, sounding: bool, fold: &[(f32, f32)], sample: impl Fn(usize) -> f32) {
+    if channels < nch {
+        // Fold surround to stereo first; a mono device averages the two sides.
+        let (mut l, mut r) = (0.0f32, 0.0f32);
+        if sounding {
+            if nch == 2 {
+                (l, r) = (sample(0), sample(1));
             } else {
-                for (c, o) in frame.iter_mut().enumerate() {
-                    *o = if c < nch.max(1) && sounding { out_sample(sample(c)) } else { 0.0 };
+                for (c, (gl, gr)) in fold.iter().enumerate().take(nch) {
+                    let v = sample(c);
+                    l += v * gl;
+                    r += v * gr;
                 }
             }
-            self.read += step;
+        }
+        for (c, o) in frame.iter_mut().enumerate() {
+            *o = match c {
+                0 if channels == 1 => out_sample(0.5 * l + 0.5 * r),
+                0 => out_sample(l),
+                1 => out_sample(r),
+                _ => 0.0,
+            };
+        }
+    } else {
+        for (c, o) in frame.iter_mut().enumerate() {
+            *o = if c < nch.max(1) && sounding { out_sample(sample(c)) } else { 0.0 };
         }
     }
 }
@@ -442,11 +521,30 @@ struct Side {
     refused: HashSet<(TrackId, usize)>,
     garbage: Receiver<Vec<Box<dyn Plugin>>>,
     old_sessions: Option<Receiver<Arc<Session>>>,
+    /// The tracks of the session last sent, to tell the audio thread which ones went.
+    tracks: HashSet<TrackId>,
 }
 
 impl Side {
     fn new(rate: f32, garbage: Receiver<Vec<Box<dyn Plugin>>>) -> Side {
-        Side { shadow: HashMap::new(), rate, editors: HashMap::new(), states: BTreeMap::new(), refused: HashSet::new(), garbage, old_sessions: None }
+        Side {
+            shadow: HashMap::new(),
+            rate,
+            editors: HashMap::new(),
+            states: BTreeMap::new(),
+            refused: HashSet::new(),
+            garbage,
+            old_sessions: None,
+            tracks: HashSet::new(),
+        }
+    }
+
+    /// Note `s`'s tracks; the ones the previous session had and `s` doesn't.
+    fn gone_tracks(&mut self, s: &Session) -> Vec<TrackId> {
+        let now: HashSet<TrackId> = s.tracks.iter().map(|t| t.id).collect();
+        let gone = self.tracks.difference(&now).copied().collect();
+        self.tracks = now;
+        gone
     }
 
     /// Drops retired instances (closing their editors first, inside the plugin's drop) and
@@ -535,6 +633,9 @@ impl Player {
         self.side.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Open the output device for `session`, trying the requested buffer size before the device default, then build
+    /// the shared player state. If no configuration starts or the device cannot open, fall back to a silent clock at
+    /// the session rate.
     fn open(session: Arc<Session>, cfg: &AudioConfig) -> Player {
         let shared = Arc::new(Shared {
             position: AtomicI64::new(0),
@@ -545,7 +646,11 @@ impl Player {
         let want = session.sample_rate.hz();
         let want_ch = u16::try_from(main_channels(&session)).unwrap_or(2);
         let side_rate = session.sample_rate.as_f64() as f32;
-        let new_side = |garbage: Receiver<Vec<Box<dyn Plugin>>>| Mutex::new(Side::new(side_rate, garbage));
+        let new_side = |garbage: Receiver<Vec<Box<dyn Plugin>>>| {
+            let mut side = Side::new(side_rate, garbage);
+            side.gone_tracks(&session);
+            Mutex::new(side)
+        };
         match open_device(want, want_ch, cfg) {
             Ok((device, config, format, name)) => {
                 // The chosen buffer size first; if the device refuses it, its default.
@@ -563,9 +668,9 @@ impl Player {
                         let state = AudioState::new(rx, Arc::clone(&shared), Arc::clone(&session), f64::from(rate), gtx);
                         let fault = Arc::new(Fault::default());
                         let stream = match format {
-                            cpal::SampleFormat::I32 => build_output::<i32>(&device, config, state, channels, &fault, &shared),
-                            cpal::SampleFormat::I16 => build_output::<i16>(&device, config, state, channels, &fault, &shared),
-                            _ => build_output::<f32>(&device, config, state, channels, &fault, &shared),
+                            cpal::SampleFormat::I32 => build_output::<i32>(&device, *config, state, channels, &fault, &shared),
+                            cpal::SampleFormat::I16 => build_output::<i16>(&device, *config, state, channels, &fault, &shared),
+                            _ => build_output::<f32>(&device, *config, state, channels, &fault, &shared),
                         }?;
                         Ok(Opened { stream, tx, grx, fault })
                     },
@@ -702,8 +807,14 @@ impl Player {
     /// Sends a new session snapshot to the audio thread, with freshly created (state-restored,
     /// prepared) instances of any third-party plugin it newly needs. Call on the UI thread.
     pub fn update_session(&self, s: Arc<Session>) {
-        let instances = self.side().prepare(&s);
+        let (instances, gone) = {
+            let mut side = self.side();
+            (side.prepare(&s), side.gone_tracks(&s))
+        };
         let _ = self.tx.send(Cmd::Session(s, instances));
+        if !gone.is_empty() {
+            let _ = self.tx.send(Cmd::Forget(gone));
+        }
     }
 
     /// Reads the state of every live third-party plugin, for saving the session.
@@ -825,16 +936,33 @@ impl Player {
         self.shared.playing.load(Ordering::Relaxed)
     }
 
+    /// A copy of the meters accumulated since the last [`Player::take_meters`], leaving them in
+    /// place (for inspection; the UI takes them instead).
     pub fn meters(&self) -> MeterSnapshot {
         self.shared.meters.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
-    /// Copy meters into reusable UI storage. Once track/channel counts are stable this performs
-    /// no allocation, unlike cloning a new snapshot every video frame.
-    pub fn copy_meters(&self, out: &mut MeterSnapshot) {
-        let source = self.shared.meters.lock().unwrap_or_else(PoisonError::into_inner);
-        copy_meter_snapshot(&source, out);
+    /// Take the meters accumulated since the last call into reusable UI storage and start a new
+    /// period: `out` gets the highest peak of every block rendered in between. If no block was
+    /// rendered since (a large device buffer renders several blocks per callback), `out` keeps
+    /// the previous values rather than dropping to silence. Call it from one place only (two
+    /// readers would split the peaks between them). Once track/channel counts are stable this
+    /// performs no allocation. The audio thread only ever `try_lock`s, so holding the lock here
+    /// never blocks it; blocks rendered meanwhile reach the next call.
+    pub fn take_meters(&self, out: &mut MeterSnapshot) {
+        let mut source = self.shared.meters.lock().unwrap_or_else(PoisonError::into_inner);
+        take_meter_snapshot(&mut source, out);
     }
+}
+
+fn take_meter_snapshot(source: &mut MeterSnapshot, out: &mut MeterSnapshot) {
+    if !source.fresh {
+        // No block since the last take: keep the readings, but not those of deleted tracks.
+        out.tracks.retain(|id, _| source.tracks.contains_key(id));
+        return;
+    }
+    copy_meter_snapshot(source, out);
+    source.reset_levels();
 }
 
 fn copy_meter_snapshot(source: &MeterSnapshot, out: &mut MeterSnapshot) {
@@ -977,7 +1105,7 @@ fn first_started<A: std::fmt::Debug, S, E: std::fmt::Display>(
 /// never allocates), converted to the device's sample type.
 fn build_output<T>(
     device: &cpal::Device,
-    config: &cpal::StreamConfig,
+    config: cpal::StreamConfig,
     mut state: AudioState,
     channels: usize,
     fault: &Arc<Fault>,
@@ -992,7 +1120,7 @@ where
     let chunk = scratch.len();
     let (failed, guard, gone) = (Arc::clone(fault), Arc::clone(shared), Arc::clone(fault));
     device.build_output_stream(
-        *config,
+        config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             mark_audio_thread();
             for out in data.chunks_mut(chunk) {
@@ -1007,7 +1135,11 @@ where
         // broken): marked, so the logger hands the record off instead of writing it.
         move |e: cpal::Error| {
             mark_audio_thread();
-            if e.kind() == cpal::ErrorKind::DeviceNotAvailable {
+            // cpal 0.18 uses one error type for every operation. A device that went away, or a
+            // stream that must be rebuilt (`StreamInvalidated`), stops playback until the user
+            // reconnects; a rerouted default device (`DeviceChanged`) keeps playing on the new
+            // route, and an xrun is transient, so neither counts as losing the stream.
+            if devices::stream_lost(&e) {
                 gone.gone.store(true, Ordering::Relaxed);
             }
             log::warn!("audio stream error: {e}");
@@ -1028,49 +1160,65 @@ fn open_device(want_rate: u32, want_ch: u16, cfg: &AudioConfig) -> Result<(cpal:
     // Prefer a config at the chosen (else session) rate; else the device default (we resample).
     let want_ch = want_ch.max(2);
     let rates: Vec<u32> = cfg.sample_rate.into_iter().chain(Some(want_rate)).collect();
-    let mut chosen: Option<(cpal::StreamConfig, cpal::SupportedBufferSize, cpal::SampleFormat)> = None;
-    // Better: a preferred format first, then more channels.
-    let better = |c: &cpal::SupportedStreamConfigRange, x: &(cpal::StreamConfig, cpal::SupportedBufferSize, cpal::SampleFormat)| {
-        let (rc, rx) = (devices::format_rank(c.sample_format()).unwrap_or(usize::MAX), devices::format_rank(x.2).unwrap_or(usize::MAX));
-        rc < rx || (rc == rx && c.channels() > x.0.channels)
-    };
-    if let Ok(configs) = device.supported_output_configs() {
-        let configs: Vec<cpal::SupportedStreamConfigRange> = configs.collect();
-        for rate in rates {
-            for c in &configs {
-                if devices::format_rank(c.sample_format()).is_some()
-                    && c.min_sample_rate() <= rate
-                    && c.max_sample_rate() >= rate
-                    && c.channels() >= 2
-                    && c.channels() <= want_ch
-                    && chosen.as_ref().is_none_or(|x| better(c, x))
-                {
-                    chosen = Some((c.with_sample_rate(rate).config(), *c.buffer_size(), c.sample_format()));
-                }
-            }
-            if chosen.is_some() {
-                break;
-            }
-        }
-    }
-    let (config, format) = match chosen {
+    let configs: Vec<cpal::SupportedStreamConfigRange> = device.supported_output_configs().map(|configs| configs.collect()).unwrap_or_default();
+    let (config, format) = match pick_output_config(&configs, &rates, want_ch) {
         Some((mut c, buffers, format)) => {
             c.buffer_size = devices::buffer_size(cfg.buffer_size, &buffers);
             (c, format)
         }
         None => {
             let d = device.default_output_config().map_err(|e| e.to_string())?;
-            if devices::format_rank(d.sample_format()).is_none() {
-                return Err(format!("unsupported device sample format {:?}", d.sample_format()));
-            }
-            let buffers = *d.buffer_size();
             let format = d.sample_format();
-            let mut c = d.config();
-            c.buffer_size = devices::buffer_size(cfg.buffer_size, &buffers);
-            (c, format)
+            // cpal 0.18's default can name a format these callbacks do not decode (I24, F64);
+            // open the same rate and channels in a format they do, rather than lose output.
+            let c = if devices::format_rank(format).is_some() {
+                d
+            } else {
+                // Same rate and channels first; else any usable channel count at the default
+                // rate; else the session rate (the mix resamples and folds channels). A device
+                // whose only decoded format is wider or at another rate would otherwise open no
+                // stream at all.
+                devices::supported_format_config(&configs, d.sample_rate(), d.channels())
+                    .or_else(|| devices::supported_format_config(&configs, want_rate, want_ch))
+                    .ok_or_else(|| format!("unsupported device sample format {format:?}"))?
+            };
+            let mut stream_config = c.config();
+            stream_config.buffer_size = devices::buffer_size(cfg.buffer_size, c.buffer_size());
+            (stream_config, c.sample_format())
         }
     };
     Ok((device, config, format, name))
+}
+
+/// Pick the output configuration for the first requested rate the device offers (the configured
+/// rate first, then the session rate), preferring the best sample format and then the most
+/// channels from stereo up to `want_ch`. `None` when the device offers none of the requested
+/// rates in a usable format; the caller then uses the device's default output configuration,
+/// which the mix resamples to the session rate.
+fn pick_output_config(
+    configs: &[cpal::SupportedStreamConfigRange],
+    rates: &[u32],
+    want_ch: u16,
+) -> Option<(cpal::StreamConfig, cpal::SupportedBufferSize, cpal::SampleFormat)> {
+    for &rate in rates {
+        let mut best: Option<(cpal::StreamConfig, cpal::SupportedBufferSize, cpal::SampleFormat, usize, u16)> = None;
+        for c in configs {
+            let Some(rank) = devices::format_rank(c.sample_format()) else { continue };
+            if !c.contains_rate(rate) || c.channels() < 2 || c.channels() > want_ch {
+                continue;
+            }
+            let Some(config) = c.try_with_sample_rate(rate) else { continue };
+            // Better: a preferred format first, then more channels (ties keep the earlier range).
+            let better = (rank, std::cmp::Reverse(c.channels()));
+            if best.as_ref().is_none_or(|x| better < (x.3, std::cmp::Reverse(x.4))) {
+                best = Some((config.config(), *c.buffer_size(), c.sample_format(), rank, c.channels()));
+            }
+        }
+        if let Some((config, buffers, format, _, _)) = best {
+            return Some((config, buffers, format));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1092,13 +1240,13 @@ mod tests {
         fn pause(&self) -> Result<(), cpal::Error> {
             Ok(())
         }
-        /// The fake stream claims one fixed buffer.
+        /// The fake stream has no clock and no fixed buffer; neither is used by these tests.
         fn buffer_size(&self) -> Result<cpal::FrameCount, cpal::Error> {
-            Ok(1024)
+            Ok(0)
         }
-        /// The fake stream has no clock.
+        /// The fake stream has no usable clock; these tests do not read it.
         fn now(&self) -> cpal::StreamInstant {
-            cpal::StreamInstant::new(0, 0)
+            cpal::StreamInstant::from_nanos(0)
         }
     }
 
@@ -1130,6 +1278,47 @@ mod tests {
         assert_eq!(won.map(|(n, _)| n), Some(2));
     }
 
+    /// Build a cpal configuration range for tests with a 64..1024-frame buffer.
+    fn range(channels: u16, min: u32, max: u32, format: cpal::SampleFormat) -> cpal::SupportedStreamConfigRange {
+        cpal::SupportedStreamConfigRange::new(channels, min, max, cpal::SupportedBufferSize::Range { min: 64, max: 1024 }, format)
+    }
+
+    /// Rates are tried in order, so a stale configured rate falls through to the session rate; when no requested rate
+    /// is offered the caller uses the device default and resamples.
+    #[test]
+    fn output_config_uses_the_first_requested_rate_the_device_offers() {
+        let configs = [
+            range(2, 44_100, 48_000, cpal::SampleFormat::I16),
+            range(2, 44_100, 96_000, cpal::SampleFormat::F32),
+            range(8, 44_100, 96_000, cpal::SampleFormat::F32),
+        ];
+        let (config, buffers, format) = pick_output_config(&configs, &[96_000, 48_000], 8).unwrap();
+        assert_eq!((config.sample_rate, config.channels, config.buffer_size), (96_000, 8, cpal::BufferSize::Default));
+        assert_eq!(format, cpal::SampleFormat::F32);
+        assert_eq!(buffers, cpal::SupportedBufferSize::Range { min: 64, max: 1024 });
+        // 192 kHz is not offered: the session's 48 kHz is tried next.
+        let (config, _, format) = pick_output_config(&configs, &[192_000, 48_000], 8).unwrap();
+        assert_eq!((config.sample_rate, config.channels, format), (48_000, 8, cpal::SampleFormat::F32));
+        // No requested rate is offered: the caller uses the device's default config and resamples.
+        assert!(pick_output_config(&configs, &[192_000], 8).is_none());
+    }
+
+    /// At a supported rate, a preferred sample format wins over more channels; output stays between stereo and the
+    /// requested channel cap, and mono-only or wider devices take the default path.
+    #[test]
+    fn output_config_prefers_format_over_channels_and_needs_stereo_within_the_cap() {
+        let configs = [range(8, 44_100, 48_000, cpal::SampleFormat::I16), range(2, 44_100, 48_000, cpal::SampleFormat::F32)];
+        let (config, _, format) = pick_output_config(&configs, &[48_000], 8).unwrap();
+        assert_eq!((config.channels, format), (2, cpal::SampleFormat::F32), "a preferred format wins over more channels");
+        let (config, _, _) = pick_output_config(&configs, &[48_000], 2).unwrap();
+        assert_eq!(config.channels, 2, "the channel cap applies");
+        let mono = [range(1, 44_100, 48_000, cpal::SampleFormat::F32)];
+        assert!(pick_output_config(&mono, &[48_000], 8).is_none(), "a mono-only device takes the default config path");
+        let surround = [range(6, 44_100, 48_000, cpal::SampleFormat::F32)];
+        assert!(pick_output_config(&surround, &[48_000], 2).is_none(), "a wider device is not narrowed here");
+        assert_eq!(pick_output_config(&surround, &[48_000], 6).map(|(c, _, _)| c.channels), Some(6));
+    }
+
     #[test]
     fn no_config_that_starts_yields_none_so_the_caller_falls_back_to_a_silent_clock() {
         let mut tried = 0;
@@ -1158,6 +1347,122 @@ mod tests {
         assert_eq!(out.tracks.len(), 1);
         assert_eq!(out.tracks[&keep], source.tracks[&keep]);
         assert_eq!(out.main, source.main);
+    }
+
+    /// A mono track playing a quiet signal with one short spike in the block starting at
+    /// `spike_at`, and an audio thread ready to play it.
+    fn spike_session(spike_at: usize) -> (Arc<Shared>, AudioState, std::sync::mpsc::Sender<Cmd>, TrackId) {
+        use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
+        let mut s = soundcraft_model::Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let mut x = vec![0.01f32; 48_000];
+        x[spike_at..spike_at + 32].fill(0.9);
+        s.pool.insert(SourceId(5), Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![x] })));
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "x", SourceId(5), 0, 0, 48_000));
+        let shared = Arc::new(Shared {
+            position: AtomicI64::new(0),
+            playing: AtomicBool::new(false),
+            speed: AtomicU32::new(1000),
+            meters: Mutex::new(MeterSnapshot::default()),
+        });
+        let (tx, rx) = channel();
+        let st = AudioState::new(rx, Arc::clone(&shared), Arc::new(s), 48_000.0, channel().0);
+        tx.send(Cmd::Play { from: 0, end: None, looped: None }).unwrap();
+        (shared, st, tx, t)
+    }
+
+    #[test]
+    fn a_spike_in_one_block_among_quiet_ones_reaches_the_ui() {
+        // Eight 512-frame blocks per callback, as between two UI polls; the spike is in the 3rd.
+        let (shared, mut st, _tx, t) = spike_session(2 * 512 + 100);
+        let mut out = vec![0.0f32; 2 * 8 * 512];
+        st.fill(&mut out, 2);
+        // The last block alone (what the UI used to see) is quiet.
+        assert!(st.mix.meters[&t].peak[0] < 0.05);
+        let mut ui = MeterSnapshot::default();
+        take_meter_snapshot(&mut shared.meters.lock().unwrap(), &mut ui);
+        assert!(ui.tracks[&t].peak[0] > 0.85, "{:?}", ui.tracks[&t]);
+        assert!(ui.tracks[&t].peaks[0] > 0.85);
+        assert!(ui.main.peak[0] > 0.5 && ui.main.peaks.iter().all(|p| *p > 0.5), "{:?}", ui.main);
+        // Taking starts a new period: the next quiet blocks read quiet.
+        st.fill(&mut out, 2);
+        take_meter_snapshot(&mut shared.meters.lock().unwrap(), &mut ui);
+        assert!(ui.tracks[&t].peak[0] < 0.05 && ui.main.peak[0] < 0.05);
+        // No block since the last take: the reading stays rather than dropping to silence.
+        take_meter_snapshot(&mut shared.meters.lock().unwrap(), &mut ui);
+        assert!(ui.tracks[&t].peak[0] > 0.005);
+    }
+
+    #[test]
+    fn a_spike_rendered_while_the_ui_holds_the_meters_arrives_later() {
+        let (shared, mut st, _tx, t) = spike_session(100);
+        let mut out = vec![0.0f32; 2 * 512];
+        {
+            let _held = shared.meters.lock().unwrap();
+            st.fill(&mut out, 2);
+        }
+        st.fill(&mut out, 2);
+        let mut ui = MeterSnapshot::default();
+        take_meter_snapshot(&mut shared.meters.lock().unwrap(), &mut ui);
+        assert!(ui.tracks[&t].peak[0] > 0.85, "{:?}", ui.tracks[&t]);
+    }
+
+    #[test]
+    fn stopping_zeroes_meters_in_place_and_removed_tracks_are_pruned() {
+        let (shared, mut st, tx, t) = spike_session(100);
+        let mut out = vec![0.0f32; 2 * 512];
+        st.fill(&mut out, 2);
+        tx.send(Cmd::Stop).unwrap();
+        st.fill(&mut out, 2);
+        {
+            let m = shared.meters.lock().unwrap();
+            let e = m.tracks.get(&t).expect("kept while stopped, so playing again does not allocate it");
+            assert!(e.peak == [0.0; 2] && e.peaks.iter().all(|p| *p == 0.0) && e.peaks.len() == 1, "{e:?}");
+            assert!(m.fresh, "the UI sees the silence");
+        }
+        // The track is deleted: the UI side works out which tracks went and says so.
+        let mut side = Side::new(48_000.0, channel().1);
+        side.gone_tracks(&st.session);
+        let empty = soundcraft_model::Session::default();
+        let gone = side.gone_tracks(&empty);
+        assert_eq!(gone, vec![t]);
+        tx.send(Cmd::Session(Arc::new(empty), Vec::new())).unwrap();
+        tx.send(Cmd::Forget(gone)).unwrap();
+        tx.send(Cmd::Play { from: 0, end: None, looped: None }).unwrap();
+        st.fill(&mut out, 2);
+        assert!(!shared.meters.lock().unwrap().tracks.contains_key(&t));
+        assert!(!st.unsent.tracks.contains_key(&t) && !st.mix.meters.contains_key(&t));
+    }
+
+    #[test]
+    fn a_take_without_new_blocks_still_drops_deleted_tracks() {
+        let gone = TrackId(7);
+        let mut source = MeterSnapshot::default();
+        source.accumulate(&StripMeter::default(), &HashMap::from([(gone, StripMeter::default())]));
+        let mut ui = MeterSnapshot::default();
+        take_meter_snapshot(&mut source, &mut ui);
+        source.forget(&[gone]);
+        take_meter_snapshot(&mut source, &mut ui);
+        assert!(ui.tracks.is_empty());
+    }
+
+    #[test]
+    fn a_channel_count_change_takes_the_new_stereo_peaks() {
+        let mut acc = StripMeter { peak: [0.9, 0.9], peaks: vec![0.9], ..StripMeter::default() };
+        acc.accumulate(&StripMeter { peak: [0.9, 0.0], peaks: vec![0.9, 0.0], ..StripMeter::default() });
+        assert_eq!(acc.peak, [0.9, 0.0]);
+    }
+
+    #[test]
+    fn gain_reduction_keeps_its_maximum_until_taken() {
+        let mut acc = StripMeter::default();
+        for gr in [1.0, 9.0, 2.0, f32::NAN] {
+            acc.accumulate(&StripMeter { peak: [0.1, 0.1], peaks: vec![0.1], gain_reduction_db: gr, ..StripMeter::default() });
+        }
+        assert_eq!(acc.gain_reduction_db, 9.0);
+        acc.reset_levels();
+        assert_eq!((acc.gain_reduction_db, acc.peak, acc.peaks.len()), (0.0, [0.0; 2], 1));
     }
 
     #[test]

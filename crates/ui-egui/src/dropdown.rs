@@ -24,7 +24,7 @@ pub(crate) struct Pick {
 pub(crate) fn prepare(app: &crate::SoundApp, ctx: &Context) {
     ctx.data_mut(|data| {
         data.insert_temp(
-            Id::new("native_dropdown_frame"),
+            Id::unique("native_dropdown_frame"),
             Frame { enabled: app.context_menus.enabled, active: app.context_menus.active, epoch: app.context_menus.epoch },
         )
     });
@@ -33,7 +33,7 @@ pub(crate) fn prepare(app: &crate::SoundApp, ctx: &Context) {
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn collect(app: &mut crate::SoundApp, ctx: &Context) {
     let request = ctx.data_mut(|data| {
-        let id = Id::new("native_dropdown_request");
+        let id = Id::unique("native_dropdown_request");
         let request = data.get_temp::<Request>(id);
         data.remove::<Request>(id);
         request
@@ -48,7 +48,7 @@ pub(crate) fn collect(app: &mut crate::SoundApp, ctx: &Context) {
 
 /// Same small ComboBox API used by SoundCraft's forms, with an unchanged egui fallback.
 pub struct ComboBox {
-    fallback: egui::ComboBox,
+    fallback: egui::ComboBox<'static>,
     salt: Id,
     label: Option<WidgetText>,
     selected: WidgetText,
@@ -57,14 +57,14 @@ pub struct ComboBox {
 
 impl ComboBox {
     pub fn from_id_salt(salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        let salt = Id::new(salt);
+        let salt = Id::unique(salt);
         Self { fallback: egui::ComboBox::from_id_salt(salt), salt, label: None, selected: "".into(), width: None }
     }
     pub fn from_label(label: impl Into<WidgetText>) -> Self {
         let label = label.into();
         Self {
             fallback: egui::ComboBox::from_label(label.clone()),
-            salt: Id::new(label.text()),
+            salt: Id::unique(label.text()),
             label: Some(label),
             selected: "".into(),
             width: None,
@@ -81,7 +81,7 @@ impl ComboBox {
         self
     }
     pub fn show_ui<R>(self, ui: &mut Ui, contents: impl FnOnce(&mut Choices<'_>) -> R) -> InnerResponse<Option<R>> {
-        let frame = ui.ctx().data(|data| data.get_temp::<Frame>(Id::new("native_dropdown_frame")));
+        let frame = ui.ctx().data(|data| data.get_temp::<Frame>(Id::unique("native_dropdown_frame")));
         let Some(frame) = frame.filter(|frame| frame.enabled) else {
             return self
                 .fallback
@@ -97,7 +97,7 @@ impl ComboBox {
         let draw = |ui: &mut Ui| {
             let width = self.width.unwrap_or(ui.spacing().combo_width);
             let mut response = ui.add(egui::Button::new(self.selected.clone()).right_text("  ").min_size(vec2(width, ui.spacing().interact_size.y)));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), self.selected.text()));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), self.selected.text()));
             crate::icons::draw(
                 ui.painter(),
                 egui::Rect::from_center_size(egui::pos2(response.rect.max.x - 9.0, response.rect.center().y), vec2(9.0, 9.0)),
@@ -128,7 +128,7 @@ impl ComboBox {
                 epoch: frame.epoch,
                 anchor: Anchor::Below { rect: response.rect, zoom: ui.ctx().zoom_factor() },
             };
-            ui.ctx().data_mut(|data| data.insert_temp(Id::new("native_dropdown_request"), request));
+            ui.ctx().data_mut(|data| data.insert_temp(Id::unique("native_dropdown_request"), request));
         }
         InnerResponse { inner: Some(inner), response }
     }

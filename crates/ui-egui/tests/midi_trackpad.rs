@@ -31,7 +31,7 @@ fn wheel(h: &mut Harness<'_, SoundApp>, p: Pos2, phase: TouchPhase, delta: Vec2,
     h.input_mut().events.extend([
         Event::PointerMoved(p),
         Event::ModifiersChanged(modifiers),
-        Event::MouseWheel { unit: MouseWheelUnit::Point, delta, phase, modifiers },
+        Event::MouseWheel { unit: MouseWheelUnit::Point, delta, phase, source: egui::MouseWheelSource::Trackpad, modifiers },
     ]);
     h.step();
 }

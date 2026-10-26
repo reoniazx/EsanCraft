@@ -81,8 +81,8 @@ fn lane_layout(full: Rect, preferred: f32) -> (Rect, Rect, Rect) {
 
 fn resize_velocity(app: &mut SoundApp, ui: &mut Ui, full: Rect, cid: ClipId) -> (Rect, Rect, Rect) {
     let (_, velocity, divider) = lane_layout(full, app.ui.midi_velocity_height);
-    let response = ui.interact(divider, ui.id().with("velocity_divider"), Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Velocity lane height"));
+    let response = ui.interact(divider, ui.scope_id().with("velocity_divider"), Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, "Velocity lane height"));
     let response = response
         .on_hover_cursor(egui::CursorIcon::ResizeVertical)
         .on_hover_text("Drag to resize Velocity · Double-click to reset · Up/Down when focused");
@@ -288,7 +288,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let header = Rect::from_min_size(full.min, vec2(full.width(), 22.0));
     ui.painter().rect_filled(header, 0.0, t.panel_bg2);
     ui.painter().text(pos2(header.min.x + 8.0, header.center().y), Align2::LEFT_CENTER, "MIDI EDITOR", bold(11.5), t.header_text);
-    ui.interact(Rect::from_min_size(header.min, vec2(108.0, header.height())), ui.id().with("midi_help"), Sense::hover())
+    ui.interact(Rect::from_min_size(header.min, vec2(108.0, header.height())), ui.scope_id().with("midi_help"), Sense::hover())
         .on_hover_text("Two-finger scroll: time/pitch · Shift+scroll: time · Pinch or Cmd/Ctrl+scroll: zoom at pointer · Fit: show whole clip");
     let Some(cid) = target_clip(app) else {
         app.midi.roll = [0.0; 4];
@@ -308,7 +308,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         ui.painter().text(full.center(), Align2::CENTER_CENTER, msg, regular(13.0), t.text_dim);
         let body = Rect::from_min_max(pos2(full.min.x, header.max.y), full.max);
         if let Some((id, _)) = track
-            && ui.interact(body, ui.id().with("new_clip"), Sense::click()).clicked()
+            && ui.interact(body, ui.scope_id().with("new_clip"), Sense::click()).clicked()
         {
             let sel = app.engine.session().edit.selection;
             if let Ok(v) = app.run("midi.new_clip", json!({"track": id.0, "start": sel.start, "end": sel.end})) {
@@ -502,7 +502,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         roll_painter.rect(r, 2.0, fill, Stroke::new(1.0, Color32::BLACK), StrokeKind::Inside);
     }
     // Interaction.
-    let resp = ui.interact(roll, ui.id().with(("roll", cid.0)), Sense::click_and_drag());
+    let resp = ui.interact(roll, ui.scope_id().with(("roll", cid.0)), Sense::click_and_drag());
     let hit = |pos: egui::Pos2| -> Option<(usize, bool)> {
         sequence.notes.iter().enumerate().rev().find_map(|(i, n)| {
             let r = Rect::from_min_max(
@@ -645,7 +645,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     ui.painter().rect_filled(vel, 0.0, Color32::from_rgb(28, 28, 30));
     ui.painter().text(pos2(full.min.x + 6.0, vel.center().y), Align2::LEFT_CENTER, "Velocity", regular(10.0), t.text_dim);
     let vresp = ui
-        .interact(vel, ui.id().with(("vel", cid.0)), Sense::click_and_drag())
+        .interact(vel, ui.scope_id().with(("vel", cid.0)), Sense::click_and_drag())
         .on_hover_text("Drag a stem or its note-length tail to change velocity · Double-click to reset to 100");
     let velocity_painter = ui.painter().with_clip_rect(vel.intersect(ui.clip_rect()));
     let velocity_y = |velocity: u8| vel.max.y - 2.0 - (vel.height() - 4.0).max(0.0) * f32::from(velocity) / 127.0;

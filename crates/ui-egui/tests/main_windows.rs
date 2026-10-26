@@ -196,8 +196,12 @@ fn old_preferences_stay_single_window_and_dual_window_preferences_round_trip() {
 fn native_tile_moves_two_viewports_and_repeated_tile_keeps_the_workspace() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
+    // egui 0.37 returns an immediate viewport's commands to its own renderer.
+    // Keep that output as well as the root output to verify both native windows.
+    let child_commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let rendered_commands = child_commands.clone();
     // Exercise the real native-viewport branch without needing a display server.
-    egui::Context::set_immediate_viewport_renderer(|ctx, mut viewport| {
+    egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
         let mut raw = RawInput {
             viewport_id: viewport.ids.this,
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 972.0))),
@@ -214,6 +218,7 @@ fn native_tile_moves_two_viewports_and_repeated_tile_keeps_the_workspace() {
             },
         );
         let mut output = ctx.run_ui(raw, |ui| (viewport.viewport_ui_cb)(ui));
+        *rendered_commands.lock().unwrap() = output.viewport_output.get(&viewport.ids.this).map(|v| v.commands.clone()).unwrap_or_default();
         output.textures_delta.clear();
     });
     let mut app = app();
@@ -234,9 +239,10 @@ fn native_tile_moves_two_viewports_and_repeated_tile_keeps_the_workspace() {
     }
     for _ in 0..2 {
         app.run("window.arrange_tile_v", json!({})).unwrap();
+        child_commands.lock().unwrap().clear();
         let output = native_frame(&mut app);
         for (id, x) in [(ViewportId::ROOT, -1600.0), (main_windows::secondary_id(), -800.0)] {
-            let commands = &output.viewport_output[&id].commands;
+            let commands = if id == ViewportId::ROOT { output.viewport_output[&id].commands.clone() } else { child_commands.lock().unwrap().clone() };
             assert!(commands.contains(&egui::ViewportCommand::OuterPosition(pos2(x, 60.0))), "{commands:?}");
             assert!(commands.contains(&egui::ViewportCommand::InnerSize(vec2(800.0, 972.0))), "{commands:?}");
         }

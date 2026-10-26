@@ -56,7 +56,7 @@ fn edit_and_mix_track_names_open_one_native_menu_without_an_egui_popup() {
     assert!(h.query_by_label("Make Inactive").is_none());
     h.state().state.borrow_mut().ui.window = MainWindow::Mix;
     h.run_steps(4);
-    let strip = h.get_by_label("Record enable").rect();
+    let strip = h.get_by_label("Record enable for Voice").rect();
     right(&mut h, pos2(strip.center().x, 900.0 - 17.0));
     assert_eq!(requests.borrow().len(), 2);
     assert!(matches!(requests.borrow()[1].target, Target::Track(_)));
@@ -68,16 +68,16 @@ fn inserts_and_sends_use_native_context_menus_and_left_click_dropdowns() {
     let (mut h, requests) = harness();
     h.state().state.borrow_mut().ui.window = MainWindow::Mix;
     h.run_steps(4);
-    let insert = h.get_by_label("Insert A").rect().center();
+    let insert = h.get_by_label("Insert A for Voice").rect().center();
     right(&mut h, insert);
     assert!(matches!(requests.borrow().last().unwrap().target, Target::Insert { slot: 0, .. }));
     assert!(h.query_by_label("Search plugins…").is_none());
-    let send = h.get_by_label("Send A level").rect().center();
+    let send = h.get_by_label("Send A level for Voice").rect().center();
     right(&mut h, send);
     assert!(matches!(requests.borrow().last().unwrap().target, Target::Send { slot: 0, .. }));
     assert!(h.query_by_label("Pre-fader").is_none());
     let n = requests.borrow().len();
-    h.get_by_label("Insert A").click();
+    h.get_by_label("Insert A for Voice").click();
     h.run_steps(3);
     assert_eq!(requests.borrow().len(), n + 1);
     assert!(matches!(requests.borrow().last().unwrap().target, Target::Insert { slot: 0, .. }));

@@ -303,6 +303,8 @@ pub fn open_session_bytes(app: &mut SoundApp, name: String, bytes: Vec<u8>) {
     }
 }
 
+/// Open the session bytes read by the browser after the save prompt, stopping transport first. A successful open
+/// marks the document replaced so pending captures cancel and reports any missing media.
 fn open_pending_session(app: &mut SoundApp) {
     let Some((name, bytes)) = app.dialogs.pending_session.take() else { return };
     if crate::bounce::refuses_session_switch(app) || crate::import::refuses_session_switch(app) {
@@ -310,8 +312,11 @@ fn open_pending_session(app: &mut SoundApp) {
     }
     let _ = app.run("transport.stop", json!({}));
     app.ui.status = match soundcraft_engine::io::open_session_bytes(&mut app.engine, &name, &bytes) {
-        Ok(missing) if missing.is_empty() => format!("Opened {name}"),
-        Ok(missing) => format!("Opened {name} ({} missing media)", missing.len()),
+        Ok(missing) => {
+            // This path replaces the document without going through `SoundApp::run`.
+            app.document_replaced();
+            if missing.is_empty() { format!("Opened {name}") } else { format!("Opened {name} ({} missing media)", missing.len()) }
+        }
         Err(e) => e.to_string(),
     };
 }
@@ -447,15 +452,16 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             match &mut d {
                 Dialog::NewTracks { count, format, kind, timebase, name } => {
                     ui.horizontal(|ui| {
-                        ui.label("Create");
-                        ui.add(egui::DragValue::new(count).range(1..=128));
+                        let create = ui.label("Create");
+                        ui.add(egui::DragValue::new(count).range(1..=128)).labelled_by(create.id);
                         ui.label("new");
-                        crate::dropdown::ComboBox::from_id_salt("nt_fmt").selected_text(format.as_str()).show_ui(ui, |ui| {
+                        let fmt = crate::dropdown::ComboBox::from_id_salt("nt_fmt").selected_text(format.as_str()).show_ui(ui, |ui| {
                             for f in soundcraft_model::ChannelFormat::ALL {
                                 ui.selectable_value(format, f.label().to_string(), f.label());
                             }
                         });
-                        crate::dropdown::ComboBox::from_id_salt("nt_kind")
+                        fmt.response.accessible_name("Channel format");
+                        let kind_combo = crate::dropdown::ComboBox::from_id_salt("nt_kind")
                             .selected_text(soundcraft_model::TrackKind::from_id(kind).map_or("Audio Track", |k| k.label()))
                             .show_ui(ui, |ui| {
                                 for k in soundcraft_model::TrackKind::ALL {
@@ -465,18 +471,20 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                                     }
                                 }
                             });
+                        kind_combo.response.accessible_name("Track kind");
                         ui.label("in");
-                        crate::dropdown::ComboBox::from_id_salt("nt_tb").selected_text(if timebase == "ticks" { "Ticks" } else { "Samples" }).show_ui(
+                        let tb = crate::dropdown::ComboBox::from_id_salt("nt_tb").selected_text(if timebase == "ticks" { "Ticks" } else { "Samples" }).show_ui(
                             ui,
                             |ui| {
                                 ui.selectable_value(timebase, "samples".to_string(), "Samples");
                                 ui.selectable_value(timebase, "ticks".to_string(), "Ticks");
                             },
                         );
+                        tb.response.accessible_name("Timebase");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Name:");
-                        ui.add(egui::TextEdit::singleline(name).desired_width(240.0));
+                        crate::widgets::named_text_field(ui.add(egui::TextEdit::singleline(name).desired_width(240.0)), "Name");
                     });
                     if buttons(ui, "Create", enter) {
                         action =
@@ -486,7 +494,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::NewSession { name, sample_rate, demo } => {
                     ui.horizontal(|ui| {
                         ui.label("Name");
-                        ui.text_edit_singleline(name);
+                        crate::widgets::named_text_field(ui.text_edit_singleline(name), "Name");
                     });
                     crate::dropdown::ComboBox::from_label("Sample Rate").selected_text(format!("{sample_rate} Hz")).show_ui(ui, |ui| {
                         for r in soundcraft_time::SampleRate::COMMON {
@@ -504,7 +512,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::Bounce { path, format, bit_depth, normalize, dither } => {
                     ui.horizontal(|ui| {
                         ui.label("File");
-                        ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
+                        crate::widgets::named_text_field(ui.add(egui::TextEdit::singleline(path).desired_width(420.0)), "File");
                         if let Some(pick) = &app.services.pick_save
                             && ui.button("Browse…").clicked()
                             && let Some(p) = pick("file.bounce_mix", path)
@@ -576,7 +584,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::PathPrompt { cmd, path, key, .. } => {
-                    ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
+                    crate::widgets::named_text_field(ui.add(egui::TextEdit::singleline(path).desired_width(420.0)), "Path");
                     if let Some(pick) = &app.services.pick_open
                         && cmd != "session.save_as"
                         && cmd != "session.save_copy"
@@ -616,7 +624,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 }
                 Dialog::Number { cmd, key, value, suffix, .. } => {
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(value).speed(0.1));
+                        ui.add(egui::DragValue::new(value).speed(0.1)).accessible_name(format!("Value in {suffix}"));
                         ui.label(suffix.as_str());
                     });
                     if buttons(ui, "OK", enter) {
@@ -627,7 +635,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::TempoChange { at, bpm } => {
                     ui.horizontal(|ui| {
                         // Same limits the engine enforces (time crate `valid_bpm`).
-                        ui.add(egui::DragValue::new(bpm).speed(0.1).range(5.0..=1000.0));
+                        ui.add(egui::DragValue::new(bpm).speed(0.1).range(5.0..=1000.0)).accessible_name("Tempo (BPM)");
                         ui.label("bpm");
                     });
                     if buttons(ui, "OK", enter) {
@@ -710,7 +718,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::Group { id, name, edit, mix, members } => {
                     ui.horizontal(|ui| {
                         ui.label("Name");
-                        ui.text_edit_singleline(name);
+                        crate::widgets::named_text_field(ui.text_edit_singleline(name), "Name");
                     });
                     ui.horizontal(|ui| {
                         crate::widgets::checkbox(ui, edit, "Edit group");
@@ -754,12 +762,12 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::Loop { by, count, length, format, start, filled } => {
                     let s = app.engine.session();
                     ui.horizontal(|ui| {
-                        ui.radio_value(by, LoopBy::Count, "Number of Loops");
-                        ui.add_enabled(*by == LoopBy::Count, egui::DragValue::new(count).range(1..=512));
+                        let count_label = ui.radio_value(by, LoopBy::Count, "Number of Loops");
+                        ui.add_enabled(*by == LoopBy::Count, egui::DragValue::new(count).range(1..=512)).labelled_by(count_label.id);
                     });
                     ui.horizontal(|ui| {
-                        ui.radio_value(by, LoopBy::Length, "Loop Length");
-                        ui.add_enabled(*by == LoopBy::Length, egui::TextEdit::singleline(length).desired_width(140.0));
+                        let length_label = ui.radio_value(by, LoopBy::Length, "Loop Length");
+                        ui.add_enabled(*by == LoopBy::Length, egui::TextEdit::singleline(length).desired_width(140.0)).labelled_by(length_label.id);
                         ui.label(format.label());
                     });
                     ui.radio_value(by, LoopBy::Fill, "Loop Until End of Session or Next Clip");
@@ -771,13 +779,14 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names } => {
                     egui::Grid::new("score_setup").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                         ui.label("Title");
-                        ui.text_edit_singleline(title);
+                        // The painted label is not an accesskit name; name the field itself.
+                        crate::widgets::named_text_field(ui.text_edit_singleline(title), "Score title");
                         ui.end_row();
                         ui.label("Composer");
-                        ui.text_edit_singleline(composer);
+                        crate::widgets::named_text_field(ui.text_edit_singleline(composer), "Score composer");
                         ui.end_row();
                         ui.label("Bars per system");
-                        ui.add(egui::DragValue::new(bars_per_system).range(1..=16));
+                        ui.add(egui::DragValue::new(bars_per_system).range(1..=16)).accessible_name("Bars per system");
                         ui.end_row();
                     });
                     crate::widgets::checkbox(ui, show_track_names, "Show track names");
@@ -816,11 +825,11 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
         });
-    if esc || ctx.memory(|m| m.data.get_temp::<bool>(egui::Id::new("dlg_cancel")).unwrap_or(false)) {
+    if esc || ctx.memory(|m| m.data.get_temp::<bool>(egui::Id::unique("dlg_cancel")).unwrap_or(false)) {
         keep = false;
         app.dialogs.after_save = None;
         app.dialogs.pending_session = None;
-        ctx.memory_mut(|m| m.data.remove::<bool>(egui::Id::new("dlg_cancel")));
+        ctx.memory_mut(|m| m.data.remove::<bool>(egui::Id::unique("dlg_cancel")));
     }
     // Enter on a focused Cancel also presses OK. In Auto Rename, the dialog then closes without running the command.
     if !keep && matches!(d, Dialog::AutoRename { .. }) {
@@ -904,8 +913,9 @@ fn run_then(app: &mut SoundApp, cmd: &str, params: Value) -> Result<Value, Strin
 /// with the values of the open Strip Silence window (or of the one Rename Selected Clips goes back
 /// to). The Edit window draws them as the Strip Silence rectangles. Empty when neither window is
 /// open. A scan runs again only when the session or a value changes. Off the web it runs on a worker
-/// thread, one at a time, and the rectangles last found stay until it ends. A scan for older values,
-/// or one that runs on after the window closes, stops before its next window of audio.
+/// thread, one at a time, and the rectangles last found stay until it ends. On the web it runs on the
+/// frame thread once no pointer button is down, so a slider drag scans once, on release. A scan for
+/// older values, or one that runs on after the window closes, stops before its next window of audio.
 pub fn strip_silence_rectangles(app: &mut SoundApp, ctx: &egui::Context) -> StripRects {
     let values = match &app.dialogs.open {
         Some(Dialog::StripSilence { threshold, min_ms, pre_ms, post_ms }) => [*threshold, *min_ms, *pre_ms, *post_ms],
@@ -933,8 +943,9 @@ pub fn strip_silence_rectangles(app: &mut SoundApp, ctx: &egui::Context) -> Stri
     let shown = r.shown.as_ref().map(|(k, rects)| (*k == key, Arc::clone(rects)));
     #[cfg(not(target_arch = "wasm32"))]
     let busy = r.running.is_some();
+    // The browser's scan blocks the frame, so it waits for the release that ends a slider drag.
     #[cfg(target_arch = "wasm32")]
-    let busy = false;
+    let busy = ctx.input(|i| i.pointer.any_down());
     if let Some((true, rects)) = shown {
         return rects;
     }
@@ -965,8 +976,6 @@ pub fn strip_silence_rectangles(app: &mut SoundApp, ctx: &egui::Context) -> Stri
             return shown.map(|(_, rects)| rects).unwrap_or_default();
         }
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = ctx;
     // The browser has no threads, and without a thread to spare the scan runs on this one.
     let rects: StripRects = Arc::new(scan.run().unwrap_or_default());
     app.dialogs.strip_rectangles.shown = Some((key, Arc::clone(&rects)));
@@ -1010,17 +1019,17 @@ const AUTO_NAME_LABELS: [&str; 2] = ["Starting Number", "Number of Places"];
 fn strip_name_fields(ui: &mut egui::Ui, names: &mut StripNames, labels: [&str; 2]) {
     let [number, zeros] = labels;
     egui::Grid::new("strip_names").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label("Name");
-        ui.text_edit_singleline(&mut names.name);
+        let name = ui.label("Name");
+        ui.text_edit_singleline(&mut names.name).labelled_by(name.id);
         ui.end_row();
-        ui.label(number);
-        ui.add(egui::DragValue::new(&mut names.number).range(0..=StripNames::MAX_NUMBER));
+        let number = ui.label(number);
+        ui.add(egui::DragValue::new(&mut names.number).range(0..=StripNames::MAX_NUMBER)).labelled_by(number.id);
         ui.end_row();
-        ui.label(zeros);
-        ui.add(egui::DragValue::new(&mut names.zeros).range(0..=StripNames::MAX_ZEROS));
+        let zeros = ui.label(zeros);
+        ui.add(egui::DragValue::new(&mut names.zeros).range(0..=StripNames::MAX_ZEROS)).labelled_by(zeros.id);
         ui.end_row();
-        ui.label("Suffix");
-        ui.text_edit_singleline(&mut names.suffix);
+        let suffix = ui.label("Suffix");
+        ui.text_edit_singleline(&mut names.suffix).labelled_by(suffix.id);
         ui.end_row();
     });
     let example = if names.name.trim().is_empty() {
@@ -1042,7 +1051,7 @@ fn buttons_enabled(ui: &mut egui::Ui, ok: &str, enter: bool, ready: bool) -> boo
     ui.separator();
     ui.horizontal(|ui| {
         if ui.button("Cancel").clicked() {
-            ui.ctx().memory_mut(|m| m.data.insert_temp(egui::Id::new("dlg_cancel"), true));
+            ui.ctx().memory_mut(|m| m.data.insert_temp(egui::Id::unique("dlg_cancel"), true));
         }
         let b = egui::Button::new(egui::RichText::new(ok).strong()).fill(Tokens::current().accent);
         if ui.add_enabled(ready, b).clicked() {
@@ -1055,6 +1064,7 @@ fn buttons_enabled(ui: &mut egui::Ui, ok: &str, enter: bool, ready: bool) -> boo
 /// A name field that takes the focus with its text selected, so typing replaces the old name.
 fn name_field(ui: &mut egui::Ui, name: &mut String) {
     let mut out = egui::TextEdit::singleline(name).show(ui);
+    let _ = crate::widgets::named_text_field(out.response.response.clone(), "Name");
     if !out.response.has_focus() {
         out.response.request_focus();
         let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(name.chars().count()));
@@ -1075,12 +1085,13 @@ const SPEED_RAMP_CHOICES: [(&str, &str, f32, &[(f32, &str)]); 3] = [
     ("fades", "Fades", 1.0, &[(1.0, "On"), (0.0, "Off")]),
 ];
 
+/// Process-parameter window for the chosen AudioSuite process, with its controls and Render action.
 fn audiosuite_window(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(process) = app.ui.audiosuite.clone() else { return };
     let mut open = true;
     let title = soundcraft_dsp::plugin_info(&process).map_or_else(|| process.replace('_', " "), |p| p.name.to_string());
     egui::Window::new(format!("AudioSuite · {title}")).open(&mut open).default_width(360.0).show(ctx, |ui| {
-        let key = egui::Id::new(("as_params", process.clone()));
+        let key = egui::Id::unique(("as_params", process.clone()));
         let mut params: std::collections::BTreeMap<String, f32> = ui.ctx().memory(|m| m.data.get_temp(key)).unwrap_or_default();
         if let Some(info) = soundcraft_dsp::plugin_info(&process) {
             for p in info.params {
@@ -1100,10 +1111,6 @@ fn audiosuite_window(app: &mut SoundApp, ctx: &egui::Context) {
                 "pitch_shift" => {
                     let v = params.entry("semitones".into()).or_insert(0.0);
                     ui.add(egui::Slider::new(v, -24.0..=24.0).text("Semitones"));
-                }
-                "varispeed" => {
-                    let v = params.entry("speed".into()).or_insert(1.0);
-                    ui.add(egui::Slider::new(v, 0.25..=4.0).text("Speed"));
                 }
                 "speed_ramp" => {
                     for (id, label, default, choices) in SPEED_RAMP_CHOICES {
