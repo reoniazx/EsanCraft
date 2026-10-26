@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   sonarcloud:
+    if: vars.ENABLE_SONARCLOUD == 'true'
     # Tracked at @main so org-wide CI improvements propagate without PR churn.
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     secrets: inherit

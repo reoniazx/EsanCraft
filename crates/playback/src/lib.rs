@@ -886,7 +886,7 @@ impl Player {
         }
     }
 
-    /// The plugin's own text for a parameter value when SoundCraft's format would be wrong for it
+    /// The plugin's own text for a parameter value when SoundThai's format would be wrong for it
     /// (see `PluginEditor::value_text`). Main thread only.
     pub fn editor_value_text(&self, track: TrackId, slot: usize, id: &str, value: f32) -> Option<String> {
         self.side().editors.get_mut(&(track, slot))?.value_text(id, value)

@@ -15,7 +15,7 @@ fn scan_lists_both_fixture_plugins() {
     assert_eq!(found.len(), 5);
     let g = found.iter().find(|d| d.id == GAIN).unwrap();
     assert_eq!(g.name, "Fixture Gain");
-    assert_eq!(g.vendor, "SoundCraft tests");
+    assert_eq!(g.vendor, "SoundThai tests");
     assert_eq!(g.features, vec!["audio-effect", "stereo"]);
     assert_eq!(g.category, Category::Other);
     assert!(!g.is_instrument);

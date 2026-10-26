@@ -1,4 +1,4 @@
-//! The SoundCraft session document.
+//! The SoundThai session document.
 //!
 //! A [`Session`] is pure data: tracks with playlists of clips, the mixer (inserts, sends, routing,
 //! automation), tempo/meter, memory locations and groups. Audio sample data lives in

@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SoundThai MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build soundthai.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, `.scraft` sessions owned by
+  SoundThai, and SoundThai offered under "Open with" for WAV/AIFF/FLAC/MP3 and MIDI files
+  (without taking over the user's default player for them).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="SoundThai"
+      Manufacturer="Reoniazx"
+      Version="$(var.Version)"
+      UpgradeCode="C4046B4E-9E69-4B42-B634-FFDAF216FD8B"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="SoundThai digital audio workstation" Manufacturer="Reoniazx" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of SoundThai is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="SoundcraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="SoundcraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/reoniazx/SoundThai" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/reoniazx/SoundThai" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/reoniazx/SoundThai/issues" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="SoundThai" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="SoundThai" Level="1">
+      <ComponentGroupRef Id="SoundcraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="SoundcraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="SoundcraftNotice">
+        <File Id="SoundcraftNoticeFile" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
+      </Component>
+      <Component Id="SoundcraftApp" Guid="10EC9BCF-8777-4906-988E-588AECB833C7">
+        <File Id="SoundcraftExe" Source="$(var.BinDir)\soundthai.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="SoundThai"
+              Description="SoundThai digital audio workstation" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="SoundcraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <!-- .scraft: SoundThai's own session format; SoundThai is its default app. -->
+        <ProgId Id="SoundThai.Session" Description="SoundThai Session" Icon="SoundcraftExe" IconIndex="0">
+          <Extension Id="scraft" ContentType="application/x-soundcraft-session">
+            <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <!-- Audio and MIDI files: offered under "Open with" (imported into a session), never forced
+             as the default. -->
+        <ProgId Id="SoundThai.Audio" Description="Audio File" Icon="SoundcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SoundThai.Audio\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <ProgId Id="SoundThai.Midi" Description="MIDI File" Icon="SoundcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SoundThai.Midi\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.wav\OpenWithProgids" Name="SoundThai.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.aif\OpenWithProgids" Name="SoundThai.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.aiff\OpenWithProgids" Name="SoundThai.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.flac\OpenWithProgids" Name="SoundThai.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mp3\OpenWithProgids" Name="SoundThai.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mid\OpenWithProgids" Name="SoundThai.Midi" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.midi\OpenWithProgids" Name="SoundThai.Midi" Value="" Type="string" />
+
+        <!-- "Open with" app list and the Run dialog (Win+R "soundthai"). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe" Name="FriendlyAppName" Value="SoundThai" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".scraft" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".wav" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".aif" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".aiff" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".flac" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".mp3" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".mid" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\soundthai.exe\SupportedTypes" Name=".midi" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\soundthai.exe" Value="[#SoundcraftExe]" Type="string" />
+      </Component>
+
+      <Component Id="SoundcraftCli" Guid="0FB200F7-6CAB-4520-801A-562E106936EB">
+        <File Id="SoundcraftCliExe" Source="$(var.BinDir)\soundthai-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

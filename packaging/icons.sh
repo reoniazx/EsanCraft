@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$ROOT/assets/app-icon"
 SVG="$DIR/icon.svg"
-ID="ai.storyteller.soundcraft"
+ID="ai.storyteller.soundthai"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -26,9 +26,9 @@ render() {
   resvg -w "$size" -h "$size" "$svg" "$out" </dev/null
 }
 
-render "$SVG" 1024 "$DIR/soundcraft-1024.png"
-# Runtime window/Dock icon on macOS (embedded by apps/soundcraft); other platforms use hicolor 256.
-render "$MAC" 512 "$DIR/soundcraft-macos-512.png"
+render "$SVG" 1024 "$DIR/soundthai-1024.png"
+# Runtime window/Dock icon on macOS (embedded by apps/soundthai); other platforms use hicolor 256.
+render "$MAC" 512 "$DIR/soundthai-macos-512.png"
 
 # Linux hicolor theme.
 for s in 16 24 32 48 64 128 256 512; do
@@ -44,18 +44,18 @@ for s in 16 20 24 32 40 48 64 128 256; do
   render "$SVG" "$s" "$TMP/ico-$s.png"
   ICO_PNGS+=("$TMP/ico-$s.png")
 done
-(cd "$ROOT" && cargo run -q -p xtask -- ico "$DIR/soundcraft.ico" "${ICO_PNGS[@]}")
+(cd "$ROOT" && cargo run -q -p xtask -- ico "$DIR/soundthai.ico" "${ICO_PNGS[@]}")
 
 # macOS .icns.
 if command -v iconutil >/dev/null; then
-  SET="$TMP/soundcraft.iconset"
+  SET="$TMP/soundthai.iconset"
   mkdir -p "$SET"
   for s in 16 32 128 256 512; do
     render "$MAC" "$s" "$SET/icon_${s}x${s}.png"
     render "$MAC" $((s * 2)) "$SET/icon_${s}x${s}@2x.png"
   done
-  iconutil -c icns -o "$DIR/soundcraft.icns" "$SET"
+  iconutil -c icns -o "$DIR/soundthai.icns" "$SET"
 else
-  echo "warning: iconutil not found (macOS only); soundcraft.icns not regenerated" >&2
+  echo "warning: iconutil not found (macOS only); soundthai.icns not regenerated" >&2
 fi
 echo "icons written to $DIR"

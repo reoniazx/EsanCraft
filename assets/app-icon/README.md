@@ -38,7 +38,7 @@ traced or copied. MIT OR Apache-2.0, like the code (see `ATTRIBUTION.md`).
 | `soundcraft-macos-512.png` | Runtime window/Dock icon on macOS (Apple grid margin) |
 | `soundcraft.icns` | macOS bundle icon |
 | `soundcraft.ico` | Windows icon (16–256 px), embedded in `soundcraft.exe` and used by the MSI |
-| `hicolor/<size>x<size>/apps/ai.storyteller.soundcraft.png` | Linux/FreeBSD icon theme, 16–512 px, plus `scalable/` |
+| `hicolor/<size>x<size>/apps/ai.storyteller.soundthai.png` | Linux/FreeBSD icon theme, 16–512 px, plus `scalable/` |
 
 Regenerate everything with `packaging/icons.sh` (needs `resvg`, and `iconutil` on macOS for the
 `.icns`).

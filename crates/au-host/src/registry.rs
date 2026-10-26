@@ -91,7 +91,7 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Maps an Audio Unit parameter unit (and a custom unit label) to a SoundCraft display unit.
+/// Maps an Audio Unit parameter unit (and a custom unit label) to a SoundThai display unit.
 pub(crate) fn unit_for(unit: u32, custom: &str) -> Unit {
     match unit {
         U_DECIBELS => Unit::Db,
@@ -114,7 +114,7 @@ pub(crate) fn unit_for(unit: u32, custom: &str) -> Unit {
     }
 }
 
-/// The SoundCraft description of one parameter (`None` for read-only/meter/broken ones).
+/// The SoundThai description of one parameter (`None` for read-only/meter/broken ones).
 pub(crate) fn param_info(p: &RawParam) -> Option<ParamInfo> {
     if p.flags & PARAM_FLAG_WRITABLE == 0 || p.flags & PARAM_FLAG_METER_READ_ONLY != 0 || p.unit == U_METERS {
         return None;

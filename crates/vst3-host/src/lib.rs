@@ -1,4 +1,4 @@
-//! SoundCraft's VST3 plugin host.
+//! SoundThai's VST3 plugin host.
 //!
 //! Scans the standard VST3 folders (plus `VST3_PATH`), loads `.vst3` bundles in-process and
 //! exposes each "Audio Module Class" as a [`soundcraft_dsp::Plugin`], so the mix engine treats
@@ -60,10 +60,10 @@ use std::path::{Path, PathBuf};
 /// Prefix of every hosted-VST3 plugin id.
 pub const ID_PREFIX: &str = "vst3:";
 
-/// The factory class category of audio processors (the only classes SoundCraft lists).
+/// The factory class category of audio processors (the only classes SoundThai lists).
 pub const AUDIO_MODULE_CLASS: &str = "Audio Module Class";
 
-/// The 16-byte class id inside a `vst3:<32 hex digits>` SoundCraft id (`None` for other ids).
+/// The 16-byte class id inside a `vst3:<32 hex digits>` SoundThai id (`None` for other ids).
 pub fn parse_id(id: &str) -> Option<[u8; 16]> {
     let hex = id.strip_prefix(ID_PREFIX)?;
     if hex.len() != 32 || !hex.is_ascii() {
@@ -80,7 +80,7 @@ pub fn parse_id(id: &str) -> Option<[u8; 16]> {
 /// One plugin found by a scan.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Vst3Descriptor {
-    /// SoundCraft id: `vst3:<class_id>`.
+    /// SoundThai id: `vst3:<class_id>`.
     pub id: String,
     /// The component's class id as 32 upper-case hex digits.
     pub class_id: String,

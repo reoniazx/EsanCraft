@@ -131,7 +131,7 @@ fn flac_rejects_unsupported_layouts() {
 fn bwf_roundtrip() {
     let bwf = BwfInfo {
         description: "Scene 12 take 3".into(),
-        originator: "SoundCraft".into(),
+        originator: "SoundThai".into(),
         originator_reference: "SC-0001".into(),
         origination_date: "2026-10-06".into(),
         origination_time: "12:34:56".into(),

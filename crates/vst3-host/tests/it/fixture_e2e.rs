@@ -20,7 +20,7 @@ fn scan_lists_both_audio_modules_but_not_the_controller_class() {
     // `uid()` lays out the first 8 bytes differently on Windows (COM GUID order).
     let want = if cfg!(windows) { "vst3:001D0A5C111122223333444455556666" } else { "vst3:5C0A1D00111122223333444455556666" };
     assert_eq!(g.id, want);
-    assert_eq!(g.vendor, "SoundCraft tests", "factory vendor fills an empty class vendor");
+    assert_eq!(g.vendor, "SoundThai tests", "factory vendor fills an empty class vendor");
     assert_eq!(g.version, "1.2.3");
     assert_eq!(g.sdk_version, "VST 3.8.0");
     assert_eq!(g.sub_categories, vec!["Fx"]);
@@ -55,7 +55,7 @@ fn info_exposes_visible_params_with_plain_ranges() {
 }
 
 /// #599: a plugin whose `normalizedParamToPlain` is the identity (JUCE, the SDK's default
-/// `Parameter`) gives SoundCraft a 0..1 range; its real values are only in its own text, which the
+/// `Parameter`) gives SoundThai a 0..1 range; its real values are only in its own text, which the
 /// editor handle reads from the controller on the main thread only (see `editor_main_thread`).
 #[test]
 fn identity_mapped_param_text_is_read_on_the_main_thread_only() {

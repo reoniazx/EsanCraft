@@ -3,6 +3,9 @@
 use crate::SoundApp;
 
 #[cfg(not(target_arch = "wasm32"))]
+const SOUNDTHAI: craft_update::App = craft_update::App::new("soundthai", "SoundThai", "Recording, editing and mixing audio", "reoniazx/SoundThai");
+
+#[cfg(not(target_arch = "wasm32"))]
 use craft_update::updater::{Action, Status, Updater};
 
 pub(crate) struct Runtime {
@@ -21,7 +24,7 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&craft_update::suite::SOUNDCRAFT, env!("CARGO_PKG_VERSION")),
+            updater: Updater::new(&SOUNDTHAI, env!("CARGO_PKG_VERSION")),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -82,7 +85,7 @@ pub(crate) fn show(app: &mut SoundApp, ctx: &egui::Context) {
         (rt.manual_window_open, rt.status_message) = match rt.updater.status() {
             Status::Idle => (false, None),
             Status::Checking => (true, None),
-            Status::UpToDate => (true, Some(format!("SoundCraft {} is currently the newest version available.", env!("CARGO_PKG_VERSION")))),
+            Status::UpToDate => (true, Some(format!("SoundThai {} is currently the newest version available.", env!("CARGO_PKG_VERSION")))),
             Status::Failed(e) => (true, Some(format!("Could not check for updates:\n{e}"))),
         };
     }

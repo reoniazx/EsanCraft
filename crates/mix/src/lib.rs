@@ -1,4 +1,4 @@
-//! The SoundCraft mix engine.
+//! The SoundThai mix engine.
 //!
 //! [`MixEngine::render`] produces one block of the main output for a session at a timeline
 //! position: clips (with clip gain and fades) → trim/phase → inserts → pre-fader sends → fader and

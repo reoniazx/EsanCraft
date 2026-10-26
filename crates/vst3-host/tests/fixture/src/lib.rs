@@ -645,7 +645,7 @@ const CLASSES: [(TUID, &str, &str, &str); 3] = [
 impl IPluginFactoryTrait for Factory {
     unsafe fn getFactoryInfo(&self, info: *mut PFactoryInfo) -> tresult {
         let i = unsafe { &mut *info };
-        copy_c8("SoundCraft tests", &mut i.vendor);
+        copy_c8("SoundThai tests", &mut i.vendor);
         copy_c8("https://example.invalid", &mut i.url);
         copy_c8("tests@example.invalid", &mut i.email);
         i.flags = PFactoryInfo_::FactoryFlags_::kUnicode as i32;

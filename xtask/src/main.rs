@@ -40,7 +40,7 @@ const LAYERS: &[(&str, u8)] = &[
 /// Standalone format crates: no workspace dependencies at all (publishable on their own).
 const STANDALONE: &[&str] = &["time", "audio-io", "midi", "video", "dsp"];
 const UI_CRATES: &[&str] = &["craft-ui", "egui", "eframe", "winit", "egui_kittest", "rfd", "egui-wgpu", "egui_glow"];
-const EXEMPT: &[&str] = &["soundcraft", "soundcraft-cli", "soundcraft-web", "xtask"];
+const EXEMPT: &[&str] = &["soundthai", "soundthai-cli", "soundthai-web", "xtask"];
 
 fn layers() -> Result<(), String> {
     let out =
@@ -117,7 +117,7 @@ fn assets() -> Result<(), String> {
 }
 
 fn parity() -> Result<(), String> {
-    cargo(&["run", "-q", "-p", "soundcraft-cli", "--", "parity", "--write", "docs/parity-checklist.md"])
+    cargo(&["run", "-q", "-p", "soundthai-cli", "--", "parity", "--write", "docs/parity-checklist.md"])
 }
 
 /// Crates that must compile for the web.
@@ -141,9 +141,9 @@ fn wasm() -> Result<(), String> {
         args.push("-p");
         args.push(c);
     }
-    if root().join("apps/soundcraft-web/Cargo.toml").exists() {
+    if root().join("apps/soundthai-web/Cargo.toml").exists() {
         args.push("-p");
-        args.push("soundcraft-web");
+        args.push("soundthai-web");
     }
     cargo(&args)
 }

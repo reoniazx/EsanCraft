@@ -111,7 +111,7 @@ pub fn audio_systems() -> Vec<AudioSystem> {
 
 /// True when a cpal error means the stream is dead and only a rebuild can restore audio. cpal 0.18
 /// reports every operation through one [`cpal::Error`]: `DeviceNotAvailable` means the device went
-/// away, and `StreamInvalidated` explicitly requires the stream to be rebuilt. SoundCraft has no
+/// away, and `StreamInvalidated` explicitly requires the stream to be rebuilt. SoundThai has no
 /// in-place rebuild, so both map to the existing actionable "reconnect audio device" trouble
 /// instead of leaving a dead stream silently logging. A rerouted default device
 /// (`DeviceChanged`) keeps playing, and an xrun is transient, so neither is a lost stream.

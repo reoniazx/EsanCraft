@@ -242,7 +242,7 @@ fn scaled_rect(rect: Rect, scale: f32) -> Rect {
 }
 
 pub fn title(app: &SoundApp, window: MainWindow) -> String {
-    format!("{}{} — SoundCraft — {}", app.engine.session().name, if app.engine.is_dirty() { " *" } else { "" }, window.label())
+    format!("{}{} — SoundThai — {}", app.engine.session().name, if app.engine.is_dirty() { " *" } else { "" }, window.label())
 }
 
 fn surface(app: &mut SoundApp, ui: &mut Ui, window: MainWindow) {

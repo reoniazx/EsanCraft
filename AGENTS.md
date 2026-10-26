@@ -1,3 +1,7 @@
+# SoundThai fork
+
+This repository is the independent SoundThai app. See `docs/soundthai-fork.md` for branding, configuration isolation and upstream merges. Application packages live under `apps/soundthai*`; core crate names remain `soundcraft-*`. The following SoundCraft engineering standards are inherited.
+
 # SoundCraft — instructions for agents
 
 SoundCraft is a clean-room, open-source, pure-Rust digital audio workstation targeting Avid Pro Tools parity — and superiority (speed, openness, agent control). It runs natively on macOS, Windows, Linux and FreeBSD, and on the web via WASM. Siblings with the same conventions: `../photocraft` (Photoshop), `../vectorcraft` (Illustrator), `../filmcraft` (Premiere), `../lightcraft` (Lightroom), `../pdfcraft` (Acrobat), `../effectcraft` (After Effects), `../designcraft` (InDesign).
@@ -45,7 +49,7 @@ People trust SoundCraft with their recordings; a crash loses takes. **This outra
 | L4 | `soundcraft-engine`, `soundcraft-playback` | Command registry, undo, editing, import/export/bounce, parity catalog; audio device I/O (cpal) |
 | L5 | `soundcraft-automation` | MCP server + control-channel client |
 | L6 | `soundcraft-ui-egui` | The swappable UI (egui) |
-| apps | `soundcraft`, `soundcraft-cli`, `soundcraft-web` | Entry points |
+| apps | `soundcraft`, `soundthai-cli`, `soundthai-web` | Entry points |
 
 Nothing below L6 depends on egui/eframe/winit/rfd. The UI is thin: panels read engine state and act through `engine.execute(id, params)`.
 
@@ -55,10 +59,10 @@ User-visible behaviour = a command in `crates/engine/src/cmd/*` (id, label, menu
 Parity is measured, not guessed: `crates/engine/catalog/menus.txt` lists the incumbent's menu leaves (names only). `cargo xtask parity` writes `docs/parity-checklist.md` (generated; the hand-written assessment is `docs/target-app-parity.md`); a test enforces a floor that only rises.
 
 ## Running and looking at the app
-- `cargo run --release -p soundcraft -- --demo --control 0` (demo session + control channel on a free port; the port is printed).
+- `cargo run --release -p soundthai -- --demo --control 0` (demo session + control channel on a free port; the port is printed).
 - Drive it: JSON lines over TCP, e.g. `{"id":1,"method":"engine.execute","params":{"command":"track.new","params":{"count":2,"format":"stereo"}}}`, then `{"id":2,"method":"ui.screenshot","params":{"path":"/tmp/shot.png"}}`. Methods: `crates/ui-egui/src/control.rs`, docs: `docs/control-protocol.md`.
 - Offscreen UI render (no window, no focus stealing): `cargo run -p soundcraft-ui-egui --example ui_shot -- out.png [script.jsonl]`.
-- Headless: `soundcraft-cli run --demo --cmd 'mix.volume={"track":"Kick","db":-6}' --bounce out.wav`; MCP: `soundcraft-cli mcp [--connect PORT]`.
+- Headless: `soundthai-cli run --demo --cmd 'mix.volume={"track":"Kick","db":-6}' --bounce out.wav`; MCP: `soundthai-cli mcp [--connect PORT]`.
 - **For UI work, look at the result** (render, read the PNG) and compare with `plan/protools/screenshots/`.
 - Shell gotcha: `mv`/`cp` are aliased interactive here — use `/bin/mv -f` / `/bin/cp -f`.
 - Parallel agents: separate `CARGO_TARGET_DIR` per agent; edit only the crates you own; write manifests atomically; delete your target dir when done (disk).

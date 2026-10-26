@@ -29,7 +29,7 @@ fn main() {
     ed.set_param("nope", 1.0);
     assert!(ed.idle().is_empty(), "set_param is not reported back as an edit");
     // #599: an identity-mapped (JUCE-style) parameter shows the plugin's own text, verbatim, with
-    // its units appended once; correctly mapped parameters and choices keep SoundCraft's format.
+    // its units appended once; correctly mapped parameters and choices keep SoundThai's format.
     assert_eq!(ed.value_text("13", 0.375).as_deref(), Some("\u{2212}6.0 dB"));
     assert_eq!(ed.value_text("13", 1.0).as_deref(), Some("24.0 dB"));
     assert_eq!(ed.value_text("14", 0.25).as_deref(), Some("3.0 dB"), "units already in the text");

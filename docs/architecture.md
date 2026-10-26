@@ -21,7 +21,7 @@ L3  mix                                         (the mix engine)
 L4  engine      playback                        (commands, undo, I/O · audio devices)
 L5  automation                                  (MCP server, control-channel client)
 L6  ui-egui                                     (the user interface)
-    apps: soundcraft (desktop) · soundcraft-cli · soundcraft-web (wasm)
+    apps: soundcraft (desktop) · soundthai-cli · soundthai-web (wasm)
 ```
 
 ## The document
@@ -71,7 +71,7 @@ by the UI thread (see README › Logs).
 ## Agent control
 
 The desktop app's control channel (JSON lines over TCP) exposes engine commands, inspection,
-synthetic input and screenshots; `soundcraft-cli mcp` wraps either a headless engine or a running
+synthetic input and screenshots; `soundthai-cli mcp` wraps either a headless engine or a running
 app as an MCP server. See `control-protocol.md` and `mcp.md`.
 
 ## Revision history

@@ -274,7 +274,7 @@ fn load_preset(e: &mut Engine, p: &Value) -> Result<Value> {
     let text = crate::io::read_text(&path)?;
     let v: Value = serde_json::from_str(&text).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
     if v.get("format").and_then(Value::as_str) != Some(PRESET_FORMAT) {
-        return Err(EngineError::Io(format!("{path}: not a SoundCraft track preset")));
+        return Err(EngineError::Io(format!("{path}: not a SoundThai track preset")));
     }
     let mut mixer: soundcraft_model::Mixer =
         serde_json::from_value(v.get("mixer").cloned().unwrap_or(Value::Null)).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;

@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn exports_the_selected_clips_and_refuses_an_empty_selection() {
         let mut e = crate::demo::demo_engine();
-        let dir = std::env::temp_dir().join(format!("soundcraft-clips-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("soundthai-clips-{}", std::process::id()));
         let p = json!({"dir": dir.to_string_lossy()});
         e.execute("edit.select_none", &json!({})).unwrap();
         assert!(e.execute("file.export_clips", &p).is_err());

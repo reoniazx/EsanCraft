@@ -118,7 +118,7 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Maps a VST3 unit label to a SoundCraft display unit.
+/// Maps a VST3 unit label to a SoundThai display unit.
 pub(crate) fn unit_from_label(units: &str) -> Unit {
     match units.trim().to_ascii_lowercase().as_str() {
         "db" => Unit::Db,

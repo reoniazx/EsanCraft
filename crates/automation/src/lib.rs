@@ -1,10 +1,10 @@
-//! Agent control for SoundCraft.
+//! Agent control for SoundThai.
 //!
 //! - [`Backend`]: something that answers control-protocol methods (`engine.execute`,
 //!   `session.inspect`, `ui.*`…). [`Headless`] runs an in-process engine; [`Remote`] talks to a
 //!   running app's `--control` port.
 //! - [`mcp::Server`]: a Model Context Protocol server over stdio (newline-delimited JSON-RPC 2.0)
-//!   exposing SoundCraft as tools and resources.
+//!   exposing SoundThai as tools and resources.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod mcp;
@@ -37,7 +37,7 @@ impl Headless {
     }
 
     /// Confine every file the session's commands read and write to `roots`
-    /// (`soundcraft-cli mcp --automation-read-root … --automation-write-root …`).
+    /// (`soundthai-cli mcp --automation-read-root … --automation-write-root …`).
     pub fn with_automation_roots(mut self, roots: Option<Arc<AutomationRoots>>) -> Self {
         self.roots = roots;
         self
@@ -59,7 +59,7 @@ impl Headless {
                 Ok(soundcraft_engine::inspect::session(&self.engine, params.get("detail").and_then(Value::as_str) == Some("full")))
             }
             m if m.starts_with("ui.") => {
-                Err(format!("`{m}` needs the desktop app: start `soundcraft --control 0` and use `soundcraft-cli mcp --connect PORT`"))
+                Err(format!("`{m}` needs the desktop app: start `soundthai --control 0` and use `soundthai-cli mcp --connect PORT`"))
             }
             other => Err(format!("unknown method `{other}`")),
         }
@@ -109,7 +109,7 @@ impl Remote {
                 Err(e) => last = e.to_string(),
             }
         }
-        let s = stream.ok_or_else(|| format!("cannot reach SoundCraft at {}: {last}", self.addr))?;
+        let s = stream.ok_or_else(|| format!("cannot reach SoundThai at {}: {last}", self.addr))?;
         s.set_read_timeout(Some(Duration::from_secs(120))).map_err(|e| e.to_string())?;
         let r = s.try_clone().map_err(|e| e.to_string())?;
         self.conn = Some((s, BufReader::new(r)));
@@ -164,7 +164,7 @@ impl Backend for Remote {
         true
     }
     fn describe(&self) -> String {
-        format!("SoundCraft app at {}", self.addr)
+        format!("SoundThai app at {}", self.addr)
     }
 }
 

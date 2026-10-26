@@ -3974,29 +3974,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "soundcraft"
-version = "0.13.1"
-dependencies = [
- "chrono",
- "craft-update",
- "eframe",
- "egui",
- "log",
- "muda",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "rfd",
- "serde_json",
- "soundcraft-audio-io",
- "soundcraft-engine",
- "soundcraft-playback",
- "soundcraft-ui-egui",
- "winit",
- "winresource",
-]
-
-[[package]]
 name = "soundcraft-au-host"
 version = "0.13.1"
 dependencies = [
@@ -4039,17 +4016,6 @@ dependencies = [
  "soundcraft-dsp",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "soundcraft-cli"
-version = "0.13.1"
-dependencies = [
- "serde_json",
- "soundcraft-audio-io",
- "soundcraft-automation",
- "soundcraft-dsp",
- "soundcraft-engine",
 ]
 
 [[package]]
@@ -4208,7 +4174,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "soundcraft-web"
+name = "soundthai"
+version = "0.13.1"
+dependencies = [
+ "chrono",
+ "craft-update",
+ "eframe",
+ "egui",
+ "log",
+ "muda",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "rfd",
+ "serde_json",
+ "soundcraft-audio-io",
+ "soundcraft-engine",
+ "soundcraft-playback",
+ "soundcraft-ui-egui",
+ "winit",
+ "winresource",
+]
+
+[[package]]
+name = "soundthai-cli"
+version = "0.13.1"
+dependencies = [
+ "serde_json",
+ "soundcraft-audio-io",
+ "soundcraft-automation",
+ "soundcraft-dsp",
+ "soundcraft-engine",
+]
+
+[[package]]
+name = "soundthai-web"
 version = "0.13.1"
 dependencies = [
  "eframe",

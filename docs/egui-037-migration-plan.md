@@ -51,7 +51,7 @@ clues, never as current acceptance.
 ## 1. Decision in one page
 
 SoundCraft is not starting from a 0.36 `update`-only application. It already uses the root-`Ui`
-lifecycle: `apps/soundcraft/src/main.rs:37-94` implements `eframe::App::logic`/`App::ui`, and
+lifecycle: `apps/soundthai/src/main.rs:37-94` implements `eframe::App::logic`/`App::ui`, and
 `crates/ui-egui/src/lib.rs:1136` / `:1232` already take `&egui::Context` for logic and
 `&mut egui::Ui` for layout. Upstream 0.36.2 has the same `App::logic`/`App::ui` shape, so this
 migration must **not** rewrite the app into `update` or introduce `Context::root_ui` bridges.
@@ -202,8 +202,8 @@ Relevant package targets:
 | --- | --- | --- |
 | `crates/ui-egui` (library) | `egui`; `craft-ui` docking/buttons | `Cargo.toml:24`; dev `egui_kittest` with `wgpu,snapshot` at `:31`; `build.rs` bakes contributor credits (no asset change) |
 | `apps/soundcraft` (desktop binary) | `eframe`, `egui` | `Cargo.toml:21` features `default_fonts,wgpu,accesskit,wayland,x11,links`; **missing `clipboard`** compared with 0.36's implicit native clipboard; Windows `winresource`; macOS `muda`/`objc2` |
-| `apps/soundcraft-web` (wasm binary) | `eframe`, `egui` | `Cargo.toml:27` features `default_fonts,wgpu,accesskit`; `rfd` browser picker; `WebRunner` in `src/web.rs` |
-| `apps/soundcraft-cli` | none | Headless engine/control/MCP; no egui dependency |
+| `apps/soundthai-web` (wasm binary) | `eframe`, `egui` | `Cargo.toml:27` features `default_fonts,wgpu,accesskit`; `rfd` browser picker; `WebRunner` in `src/web.rs` |
+| `apps/soundthai-cli` | none | Headless engine/control/MCP; no egui dependency |
 | `crates/{time,audio-io,midi,dsp,model,mix,engine,playback,automation}` | none | Must stay UI-free; `cargo xtask layers` enforces this |
 | `xtask` | none | `ci`, `layers`, `assets`, `parity`, `wasm` gates |
 
@@ -218,14 +218,14 @@ root patch and need no dependency change; they still need to build as part of th
 
 | Path | Current shape | Migration relevance |
 | --- | --- | --- |
-| Native shell | `apps/soundcraft/src/main.rs:37-105` `impl eframe::App`: `logic`, `raw_input_hook`, `ui`, `on_exit`; `run_native` at `:266` | `App::logic` and `App::ui` both run inside `Context::run_ui`, once per layout pass; `run_logic` also calls `logic` while hidden. Do not model native logic as a once-per-frame hook outside `run_ui` |
+| Native shell | `apps/soundthai/src/main.rs:37-105` `impl eframe::App`: `logic`, `raw_input_hook`, `ui`, `on_exit`; `run_native` at `:266` | `App::logic` and `App::ui` both run inside `Context::run_ui`, once per layout pass; `run_logic` also calls `logic` while hidden. Do not model native logic as a once-per-frame hook outside `run_ui` |
 | Native dropped files | `main.rs:52-58` calls `SoundApp::take_dropped_files(ctx)` from `logic`; `sampler_window.rs:88-100` clones `ctx.input().raw.dropped_files` and does not clear it | At the start of `App::ui` — before the `!fonts_ready` early return at `lib.rs:1232-1239` — capture and clear `raw.dropped_files` through `input_mut`, together with the drop-time pointer position, into a one-shot pending queue. Process that queue after layout and sampler drop targets exist, for every UI pass including a forced hidden paint, and once fonts are ready. A first-frame or first forced-hidden-paint drop must not be lost; `run_logic` leaves the last pass's input in place, so later hidden ticks must not replay it |
-| Native control server | `apps/soundcraft/src/control_server.rs:35-140`; `crates/ui-egui/src/control.rs:49-65` drain | Queue/reply must execute once per consumed request, including hidden ticks and multiple passes |
+| Native control server | `apps/soundthai/src/control_server.rs:35-140`; `crates/ui-egui/src/control.rs:49-65` drain | Queue/reply must execute once per consumed request, including hidden ticks and multiple passes |
 | Native screenshots | `control.rs:221-234`, `:244-279`; `docs/control-protocol.md:25` | Old `Event::Screenshot`/`UserData` path must become callback based |
 | Native separate Mix window | `mix_window.rs:25-38` `show_viewport_immediate`; `separate_closed` at `:41` | Child root `Ui`, focus/close, hidden-parent behaviour; never call `root_ui` from the child |
 | Native macOS menu | `native_menu.rs`; `main.rs:43-50,286-301` | `muda` events processed in `logic`; no egui pass required |
-| Native Windows renderer | `apps/soundcraft/src/graphics.rs:11-30`; `main.rs:263-265` | DX12/FXC defaults are deliberate app fixes; preserve and measure the 0.37 shader cost |
-| Web shell | `apps/soundcraft-web/src/web.rs:194-218` `WebShell` `logic`/`ui`/`raw_input_hook`; `start` `:18-50`; `take_drops` at `:136-160` already clears the raw list | Same `SoundApp` lifecycle; route drop/picker completion from the known UI phase too, so both hosts share one rule; browser file picker/drop/download; no control channel |
+| Native Windows renderer | `apps/soundthai/src/graphics.rs:11-30`; `main.rs:263-265` | DX12/FXC defaults are deliberate app fixes; preserve and measure the 0.37 shader cost |
+| Web shell | `apps/soundthai-web/src/web.rs:194-218` `WebShell` `logic`/`ui`/`raw_input_hook`; `start` `:18-50`; `take_drops` at `:136-160` already clears the raw list | Same `SoundApp` lifecycle; route drop/picker completion from the known UI phase too, so both hosts share one rule; browser file picker/drop/download; no control channel |
 | Headless render example | `crates/ui-egui/examples/ui_shot.rs` uses `Harness::builder().build_ui_state` and calls `app.logic` inside the UI closure at `:65-70` | Keep logic then UI inside the harness closure, matching both native and web; assert effects across discarded passes |
 | UI tests | 54 integration files; 108 `#[test]` in `crates/ui-egui/src` plus 156 in `crates/ui-egui/tests` (264 total); 1,159 workspace `#[test]` occurrences at HEAD inspection | Existing geometry/roles/command tests are the regression base; counts are the comparison point for later selected-test evidence; no committed kittest snapshot files exist |
 
@@ -240,7 +240,7 @@ root patch and need no dependency change; they still need to build as part of th
 - `cfg(unix)`: `config.rs:299` (settings directory/permissions).
 - `cfg(target_os = "linux")` / FreeBSD: `fonts.rs` fontconfig/`fc-match`, packaging; Linux CI is
   X11+Wayland.
-- `cfg(not(target_arch = "wasm32"))` in `apps/soundcraft/Cargo.toml:26-27` gives native `rfd`.
+- `cfg(not(target_arch = "wasm32"))` in `apps/soundthai/Cargo.toml:26-27` gives native `rfd`.
 
 These cfgs are part of acceptance. A green Linux check is not a macOS native-menu, Windows IME,
 Wayland clipboard, or browser workflow result.
@@ -286,7 +286,7 @@ those are handled in §5 and §12.
 | A3 | `panels.rs:69`, `:98`, `:110`; all `WidgetType::*` occurrences | `WidgetType` is a deprecated alias for `accesskit::Role`; `SelectableLabel`/`Checkbox` are not accesskit roles | `SelectableLabel`→`Role::Button`, `Checkbox`→`Role::CheckBox`, `ComboBox`→`Role::ComboBox`, `Slider`→`Role::Slider`, `RadioButton`→`Role::RadioButton`; use `egui::Role` or `egui::accesskit::Role` consistently |
 | A4 | `panels.rs:155-185` | `scroll_area::State.offset` is private; public reads are `clamped_offset()`/`unclamped_offset()` | Read `out.state.clamped_offset().y`; apply a pending target through `ScrollArea::vertical_scroll_offset` next frame (no private writes) |
 | A5 | `Cargo.toml:50-52`; all `Id::new`/`ui.id()` uses | `Id::new` deprecated for `Id::unique`; `Ui::id`/`UiBuilder::id` renamed to `scope_id`; `AsId` is deprecated (`egui/src/id.rs:8-12`) but still present | Mechanical `Id::new`→`Id::unique`, `ui.id()`→`ui.scope_id()`, `UiBuilder::id`→`scope_id`; same hash, no state change. `clippy -D warnings` makes this blocking |
-| A6 | `crates/ui-egui/Cargo.toml:24,31`; `apps/soundcraft/Cargo.toml:21`; `egui_kittest-0.37.0/Cargo.toml` (`[dependencies.egui]`, `[dev-dependencies.egui]`) | 0.37 `egui` declares `default = []`; `default_fonts`/`monochrome_emoji_fonts` are opt-in. eframe's selected `default_fonts` enables ordinary bundled faces for the binary; the new `egui/monochrome_emoji_fonts` must be selected explicitly. kittest's normal `egui` dependency is `default-features = false`; only kittest's OWN `[dev-dependencies]` enable the font features, and dev-dependencies do not propagate. An isolated `cargo test -p soundcraft-ui-egui` graph is therefore predicted to have no bundled fonts | Enable `default_fonts` and `monochrome_emoji_fonts` on SoundCraft's egui dependency for the UI/test root and prove unification with `cargo tree -e features`; treat the no-fonts prediction as a resolution claim until that command runs. See §9 |
+| A6 | `crates/ui-egui/Cargo.toml:24,31`; `apps/soundthai/Cargo.toml:21`; `egui_kittest-0.37.0/Cargo.toml` (`[dependencies.egui]`, `[dev-dependencies.egui]`) | 0.37 `egui` declares `default = []`; `default_fonts`/`monochrome_emoji_fonts` are opt-in. eframe's selected `default_fonts` enables ordinary bundled faces for the binary; the new `egui/monochrome_emoji_fonts` must be selected explicitly. kittest's normal `egui` dependency is `default-features = false`; only kittest's OWN `[dev-dependencies]` enable the font features, and dev-dependencies do not propagate. An isolated `cargo test -p soundcraft-ui-egui` graph is therefore predicted to have no bundled fonts | Enable `default_fonts` and `monochrome_emoji_fonts` on SoundCraft's egui dependency for the UI/test root and prove unification with `cargo tree -e features`; treat the no-fonts prediction as a resolution claim until that command runs. See §9 |
 | A7 | `control.rs` and `Cargo.toml:21` | 0.36 eframe forced `egui-winit/clipboard` in its native dependency; 0.37 gates it behind `eframe/clipboard` | Add `"clipboard"` to native `eframe` features. Without it, copy/paste silently uses egui's simulated clipboard instead of the OS clipboard |
 | A8 | `crates/ui-egui/src/lib.rs:1136-1139` | After a completed `run_ui`, `current_pass_index()` is zero (`end_pass` takes the output), so the `>0` guard does not by itself skip an ordinary hidden tick. The real hazards are stale input/time in `run_logic` and duplicated non-idempotent work | Keep public host ordering; separate fresh input from background queues and monotonic deadlines (§6.2); test hidden and repeated passes |
 | A9 | `main.rs:52-58`; `sampler_window.rs:88-100`; `lib.rs:1232-1239`; web `web.rs:136-160` | `ctx.input()` in `run_logic` is the last UI pass's input; native `dropped_files` is not consumed. Visibility does not identify a logic-only callback: `RequestPaintWhileHidden` can run `App::ui` while minimized/occluded. `ui` returns before layout while `!fonts_ready`, so a drop read only after layout is lost on the first frame | Capture and clear `raw.dropped_files` through `input_mut` at the top of `ui`, before the `!fonts_ready` return, into a one-shot queue; process it after layout for every UI pass including a forced hidden paint. Never gate on `visible()` |
@@ -294,7 +294,7 @@ those are handled in §5 and §12.
 | A11 | `bounce.rs:68`; `shortcuts.rs:64-101`; `edit_window.rs:341` | 0.37 adds `MouseWheelSource`, kinetic scrolling and rubber-banding; smooth scroll values can change | Test wheel vs trackpad source, phase and momentum; make deterministic test styles (disable kinetic/rubber-band where exact offsets are asserted) |
 | A12 | `egui_kittest` 0.37 `accessibility.rs` | Every visible input widget must have an accessible name; otherwise the harness panics after a settled step | Add names to all custom-painted controls and text fields; audit every window/dialog; do not disable the check globally |
 | A13 | `egui_kittest` 0.37 `builder.rs` | Missing glyphs panic by default | Enable bundled fonts/emoji and fix the app's uncovered glyphs (§9); use `allow_missing_glyphs` only in a deliberately labelled tofu test, never for the suite |
-| A14 | `apps/soundcraft-web/src/web.rs:194-218` | Same App lifecycle; browser has no control channel. `eframe`'s web runner also calls `logic` then `ui` inside `run_ui` per pass | Apply the same known-phase rules, not a visibility split; do not make browser pickers or downloads part of a multi-pass paint path |
+| A14 | `apps/soundthai-web/src/web.rs:194-218` | Same App lifecycle; browser has no control channel. `eframe`'s web runner also calls `logic` then `ui` inside `run_ui` per pass | Apply the same known-phase rules, not a visibility split; do not make browser pickers or downloads part of a multi-pass paint path |
 
 ### 4.1 Not incompatibilities
 
@@ -404,9 +404,9 @@ Before accepting P1, in a managed build job with a complete registry index:
    craft-libs SHA.
 2. `cargo tree -d --locked` shows no 0.36.2 `egui`/`ecolor`/`emath`/`epaint`, no duplicate
    `winit`, and no second `accesskit` family.
-3. `cargo tree -e features -p soundcraft --locked` shows `eframe/clipboard`,
+3. `cargo tree -e features -p soundthai --locked` shows `eframe/clipboard`,
    `egui/default_fonts`, `egui/monochrome_emoji_fonts`, and the intended winit/accesskit features.
-   Repeat for `-p soundcraft-web` under the wasm target and check `eframe` web clipboard/file
+   Repeat for `-p soundthai-web` under the wasm target and check `eframe` web clipboard/file
    features. Also inspect the SoundCraft UI test graph with
    `cargo tree -e features -p soundcraft-ui-egui --locked` (dev-dependencies included) and the
    production-only graph with `cargo tree -e features,no-dev -p soundcraft-ui-egui --locked`:
@@ -414,7 +414,7 @@ Before accepting P1, in a managed build job with a complete registry index:
    the test graph. Keep the three roots distinct: the production binary, the SoundCraft UI test
    target and kittest's own test root. kittest's normal `[dependencies] egui` is `default-features = false`; only its own
    `[dev-dependencies]` enable fonts, and a dependency's dev-dependencies do not propagate.
-4. `cargo check --locked --target wasm32-unknown-unknown -p soundcraft-ui-egui -p soundcraft-web`.
+4. `cargo check --locked --target wasm32-unknown-unknown -p soundcraft-ui-egui -p soundthai-web`.
 5. `cargo check --locked` from a clean cache; no source replacement, no local path, no branch
    dependency, and all git revisions reachable by a clean clone.
 6. After the pin, add Dependabot `ignore` entries for `egui`, `ecolor`, `emath`, `epaint`,
@@ -438,7 +438,7 @@ copy of egui to solve compile errors. The relevant external fixes are:
   set. A pin without the bounded W15 transfer, W15P/P2b, E21b/P7b or the P7c fixes
   supports none of the complete clipboard, PRIMARY, surrounding-text or
   selection/deferred-child acceptance rows.
-- The app-local Windows DX12/FXC choice in `apps/soundcraft/src/graphics.rs:11-30` is a
+- The app-local Windows DX12/FXC choice in `apps/soundthai/src/graphics.rs:11-30` is a
   SoundCraft fix and must be preserved. Do not delete it because the dependency changed.
 - `muda` 0.21.2, `rfd` 0.17.2 and `image` 0.25.10 are non-egui dependencies; keep them unless a
   separate, reviewed reason exists. `build.rs` Windows resources and `ATTRIBUTION.md` assets are
@@ -936,7 +936,7 @@ Regression assertions:
 
 ## 11. GPU, video, textures and rendering
 
-- Preserve `apps/soundcraft/src/graphics.rs:11-30`: Windows initializes only DX12 and defaults to
+- Preserve `apps/soundthai/src/graphics.rs:11-30`: Windows initializes only DX12 and defaults to
   FXC because GL initialization and missing DXC/DXIL break real machines. The 0.37 family keeps
   wgpu 30.0.1 and winit 0.30.13; do not change these defaults as part of the egui bump.
 - E2+E3 (surface fit and error-scoped configure/renderer creation) should be required in the
@@ -1004,15 +1004,15 @@ Regression assertions:
   If unavailable, this is an explicit rollout blocker, not a pass.
 - FreeBSD: existing nightly workflow; compile/packaging can be checked, but native UI/IME/audio
   acceptance needs an actual FreeBSD environment (not provided here).
-- Native control channel: use `--control 0` and `SOUNDCRAFT_NO_PREFS`/a scratch
-  `SOUNDCRAFT_CONFIG_DIR` for isolation; never arm/monitor/record in an automated UI run
+- Native control channel: use `--control 0` and `SOUNDTHAI_NO_PREFS`/a scratch
+  `SOUNDTHAI_CONFIG_DIR` for isolation; never arm/monitor/record in an automated UI run
   (`docs/control-protocol.md:22-25`).
 
 ### 12.2 Web (wasm)
 
-- `cargo check --target wasm32-unknown-unknown -p soundcraft-ui-egui -p soundcraft-web`
+- `cargo check --target wasm32-unknown-unknown -p soundcraft-ui-egui -p soundthai-web`
   (part of `cargo xtask wasm`) is a compile gate only.
-- `cd apps/soundcraft-web && trunk build --release` produces `dist/web`; use
+- `cd apps/soundthai-web && trunk build --release` produces `dist/web`; use
   `packaging/web/package.sh` for the zip and relative-path checks. Record raw and compressed wasm
   size, first-interactive time, WebGPU and `?webgl` fallback, `?empty` and demo sessions.
 - Browser workflows: open demo, use the file picker and drag/drop, import audio/MIDI, save a
@@ -1042,13 +1042,13 @@ cargo test --workspace --all-targets --locked
 cargo xtask assets
 cargo xtask layers
 cargo xtask wasm
-cargo check --locked --target wasm32-unknown-unknown -p soundcraft-ui-egui -p soundcraft-web
+cargo check --locked --target wasm32-unknown-unknown -p soundcraft-ui-egui -p soundthai-web
 cargo metadata --locked --format-version 1
 cargo tree -d --locked
-cargo tree -e features -p soundcraft --locked
+cargo tree -e features -p soundthai --locked
 ```
 
-On Windows add `cargo build --release --locked -p soundcraft -p soundcraft-cli`, the VM GUI
+On Windows add `cargo build --release --locked -p soundthai -p soundthai-cli`, the VM GUI
 workflow, and the FXC startup capture. On Linux add X11 and Wayland native runs. Add
 `trunk build --release` and a browser workflow. Selected optional features to check explicitly:
 native `eframe/clipboard`, `accesskit`, `wgpu`, `x11`, `wayland`; web `wgpu` with WebGL2 fallback;
