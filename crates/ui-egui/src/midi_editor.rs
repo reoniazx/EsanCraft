@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The MIDI Editor: a piano roll with a velocity lane, docked under the Edit window.
 
 use crate::SoundApp;

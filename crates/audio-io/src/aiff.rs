@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Native AIFF / AIFF-C reader and writer (Apple "Audio Interchange File Format" 1.3 and the
 //! AIFF-C draft: big-endian IFF chunks, 80-bit IEEE extended sample rate).
 

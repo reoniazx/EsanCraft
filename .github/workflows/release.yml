@@ -1,3 +1,4 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 name: Release
 
 on:
@@ -22,8 +23,8 @@ jobs:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
-      app-name: soundthai
-      app-title: SoundThai
+      app-name: esancraft
+      app-title: EsanCraft
       version: ${{ inputs.version }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

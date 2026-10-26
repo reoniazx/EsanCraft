@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Bounce Mix renders a slice per frame behind a progress window, so the app keeps drawing and the
 //! bounce can be cancelled.
 

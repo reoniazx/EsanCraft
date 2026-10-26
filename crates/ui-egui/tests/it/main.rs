@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Integration tests, built as one test binary: each file is a module.
 //!
 //! Tests that switch the process-wide Light/Dark palette, and `recovery.rs` (whose autosave locks

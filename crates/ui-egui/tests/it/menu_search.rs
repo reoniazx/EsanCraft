@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Opening an insert, instrument, send or I/O menu gives its search field the keyboard: typing
 //! filters at once, Up/Down move through the matches and Enter picks one.
 

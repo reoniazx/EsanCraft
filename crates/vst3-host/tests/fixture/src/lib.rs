@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Test-only VST3 plugin for soundcraft-vst3-host (two audio module classes):
 //!
 //! - "Fixture Gain" (`Fx`): stereo or mono in → out × gain, with a separate edit controller
@@ -645,7 +646,7 @@ const CLASSES: [(TUID, &str, &str, &str); 3] = [
 impl IPluginFactoryTrait for Factory {
     unsafe fn getFactoryInfo(&self, info: *mut PFactoryInfo) -> tresult {
         let i = unsafe { &mut *info };
-        copy_c8("SoundThai tests", &mut i.vendor);
+        copy_c8("EsanCraft tests", &mut i.vendor);
         copy_c8("https://example.invalid", &mut i.url);
         copy_c8("tests@example.invalid", &mut i.email);
         i.flags = PFactoryInfo_::FactoryFlags_::kUnicode as i32;

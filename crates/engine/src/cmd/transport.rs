@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Transport commands. They update the session's stopped playhead and queue requests for the
 //! host's audio engine (which may be absent when headless).
 use super::{CommandSpec, always, bad, f64_or, position_param};

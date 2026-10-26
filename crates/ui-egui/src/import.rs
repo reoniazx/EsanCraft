@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Native audio imports prepare samples and waveforms off the UI thread. The engine commits
 //! the complete batch through `file.import_audio`, preserving atomic failure and one-step Undo.
 

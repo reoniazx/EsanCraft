@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Design tokens. Colours were chosen by eye to give a dark, studio-style look; they are ours.
 
 use egui::{Color32, FontFamily, FontId};
@@ -471,7 +472,7 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     // pinning egui's theme also pins the window appearance and hides later OS changes.
     ctx.set_theme(egui::ThemePreference::System);
     // Both egui style branches must use our resolved palette: egui can select either branch
-    // as the OS changes, including while SoundThai's manual Light/Dark choice stays fixed.
+    // as the OS changes, including while EsanCraft's manual Light/Dark choice stays fixed.
     ctx.all_styles_mut(|s| {
         s.visuals = v.clone();
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);

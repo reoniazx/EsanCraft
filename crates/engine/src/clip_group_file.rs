@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Clip group files (`.scgrp`): clips exported from a session (Clip List › Export Clip Groups)
 //! and imported into another (File › Import › Clip Groups…).
 //!
@@ -117,7 +118,7 @@ pub fn import(e: &mut Engine, path: &str, first: Option<TrackId>, at: Samples) -
     let text = crate::io::read_text(path)?;
     let file: GroupFile = serde_json::from_str(&text).map_err(|err| EngineError::BadParams(id.into(), format!("not a clip group file: {err}")))?;
     if file.format != FORMAT {
-        return Err(EngineError::BadParams(id.into(), "not a SoundThai clip group file".into()));
+        return Err(EngineError::BadParams(id.into(), "not a EsanCraft clip group file".into()));
     }
     if file.lanes.iter().map(|l| l.len().max(1)).sum::<usize>() > MAX_CLIPS || file.audio.len() > MAX_CLIPS {
         return Err(EngineError::BadParams(id.into(), "clip group file has too many clips".into()));

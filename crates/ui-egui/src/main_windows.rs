@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Edit and Mix are independent views of the same engine, not separate sessions.
 //! Native hosts register independently repainted deferred viewports through the
 //! UI-thread host. Browsers and offscreen hosts use resizable egui windows.
@@ -242,7 +243,7 @@ fn scaled_rect(rect: Rect, scale: f32) -> Rect {
 }
 
 pub fn title(app: &SoundApp, window: MainWindow) -> String {
-    format!("{}{} — SoundThai — {}", app.engine.session().name, if app.engine.is_dirty() { " *" } else { "" }, window.label())
+    format!("{}{} — EsanCraft — {}", app.engine.session().name, if app.engine.is_dirty() { " *" } else { "" }, window.label())
 }
 
 fn surface(app: &mut SoundApp, ui: &mut Ui, window: MainWindow) {

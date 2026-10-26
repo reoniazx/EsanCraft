@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Main-thread ownership for independently repainted native viewports.
 //! Deferred callbacks capture only an id, never the audio stream or GUI handles.
 

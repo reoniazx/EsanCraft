@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Context menu descriptions and actions, independent of the window system.
 //! Native hosts present requests after releasing the application borrow.
 

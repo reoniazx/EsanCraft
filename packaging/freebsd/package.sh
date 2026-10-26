@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Build and package SoundThai for FreeBSD:
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+# Build and package EsanCraft for FreeBSD:
 #
-#   $DIST/soundthai-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
-#       soundthai-<version>-freebsd-x86_64/{bin, share/applications, share/icons, share/mime,
-#       share/metainfo, share/doc/soundthai}
+#   $DIST/esancraft-<version>-freebsd-x86_64.tar.gz   a /usr/local-style tree:
+#       esancraft-<version>-freebsd-x86_64/{bin, share/applications, share/icons, share/mime,
+#       share/metainfo, share/doc/esancraft}
 #
 # Install by copying the tree's contents into /usr/local, e.g.
-#   tar -xzf soundthai-*-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+#   tar -xzf esancraft-*-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
 #
 # Usage: packaging/freebsd/package.sh [--skip-build]
 #
@@ -17,7 +18,7 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 LINUX="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.soundthai
+APP_ID=ai.storyteller.esancraft
 
 SKIP_BUILD=0
 while [[ $# -gt 0 ]]; do
@@ -51,12 +52,12 @@ HOST_ARCH="$(release_arch "$(uname -m)" 2>/dev/null)" || HOST_ARCH="$(uname -m)"
 if [[ -n "${CARGO_BUILD_TARGET:-}" ]] && [[ "$(uname -s)" != FreeBSD ]]; then
   HOST_ARCH="$(uname -s) $HOST_ARCH"
 fi
-BASENAME="soundthai-$VERSION-freebsd-$ARCH"
+BASENAME="esancraft-$VERSION-freebsd-$ARCH"
 
-echo "==> SoundThai $VERSION for FreeBSD $ARCH"
+echo "==> EsanCraft $VERSION for FreeBSD $ARCH"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  (cd "$ROOT" && cargo build --release --locked -p soundthai -p soundthai-cli)
+  (cd "$ROOT" && cargo build --release --locked -p esancraft -p esancraft-cli)
 fi
 # Cargo puts a cross build under target/<triple>/release.
 BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
@@ -66,23 +67,23 @@ rm -rf "$WORK"
 
 # ---- stage a /usr/local-style tree ---------------------------------------------------------------
 mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" "$STAGE/share/metainfo" \
-  "$STAGE/share/icons" "$STAGE/share/doc/soundthai"
-install -m 755 "$BIN/soundthai" "$BIN/soundthai-cli" "$STAGE/bin/"
-strip "$STAGE/bin/soundthai" "$STAGE/bin/soundthai-cli" 2>/dev/null || true
+  "$STAGE/share/icons" "$STAGE/share/doc/esancraft"
+install -m 755 "$BIN/esancraft" "$BIN/esancraft-cli" "$STAGE/bin/"
+strip "$STAGE/bin/esancraft" "$STAGE/bin/esancraft-cli" 2>/dev/null || true
 # The desktop entry, MIME type and metainfo are the freedesktop files the Linux packages use.
 install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 install -m 644 "$LINUX/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$SOUNDTHAI_BUILD_DATE/g" \
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$ESANCRAFT_BUILD_DATE/g" \
   "$LINUX/$APP_ID.metainfo.xml.in" >"$STAGE/share/metainfo/$APP_ID.metainfo.xml"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
-copy_docs "$STAGE/share/doc/soundthai"
+copy_docs "$STAGE/share/doc/esancraft"
 
 # ---- .tar.gz -------------------------------------------------------------------------------------
 tar -C "$WORK" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $DIST/$BASENAME.tar.gz"
 
 if [[ "$ARCH" = "$HOST_ARCH" ]]; then
-  "$STAGE/bin/soundthai-cli" --version
+  "$STAGE/bin/esancraft-cli" --version
 else
   # They cannot run here, so check what they are instead: executables, not libraries or objects.
   # An older file(1) calls a PIE a shared object; its interpreter still marks it as a program.

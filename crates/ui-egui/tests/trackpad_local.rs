@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 use egui::{Event, Modifiers, MouseWheelUnit, Pos2, TouchPhase, Vec2, pos2, vec2};
 use egui_kittest::Harness;
 use serde_json::json;

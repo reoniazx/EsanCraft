@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! MIDI viewport follow and its stopped cue. All positions come from the shared transport.
 
 use crate::{SoundApp, midi_editor};

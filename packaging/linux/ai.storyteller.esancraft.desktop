@@ -1,0 +1,15 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+[Desktop Entry]
+Type=Application
+Name=EsanCraft
+GenericName=Digital Audio Workstation
+Comment=Record, edit and mix audio and MIDI
+Exec=esancraft %F
+TryExec=esancraft
+Icon=ai.storyteller.esancraft
+Terminal=false
+StartupNotify=true
+StartupWMClass=ai.storyteller.esancraft
+Categories=AudioVideo;Audio;Midi;Mixer;Sequencer;Recorder;
+MimeType=application/x-soundcraft-session;audio/x-wav;audio/wav;audio/vnd.wave;audio/x-aiff;audio/aiff;audio/flac;audio/x-flac;audio/mpeg;audio/midi;audio/x-midi;
+Keywords=daw;audio;mixer;recording;multitrack;midi;editor;music;

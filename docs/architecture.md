@@ -1,3 +1,5 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # Architecture
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** trivial (delay compensation includes the master faders' inserts (#351); previously minor: bounces stream to disk) · **Target:** Avid Pro Tools Ultimate 2026.4.1
@@ -21,7 +23,7 @@ L3  mix                                         (the mix engine)
 L4  engine      playback                        (commands, undo, I/O · audio devices)
 L5  automation                                  (MCP server, control-channel client)
 L6  ui-egui                                     (the user interface)
-    apps: soundcraft (desktop) · soundthai-cli · soundthai-web (wasm)
+    apps: soundcraft (desktop) · esancraft-cli · esancraft-web (wasm)
 ```
 
 ## The document
@@ -71,7 +73,7 @@ by the UI thread (see README › Logs).
 ## Agent control
 
 The desktop app's control channel (JSON lines over TCP) exposes engine commands, inspection,
-synthetic input and screenshots; `soundthai-cli mcp` wraps either a headless engine or a running
+synthetic input and screenshots; `esancraft-cli mcp` wraps either a headless engine or a running
 app as an MCP server. See `control-protocol.md` and `mcp.md`.
 
 ## Revision history

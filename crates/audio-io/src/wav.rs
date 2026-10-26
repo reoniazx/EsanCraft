@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Native WAV / BWF / RF64 reader and writer (RIFF chunk layout per the Microsoft multimedia
 //! specification, `bext` per EBU Tech 3285, `ds64` per EBU Tech 3306).
 

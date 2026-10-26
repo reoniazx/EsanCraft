@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The command registry. One module per menu area; each exposes `specs()`.
 
 use crate::{Engine, EngineError, Result};

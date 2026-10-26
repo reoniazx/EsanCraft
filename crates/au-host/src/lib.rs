@@ -1,4 +1,5 @@
-//! SoundThai's Audio Unit (AUv2, macOS) plugin host.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! EsanCraft's Audio Unit (AUv2, macOS) plugin host.
 //!
 //! Lists the effect (`aufx`), music effect (`aumf`) and instrument (`aumu`) Audio Units
 //! registered with the system's component manager and exposes each one as a
@@ -55,10 +56,10 @@ pub const TYPE_EFFECT: u32 = u32::from_be_bytes(*b"aufx");
 pub const TYPE_MUSIC_EFFECT: u32 = u32::from_be_bytes(*b"aumf");
 /// `aumu`: a music device (instrument).
 pub const TYPE_INSTRUMENT: u32 = u32::from_be_bytes(*b"aumu");
-/// The component types SoundThai hosts.
+/// The component types EsanCraft hosts.
 pub const SUPPORTED_TYPES: [u32; 3] = [TYPE_EFFECT, TYPE_MUSIC_EFFECT, TYPE_INSTRUMENT];
 
-/// True when a component type is one SoundThai hosts (effects, music effects, instruments).
+/// True when a component type is one EsanCraft hosts (effects, music effects, instruments).
 pub fn is_supported_type(ty: u32) -> bool {
     SUPPORTED_TYPES.contains(&ty)
 }
@@ -99,13 +100,13 @@ fn parse_field(s: &str) -> Option<(u32, &str)> {
     Some((code, s.get(4..)?))
 }
 
-/// The SoundThai id of a component: `au:<type>:<subtype>:<manufacturer>`.
+/// The EsanCraft id of a component: `au:<type>:<subtype>:<manufacturer>`.
 pub fn format_id(ty: u32, subtype: u32, manufacturer: u32) -> String {
     format!("{ID_PREFIX}{}:{}:{}", fourcc_string(ty), fourcc_string(subtype), fourcc_string(manufacturer))
 }
 
 /// The `(type, subtype, manufacturer)` codes of an `au:…` id (`None` for other ids or a
-/// component type SoundThai does not host).
+/// component type EsanCraft does not host).
 pub fn parse_id(id: &str) -> Option<(u32, u32, u32)> {
     let rest = id.strip_prefix(ID_PREFIX)?;
     let (ty, rest) = parse_field(rest)?;
@@ -163,7 +164,7 @@ pub fn split_component_name(full: &str) -> (String, String) {
 /// One Audio Unit found by a scan.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct AuDescriptor {
-    /// SoundThai id: `au:<type>:<subtype>:<manufacturer>`.
+    /// EsanCraft id: `au:<type>:<subtype>:<manufacturer>`.
     pub id: String,
     pub name: String,
     pub vendor: String,

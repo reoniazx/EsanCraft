@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! SoundThai DSP.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! EsanCraft DSP.
 //!
 //! Realtime plugins (EQ, dynamics, reverb, delay, modulation, harmonic, pitch, utilities and three
 //! instruments), metering (peak, RMS, ITU-R BS.1770 loudness), spectrum analysis and offline
@@ -270,7 +271,7 @@ pub trait PluginEditor: Send {
     fn is_open(&self) -> bool;
     /// Call every UI frame while open: services the plugin's GUI requests, notices a window the
     /// user closed, and returns parameter edits made in the editor as `(param id, value)` in
-    /// SoundThai units (ids and ranges of [`PluginInfo::params`]).
+    /// EsanCraft units (ids and ranges of [`PluginInfo::params`]).
     fn idle(&mut self) -> Vec<(String, f32)>;
     /// True once after the plugin said its state changed in a way its parameters don't show
     /// (CLAP `state.mark_dirty`), so the session stores the new state.
@@ -278,9 +279,9 @@ pub trait PluginEditor: Send {
         false
     }
     /// Tells the editor that a parameter changed elsewhere (generic editor, automation), so the
-    /// GUI shows it. Values are in SoundThai units.
+    /// GUI shows it. Values are in EsanCraft units.
     fn set_param(&mut self, _id: &str, _value: f32) {}
-    /// The plugin's own text for a parameter value (SoundThai units) when SoundThai's
+    /// The plugin's own text for a parameter value (EsanCraft units) when EsanCraft's
     /// [`ParamInfo::format`] would be wrong for it. Main thread only; `None` means "format it
     /// yourself".
     fn value_text(&mut self, _id: &str, _value: f32) -> Option<String> {

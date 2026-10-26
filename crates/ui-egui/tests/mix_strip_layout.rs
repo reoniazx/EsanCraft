@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 use egui::{Color32, FullOutput, Shape, epaint::TextShape, vec2};
 use egui_kittest::Harness;
 use serde_json::json;

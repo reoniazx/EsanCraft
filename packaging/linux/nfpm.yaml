@@ -1,9 +1,10 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 # .deb and .rpm packages (nfpm: https://nfpm.goreleaser.com). Run by package.sh, which stages
 # the file tree, substitutes its path for ${STAGE} (nfpm doesn't expand env vars in `src`) and
 # exports VERSION and NFPM_ARCH.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
-name: soundthai
+name: esancraft
 arch: ${NFPM_ARCH}
 platform: linux
 version: ${VERSION}
@@ -12,15 +13,15 @@ version_schema: semver
 release: 1
 section: sound
 priority: optional
-maintainer: ${SOUNDTHAI_MAINTAINER}
+maintainer: ${ESANCRAFT_MAINTAINER}
 vendor: Reoniazx
-homepage: https://github.com/reoniazx/SoundThai
+homepage: https://github.com/reoniazx/EsanCraft
 license: MIT OR Apache-2.0
 description: |-
   Open-source, native digital audio workstation. Record, edit and mix
   multitrack audio and MIDI in Edit and Mix windows; built-in EQ, dynamics,
   reverb, delay and instruments; imports WAV, AIFF, FLAC, MP3 and MIDI.
-  Includes soundthai-cli, a headless editor, bounce tool and MCP server.
+  Includes esancraft-cli, a headless editor, bounce tool and MCP server.
 
 # The app links glibc, libgcc_s and ALSA (libasound, for audio I/O through cpal; PulseAudio and
 # PipeWire are reached through their ALSA plugins). Windowing (X11/Wayland, xkbcommon) and the GPU
@@ -60,11 +61,11 @@ overrides:
       - (pipewire-alsa or alsa-plugins-pulseaudio)
 
 contents:
-  - src: ${STAGE}/usr/bin/soundthai
-    dst: /usr/bin/soundthai
+  - src: ${STAGE}/usr/bin/esancraft
+    dst: /usr/bin/esancraft
     file_info: { mode: 0755 }
-  - src: ${STAGE}/usr/bin/soundthai-cli
-    dst: /usr/bin/soundthai-cli
+  - src: ${STAGE}/usr/bin/esancraft-cli
+    dst: /usr/bin/esancraft-cli
     file_info: { mode: 0755 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/

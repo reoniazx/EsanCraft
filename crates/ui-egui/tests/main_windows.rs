@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 use egui::{Event, Modifiers, Pos2, RawInput, Rect, ViewportEvent, ViewportId, pos2, vec2};
 use serde_json::json;
 use soundcraft_ui_egui::{

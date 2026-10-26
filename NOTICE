@@ -286,3 +286,16 @@ The Font Software may be sold as part of a larger software package but no copy o
 THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL BITSTREAM OR THE GNOME FOUNDATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM OTHER DEALINGS IN THE FONT SOFTWARE.
 
 Except as contained in this notice, the names of Gnome, the Gnome Foundation, and Bitstream Inc., shall not be used in advertising or otherwise to promote the sale, use or other dealings in this Font Software without prior written authorization from the Gnome Foundation or Bitstream Inc., respectively. For further information, contact: fonts at gnome dot org.
+
+
+EsanCraft derivative notice (2026-10-26)
+---------------------------------------
+EsanCraft is an independent modified version based on SoundCraft by the ArtCraft team.
+It is not sponsored, endorsed or supported by the ArtCraft Team.
+Application branding, package names, settings, update source and distribution metadata
+have been modified for EsanCraft. Modified source files carry a change notice; see
+MODIFICATIONS.md. Original copyright, license and third-party notices above are retained.
+The upstream ArtCraft logo and mark files have been removed from the current source tree
+and are not included in EsanCraft application packages. The upstream brand notice above
+is retained as provenance; it does not describe assets shipped by EsanCraft.
+Bundled font copyright and license texts additionally appear in THIRD-PARTY-LICENSES.txt.

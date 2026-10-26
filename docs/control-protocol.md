@@ -1,22 +1,24 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # Control protocol
 
-SoundThai can be driven completely by other programs: scripts, test harnesses and AI agents.
+EsanCraft can be driven completely by other programs: scripts, test harnesses and AI agents.
 Every menu item, button, mouse gesture and keystroke maps to a **command** (or to synthetic
 input), and every command is reachable from:
 
 | Surface | How |
 |---|---|
-| Desktop app control channel | `soundthai --control <port>` (`0` = pick a free port; printed as `SOUNDTHAI_CONTROL_PORT=…`) |
-| CLI against a running app | `soundthai-cli app --port <port> <method or command id> [JSON]` |
-| Headless CLI | `soundthai-cli run --demo --cmd 'mix.volume={"track":"Kick","db":-6}' --bounce out.wav` |
-| MCP (headless) | `soundthai-cli mcp [--demo]` |
-| MCP (bridged to the app) | `soundthai-cli mcp --connect <port>` |
+| Desktop app control channel | `esancraft --control <port>` (`0` = pick a free port; printed as `ESANCRAFT_CONTROL_PORT=…`) |
+| CLI against a running app | `esancraft-cli app --port <port> <method or command id> [JSON]` |
+| Headless CLI | `esancraft-cli run --demo --cmd 'mix.volume={"track":"Kick","db":-6}' --bounce out.wav` |
+| MCP (headless) | `esancraft-cli mcp [--demo]` |
+| MCP (bridged to the app) | `esancraft-cli mcp --connect <port>` |
 
 ## Isolated automation profiles
 
-Set `SOUNDTHAI_CONFIG_DIR` to a fresh directory to isolate UI preferences, `Autosave`, `Presets`, and `logs`.
-The nonempty value is used as the complete settings directory, even in portable mode (`portable.txt` beside the executable, which otherwise uses `SoundThaiData` next to it). Unset retains the normal platform paths;
-an explicit empty value disables the settings directory instead of falling back to a personal profile. Save synthetic sessions to explicit scratch paths. Do not use `SOUNDTHAI_NO_PREFS`
+Set `ESANCRAFT_CONFIG_DIR` to a fresh directory to isolate UI preferences, `Autosave`, `Presets`, and `logs`.
+The nonempty value is used as the complete settings directory, even in portable mode (`portable.txt` beside the executable, which otherwise uses `EsanCraftData` next to it). Unset retains the normal platform paths;
+an explicit empty value disables the settings directory instead of falling back to a personal profile. Save synthetic sessions to explicit scratch paths. Do not use `ESANCRAFT_NO_PREFS`
 when testing preference persistence across restarts.
 
 Run UI acceptance with `--no-audio`. This disables the output player; it does not disable recording
@@ -228,11 +230,11 @@ the edited velocity. Double-clicking empty space does not edit notes.
 ## Examples
 
 ```sh
-P=$(soundthai --demo --control 0 | sed -n 's/SOUNDTHAI_CONTROL_PORT=//p')   # or read stderr
-soundthai-cli app --port $P mix.solo '{"track":"Bass"}'
-soundthai-cli app --port $P transport.play
-soundthai-cli app --port $P ui.screenshot '{"path":"/tmp/shot.png"}'
-soundthai-cli app --port $P ui.menu.invoke '{"path":"Track > New..."}'
+P=$(esancraft --demo --control 0 | sed -n 's/ESANCRAFT_CONTROL_PORT=//p')   # or read stderr
+esancraft-cli app --port $P mix.solo '{"track":"Bass"}'
+esancraft-cli app --port $P transport.play
+esancraft-cli app --port $P ui.screenshot '{"path":"/tmp/shot.png"}'
+esancraft-cli app --port $P ui.menu.invoke '{"path":"Track > New..."}'
 ```
 
 Offscreen (no window): `cargo run -p soundcraft-ui-egui --example ui_shot -- out.png script.jsonl`,

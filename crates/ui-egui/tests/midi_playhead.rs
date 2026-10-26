@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Cursor geometry and follow are verified from the editor's actual rendered shapes.
 use egui::{Color32, Shape, vec2};
 use egui_kittest::{Harness, kittest::Queryable};

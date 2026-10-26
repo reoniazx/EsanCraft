@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Window menu extras: the Renderer (speaker layout of the main output with live levels and the
 //! object tracks' positions), UI Customization, and auto-updating the active window configuration.
 

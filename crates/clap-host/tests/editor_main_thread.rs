@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Plugin editors must be driven from the process main thread, which the standard test harness
 //! never uses, so this test binary has its own `main` (`harness = false`). The fixture's GUI is
 //! window-less: nothing appears on screen.
@@ -29,7 +30,7 @@ fn main() {
     assert!(ed.is_open());
     ed.open().expect("opening again just raises it");
     // The fixture "edits" the gain in its GUI; the edit arrives as an output event of the next
-    // block and is reported (in SoundThai units) by idle.
+    // block and is reported (in EsanCraft units) by idle.
     let io = block(&mut p);
     assert!((io[0][10] - 0.25).abs() < 1e-6, "{}", io[0][10]);
     assert_eq!(ed.idle(), vec![("7".to_string(), 0.25)]);

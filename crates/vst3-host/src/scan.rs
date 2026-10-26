@@ -1,5 +1,6 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Finding VST3 plugins on disk (safe, pure `std::fs`), resolving bundles to their binaries and
-//! mapping VST3 sub-categories to SoundThai categories.
+//! mapping VST3 sub-categories to EsanCraft categories.
 
 use soundcraft_dsp::Category;
 use std::path::{Path, PathBuf};
@@ -197,7 +198,7 @@ pub fn split_sub_categories(s: &str) -> Vec<String> {
     s.split('|').map(str::trim).filter(|t| !t.is_empty()).take(32).map(str::to_string).collect()
 }
 
-/// Maps VST3 sub-categories (`Fx|EQ`, `Instrument|Synth`, …) to a SoundThai insert-menu category.
+/// Maps VST3 sub-categories (`Fx|EQ`, `Instrument|Synth`, …) to a EsanCraft insert-menu category.
 pub fn category_from_sub_categories<S: AsRef<str>>(subs: &[S]) -> Category {
     let has = |names: &[&str]| subs.iter().any(|f| names.iter().any(|n| f.as_ref().eq_ignore_ascii_case(n)));
     if is_instrument(subs) {

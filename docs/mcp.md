@@ -1,32 +1,34 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # MCP server
 
-SoundThai speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
+EsanCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can make music with it.
 
 ```sh
-soundthai-cli mcp                    # headless engine (no window, no audio device)
-soundthai-cli mcp --demo             # headless, starting from the demo session
-soundthai-cli mcp --automation-read-root DIR --automation-write-root DIR   # headless, confined to folders
-soundthai --control 7801 &           # the desktop app…
-soundthai-cli mcp --connect 7801     # …driven over MCP: same tools plus screenshots and clicks
+esancraft-cli mcp                    # headless engine (no window, no audio device)
+esancraft-cli mcp --demo             # headless, starting from the demo session
+esancraft-cli mcp --automation-read-root DIR --automation-write-root DIR   # headless, confined to folders
+esancraft --control 7801 &           # the desktop app…
+esancraft-cli mcp --connect 7801     # …driven over MCP: same tools plus screenshots and clicks
 ```
 
 Claude Code:
 
 ```sh
-claude mcp add soundthai -- soundthai-cli mcp --demo
+claude mcp add esancraft -- esancraft-cli mcp --demo
 ```
 
 ## Confining file access
 
 ```sh
-soundthai-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
-soundthai-cli mcp --automation-read-root /work/project --automation-read-root /work/shared-samples \
+esancraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
+esancraft-cli mcp --automation-read-root /work/project --automation-read-root /work/shared-samples \
   --automation-write-root /work/project/out --automation-write-root /tmp/scratch
 ```
 
 ```json
-{"mcpServers": {"soundthai": {"command": "soundthai-cli",
+{"mcpServers": {"esancraft": {"command": "esancraft-cli",
   "args": ["mcp", "--automation-read-root", "/work/project", "--automation-write-root", "/work/project/out"]}}}
 ```
 
@@ -70,11 +72,11 @@ works across the suite) keep the agent to the folders you give it:
   misspelled `--automation-...` flag is an error rather than an unconfined server.
 
 The flags confine the in-process server, so `--connect` together with them is an error: the server
-would otherwise talk to an app that isn't confined. SoundThai's desktop app has no equivalent flags
-yet, so a running app (`soundthai --control`) is not confined. `--demo` is the operator's own
+would otherwise talk to an app that isn't confined. EsanCraft's desktop app has no equivalent flags
+yet, so a running app (`esancraft --control`) is not confined. `--demo` is the operator's own
 choice and is built before the roots apply.
 
-Playback and bounce need no check of their own. SoundThai decodes audio into the session when it
+Playback and bounce need no check of their own. EsanCraft decodes audio into the session when it
 enters it (import, open, sampler load), so rendering reads nothing from disk afterwards. Movies are
 the exception: a session only references them by path and the desktop app decodes pictures from
 that file, but the headless server never does, and the movie's path is checked when it is imported
@@ -105,7 +107,7 @@ files it was given rather than guarding against other software on the computer.
 | `parity` | Feature-parity report. |
 | `screenshot`, `ui_inspect`, `ui_set`, `menu_invoke`, `click`, `drag`, `key` | App only (with `--connect`). |
 
-Resources: `soundthai://session` (full session JSON), `soundthai://commands`.
+Resources: `esancraft://session` (full session JSON), `esancraft://commands`.
 
 ## Conventions
 

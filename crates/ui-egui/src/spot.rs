@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The Spot dialog: exact positions for clips in Spot mode.
 
 use crate::theme::mono;

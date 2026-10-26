@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Side panels (Tracks, Groups, Clips) and floating windows.
 
 use crate::SoundApp;
@@ -649,7 +650,7 @@ fn about(app: &mut SoundApp, ctx: &egui::Context) {
         return;
     }
     let tab_id = egui::Id::unique("about_tab");
-    egui::Window::new("About SoundThai").open(&mut open).default_size(vec2(640.0, 420.0)).collapsible(false).show(ctx, |ui| {
+    egui::Window::new("About EsanCraft").open(&mut open).default_size(vec2(640.0, 420.0)).collapsible(false).show(ctx, |ui| {
         let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
         ui.horizontal(|ui| {
             for (i, l) in (0u8..).zip(["About", "Contributors", "Models"]) {
@@ -664,12 +665,26 @@ fn about(app: &mut SoundApp, ctx: &egui::Context) {
             1 => crate::credits::contributors_ui(ui),
             2 => crate::credits::models_ui(ui),
             _ => {
-                ui.label(egui::RichText::new("SoundThai").font(bold(22.0)));
+                ui.label(egui::RichText::new("EsanCraft").font(bold(22.0)));
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                 ui.label("An independent digital audio workstation, forked from SoundCraft.");
                 ui.label("Dual-licensed MIT OR Apache-2.0. Made with Rust and egui.");
-                ui.hyperlink_to("SoundThai on GitHub", "https://github.com/reoniazx/SoundThai");
+                ui.hyperlink_to("EsanCraft on GitHub", "https://github.com/reoniazx/EsanCraft");
                 ui.hyperlink_to("SoundCraft upstream", "https://github.com/storytold/soundcraft");
+                ui.collapsing("Licenses and notices", |ui| {
+                    for (name, text) in [
+                        ("MIT license", include_str!("../../../LICENSE-MIT")),
+                        ("Apache-2.0 license", include_str!("../../../LICENSE-APACHE")),
+                        ("Upstream and third-party notices", include_str!("../../../NOTICE")),
+                        ("Additional font licenses", include_str!("../../../THIRD-PARTY-LICENSES.txt")),
+                    ] {
+                        ui.collapsing(name, |ui| {
+                            egui::ScrollArea::vertical().id_salt(name).max_height(180.0).show(ui, |ui| {
+                                ui.label(text);
+                            });
+                        });
+                    }
+                });
                 ui.collapsing("Bundled font licenses", |ui| {
                     for (name, license) in [
                         ("Noto Sans Thai", include_str!("../../../assets/fonts/noto-sans-thai/OFL.txt")),

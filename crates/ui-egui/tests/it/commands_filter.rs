@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 use serde_json::{Value, json};
 use soundcraft_ui_egui::{ControlRequest, Services, SoundApp, control, menus};
 

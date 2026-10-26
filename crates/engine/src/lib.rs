@@ -1,4 +1,5 @@
-//! The SoundThai command engine.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! The EsanCraft command engine.
 //!
 //! Every user-visible action is a registered command ([`cmd::CommandSpec`]): menus, shortcuts, the
 //! CLI, the JSON control channel and MCP all dispatch the same commands by id with JSON params.

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Clip Effects processes file audio ahead of playback, so lookahead never moves a clip or
 //! discards its last samples. Check the shared playback/bounce and clip-rendering paths.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

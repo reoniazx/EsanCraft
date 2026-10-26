@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Baking Clip Effects must preserve the clip's timing and final samples, including Undo/Redo
 //! and session bundles, rather than permanently storing the lookahead delay in its new source.
 

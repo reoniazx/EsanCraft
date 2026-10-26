@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! A stopped play start that does not replace the edit or timeline selection.
 
 use super::*;

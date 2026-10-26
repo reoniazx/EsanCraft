@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The process-wide VST3 registry: scan cache, leaked `PluginInfo`s, instantiation.
 
 use crate::ffi::{Bundle, Instance, PARAM_BYPASS, PARAM_HIDDEN, PARAM_READ_ONLY, RawParam};
@@ -118,7 +119,7 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Maps a VST3 unit label to a SoundThai display unit.
+/// Maps a VST3 unit label to a EsanCraft display unit.
 pub(crate) fn unit_from_label(units: &str) -> Unit {
     match units.trim().to_ascii_lowercase().as_str() {
         "db" => Unit::Db,

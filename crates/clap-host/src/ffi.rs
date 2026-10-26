@@ -1,4 +1,5 @@
-//! The FFI boundary: the only module in SoundThai allowed to use `unsafe`.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! The FFI boundary: the only module in EsanCraft allowed to use `unsafe`.
 //!
 //! It loads CLAP binaries (`libloading`), calls the plugin entry/factory/plugin vtables
 //! (`clap-sys` raw bindings) and implements the host callbacks. Everything it exposes to the rest
@@ -7,7 +8,7 @@
 //! Soundness rests on the CLAP contract (the plugin honours the vtable signatures and the
 //! documented pointer lifetimes). A plugin that violates it (e.g. dereferences garbage) can still
 //! crash the process: hosting in-process can't prevent that. What this module guarantees is that
-//! *SoundThai* never hands the plugin dangling or mis-sized pointers, never calls a missing
+//! *EsanCraft* never hands the plugin dangling or mis-sized pointers, never calls a missing
 //! (null) function pointer, and never reads plugin strings beyond their bounds.
 
 use crate::{ClapError, scan};
@@ -228,9 +229,9 @@ impl Bundle {
         let host = Box::new(clap_host {
             clap_version: CLAP_VERSION,
             host_data: Arc::as_ptr(&state).cast_mut().cast::<c_void>(),
-            name: c"SoundThai".as_ptr(),
-            vendor: c"SoundThai contributors".as_ptr(),
-            url: c"https://github.com/reoniazx/SoundThai".as_ptr(),
+            name: c"EsanCraft".as_ptr(),
+            vendor: c"EsanCraft contributors".as_ptr(),
+            url: c"https://github.com/reoniazx/EsanCraft".as_ptr(),
             version: c"0.1.0".as_ptr(),
             get_extension: Some(host_get_extension),
             request_restart: Some(host_request_restart),
@@ -831,7 +832,7 @@ impl GuiLink {
             if hostwin::SUPPORTED && unsafe { supported(g.plugin, api.as_ptr(), false) } {
                 return self.open_embedded(&mut g, vt, api, title);
             }
-            return Err("this plugin offers only an embedded editor, which SoundThai hosts on Windows only".into());
+            return Err("this plugin offers only an embedded editor, which EsanCraft hosts on Windows only".into());
         }
         self.host.gui_closed.store(false, Ordering::Relaxed);
         self.host.gui_destroyed.store(false, Ordering::Relaxed);
@@ -1144,7 +1145,7 @@ pub(crate) struct Instance {
 }
 
 // SAFETY: an `Instance` is used through `&mut self` only, so calls into the plugin are always
-// serialised. CLAP lets audio-thread functions run on any one thread at a time; SoundThai creates
+// serialised. CLAP lets audio-thread functions run on any one thread at a time; EsanCraft creates
 // instances on the engine/UI thread and then moves them into the mix engine (documented
 // limitation: some main-thread calls such as `activate` may then happen on the audio thread).
 unsafe impl Send for Instance {}
@@ -1482,7 +1483,7 @@ mod hostwin {
         static CLASS: OnceLock<Option<Vec<u16>>> = OnceLock::new();
         CLASS
             .get_or_init(|| {
-                let name = wide("SoundThaiClapEditor");
+                let name = wide("EsanCraftClapEditor");
                 // SAFETY: null asks for this process's module handle.
                 let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
                 let wc = WNDCLASSEXW {

@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 
 use egui::{Event, Modifiers, Pos2, RawInput, Rect, ViewportCommand, ViewportId, ViewportInfo, vec2};
 use serde_json::json;

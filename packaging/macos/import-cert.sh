@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 # CI only: import the Developer ID certificate into a temporary keychain so codesign can use it.
 #
 # Inputs (env): APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD, KEYCHAIN_PASSWORD
@@ -18,8 +19,8 @@ if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
 fi
 
 TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-KEYCHAIN="$TMP/soundthai-signing.keychain-db"
-CERT="$TMP/soundthai-signing.p12"
+KEYCHAIN="$TMP/esancraft-signing.keychain-db"
+CERT="$TMP/esancraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
 trap 'rm -f "$CERT"' EXIT

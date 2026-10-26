@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The Mix window: one channel strip per track.
 
 use crate::SoundApp;

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Check the painted geometry, including fractional origins and display scales.
 use super::*;
 use egui::{FullOutput, Pos2, RawInput, Shape};

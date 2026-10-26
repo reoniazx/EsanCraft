@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Byte-level PCM helpers shared by the WAV, AIFF and FLAC code: bounded readers, sample
 //! decoding to `f32`, and quantization (with optional TPDF dither) for encoding.
 

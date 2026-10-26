@@ -1,3 +1,5 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # Localization parity
 
 > **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (Lao text support) · **Target:** Avid Pro Tools Ultimate 2026.4.1

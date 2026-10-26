@@ -1,6 +1,8 @@
-# SoundThai fork
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 
-This repository is the independent SoundThai app. See `docs/soundthai-fork.md` for branding, configuration isolation and upstream merges. Application packages live under `apps/soundthai*`; core crate names remain `soundcraft-*`. The following SoundCraft engineering standards are inherited.
+# EsanCraft fork
+
+This repository is the independent EsanCraft app. See `docs/esancraft-fork.md` for branding, configuration isolation and upstream merges. Application packages live under `apps/esancraft*`; core crate names remain `soundcraft-*`. The following SoundCraft engineering standards are inherited.
 
 # SoundCraft — instructions for agents
 
@@ -20,7 +22,7 @@ Standards and learnings shared across the crafting apps live in `../../craftrule
 - **Every bundled asset gets a row in [`ATTRIBUTION.md`](ATTRIBUTION.md)** (path, author, source, license) in the same commit that adds it. `cargo xtask assets` enforces this; CI fails otherwise.
 - Never copy files out of the Pro Tools bundle (`/Applications/Pro Tools.app`): no plugins, presets, icons, sounds, session templates or text. Observing the running app (screenshots kept under `plan/`, menu names) is fine; copying its resources is not.
 - Demo audio is synthesised in code (`crates/engine/src/demo.rs`). Demo and README media must be ours or public domain.
-- The ArtCraft trademarks in `docs/brand/` are the only exception, under `docs/brand/LICENSE-brand.txt`.
+- EsanCraft excludes the upstream ArtCraft logo/mark files. Retain plain-text copyright, provenance and the original brand terms in `docs/brand/LICENSE-brand.txt`; never reintroduce upstream marks as fork branding.
 
 ## Clean-room
 Pro Tools is installed on the dev machine and may be *observed* black-box: run it, use its UI with synthetic sessions, take screenshots by window id (`screencapture -l <id>`), stored only under `plan/protools/screenshots/`. Never read, disassemble or copy anything inside the Pro Tools bundle; never copy Avid icons, artwork, plugin names, presets, or wording beyond feature names. Never copy GPL/AGPL/LGPL code (Ardour, Audacity, LMMS, Freeverb sources…). Our plugins have our own names.
@@ -49,7 +51,7 @@ People trust SoundCraft with their recordings; a crash loses takes. **This outra
 | L4 | `soundcraft-engine`, `soundcraft-playback` | Command registry, undo, editing, import/export/bounce, parity catalog; audio device I/O (cpal) |
 | L5 | `soundcraft-automation` | MCP server + control-channel client |
 | L6 | `soundcraft-ui-egui` | The swappable UI (egui) |
-| apps | `soundcraft`, `soundthai-cli`, `soundthai-web` | Entry points |
+| apps | `esancraft`, `esancraft-cli`, `esancraft-web` | Entry points |
 
 Nothing below L6 depends on egui/eframe/winit/rfd. The UI is thin: panels read engine state and act through `engine.execute(id, params)`.
 
@@ -59,10 +61,10 @@ User-visible behaviour = a command in `crates/engine/src/cmd/*` (id, label, menu
 Parity is measured, not guessed: `crates/engine/catalog/menus.txt` lists the incumbent's menu leaves (names only). `cargo xtask parity` writes `docs/parity-checklist.md` (generated; the hand-written assessment is `docs/target-app-parity.md`); a test enforces a floor that only rises.
 
 ## Running and looking at the app
-- `cargo run --release -p soundthai -- --demo --control 0` (demo session + control channel on a free port; the port is printed).
+- `cargo run --release -p esancraft -- --demo --control 0` (demo session + control channel on a free port; the port is printed).
 - Drive it: JSON lines over TCP, e.g. `{"id":1,"method":"engine.execute","params":{"command":"track.new","params":{"count":2,"format":"stereo"}}}`, then `{"id":2,"method":"ui.screenshot","params":{"path":"/tmp/shot.png"}}`. Methods: `crates/ui-egui/src/control.rs`, docs: `docs/control-protocol.md`.
 - Offscreen UI render (no window, no focus stealing): `cargo run -p soundcraft-ui-egui --example ui_shot -- out.png [script.jsonl]`.
-- Headless: `soundthai-cli run --demo --cmd 'mix.volume={"track":"Kick","db":-6}' --bounce out.wav`; MCP: `soundthai-cli mcp [--connect PORT]`.
+- Headless: `esancraft-cli run --demo --cmd 'mix.volume={"track":"Kick","db":-6}' --bounce out.wav`; MCP: `esancraft-cli mcp [--connect PORT]`.
 - **For UI work, look at the result** (render, read the PNG) and compare with `plan/protools/screenshots/`.
 - Shell gotcha: `mv`/`cp` are aliased interactive here — use `/bin/mv -f` / `/bin/cp -f`.
 - Parallel agents: separate `CARGO_TARGET_DIR` per agent; edit only the crates you own; write manifests atomically; delete your target dir when done (disk).

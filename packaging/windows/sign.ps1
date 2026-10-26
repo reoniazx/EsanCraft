@@ -1,3 +1,4 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 <#
 .SYNOPSIS
   Authenticode-sign files with signtool, using whichever signing material is configured.
@@ -15,7 +16,7 @@
   timestamp server, ...). Optional overrides: WINDOWS_TIMESTAMP_URL, SIGNTOOL (path to signtool.exe).
 
 .EXAMPLE
-  pwsh packaging/windows/sign.ps1 dist/soundthai.exe dist/soundthai.msi
+  pwsh packaging/windows/sign.ps1 dist/esancraft.exe dist/esancraft.msi
 #>
 param(
   [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
@@ -55,8 +56,8 @@ if (-not $haveCert -and -not $haveAzure) {
 }
 
 $script:SignTool = Find-SignTool
-$common = @('sign', '/v', '/fd', 'SHA256', '/td', 'SHA256', '/d', 'SoundThai', '/du', 'https://github.com/reoniazx/SoundThai')
-$tmp = Join-Path ([IO.Path]::GetTempPath()) "soundthai-sign-$([IO.Path]::GetRandomFileName())"
+$common = @('sign', '/v', '/fd', 'SHA256', '/td', 'SHA256', '/d', 'EsanCraft', '/du', 'https://github.com/reoniazx/EsanCraft')
+$tmp = Join-Path ([IO.Path]::GetTempPath()) "esancraft-sign-$([IO.Path]::GetRandomFileName())"
 New-Item -ItemType Directory -Path $tmp | Out-Null
 
 try {

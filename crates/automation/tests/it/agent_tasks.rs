@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! An agent completes realistic DAW tasks through MCP only, and verifies each through MCP.
 
 use serde_json::{Value, json};
@@ -28,7 +29,7 @@ fn track<'a>(sess: &'a Value, name: &str) -> &'a Value {
 fn handshake_and_tool_list() {
     let mut s = Server::new(Headless::new(Engine::default()));
     let r = rpc(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
-    assert_eq!(r["result"]["serverInfo"]["name"], "soundthai");
+    assert_eq!(r["result"]["serverInfo"]["name"], "esancraft");
     let r = rpc(&mut s, 2, "tools/list", json!({}));
     assert!(r["result"]["tools"].as_array().unwrap().len() >= 10);
     let batch = r["result"]["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "batch").unwrap();

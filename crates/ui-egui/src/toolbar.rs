@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The Edit window toolbar.
 
 use crate::theme::{Tokens, bold, mono, regular};

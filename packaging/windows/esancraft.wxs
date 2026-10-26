@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Modified for EsanCraft; original notices retained. See MODIFICATIONS.md. -->
+<!--
+  EsanCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build esancraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, `.scraft` sessions owned by
+  EsanCraft, and EsanCraft offered under "Open with" for WAV/AIFF/FLAC/MP3 and MIDI files
+  (without taking over the user's default player for them).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="EsanCraft"
+      Manufacturer="Reoniazx"
+      Version="$(var.Version)"
+      UpgradeCode="C4046B4E-9E69-4B42-B634-FFDAF216FD8B"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="EsanCraft digital audio workstation" Manufacturer="Reoniazx" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of EsanCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="SoundcraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="SoundcraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/reoniazx/EsanCraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/reoniazx/EsanCraft" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/reoniazx/EsanCraft/issues" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="EsanCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="EsanCraft" Level="1">
+      <ComponentGroupRef Id="SoundcraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="SoundcraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="SoundcraftNotice">
+        <File Id="SoundcraftNoticeFile" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
+      </Component>
+      <Component Id="EsanCraftLegal1">
+        <File Id="EsanCraftLegalFile1" Source="$(var.BinDir)\LICENSE" KeyPath="yes" />
+      </Component>
+      <Component Id="EsanCraftLegal2">
+        <File Id="EsanCraftLegalFile2" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
+      </Component>
+      <Component Id="EsanCraftLegal3">
+        <File Id="EsanCraftLegalFile3" Source="$(var.BinDir)\LICENSE-APACHE" KeyPath="yes" />
+      </Component>
+      <Component Id="EsanCraftLegal4">
+        <File Id="EsanCraftLegalFile4" Source="$(var.BinDir)\ATTRIBUTION.md" KeyPath="yes" />
+      </Component>
+      <Component Id="EsanCraftLegal5">
+        <File Id="EsanCraftLegalFile5" Source="$(var.BinDir)\MODIFICATIONS.md" KeyPath="yes" />
+      </Component>
+      <Component Id="EsanCraftLegal6">
+        <File Id="EsanCraftLegalFile6" Source="$(var.BinDir)\THIRD-PARTY-LICENSES.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="SoundcraftApp" Guid="10EC9BCF-8777-4906-988E-588AECB833C7">
+        <File Id="SoundcraftExe" Source="$(var.BinDir)\esancraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="EsanCraft"
+              Description="EsanCraft digital audio workstation" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="SoundcraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <!-- .scraft: EsanCraft's own session format; EsanCraft is its default app. -->
+        <ProgId Id="EsanCraft.Session" Description="EsanCraft Session" Icon="SoundcraftExe" IconIndex="0">
+          <Extension Id="scraft" ContentType="application/x-soundcraft-session">
+            <Verb Id="open" Command="Open" TargetFile="SoundcraftExe" Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <!-- Audio and MIDI files: offered under "Open with" (imported into a session), never forced
+             as the default. -->
+        <ProgId Id="EsanCraft.Audio" Description="Audio File" Icon="SoundcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\EsanCraft.Audio\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <ProgId Id="EsanCraft.Midi" Description="MIDI File" Icon="SoundcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\EsanCraft.Midi\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.wav\OpenWithProgids" Name="EsanCraft.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.aif\OpenWithProgids" Name="EsanCraft.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.aiff\OpenWithProgids" Name="EsanCraft.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.flac\OpenWithProgids" Name="EsanCraft.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mp3\OpenWithProgids" Name="EsanCraft.Audio" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mid\OpenWithProgids" Name="EsanCraft.Midi" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.midi\OpenWithProgids" Name="EsanCraft.Midi" Value="" Type="string" />
+
+        <!-- "Open with" app list and the Run dialog (Win+R "esancraft"). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe" Name="FriendlyAppName" Value="EsanCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\shell\open\command" Value="&quot;[#SoundcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".scraft" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".wav" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".aif" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".aiff" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".flac" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".mp3" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".mid" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\esancraft.exe\SupportedTypes" Name=".midi" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\esancraft.exe" Value="[#SoundcraftExe]" Type="string" />
+      </Component>
+
+      <Component Id="SoundcraftCli" Guid="0FB200F7-6CAB-4520-801A-562E106936EB">
+        <File Id="SoundcraftCliExe" Source="$(var.BinDir)\esancraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

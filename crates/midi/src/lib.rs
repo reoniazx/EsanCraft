@@ -1,4 +1,5 @@
-//! SoundThai MIDI.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! EsanCraft MIDI.
 //!
 //! - [`Note`], [`CtrlEvent`] and [`Sequence`]: the MIDI content of a region / track, in ticks at
 //!   [`PPQ`] (960) ticks per quarter note.

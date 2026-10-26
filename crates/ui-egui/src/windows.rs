@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Secondary floating windows (Window menu).
 
 use crate::SoundApp;

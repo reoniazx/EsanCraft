@@ -1,5 +1,6 @@
-# A tiny CLAP plugin used only by SoundThai's integration tests. Not part of the
-# SoundThai workspace (the empty [workspace] table makes it its own root); the test builds it
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+# A tiny CLAP plugin used only by EsanCraft's integration tests. Not part of the
+# EsanCraft workspace (the empty [workspace] table makes it its own root); the test builds it
 # with `cargo build` and loads the resulting library. Never shipped.
 [package]
 name = "clap-fixture"

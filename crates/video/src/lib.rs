@@ -1,4 +1,5 @@
-//! SoundThai video: open a movie (MP4 / QuickTime MOV) from bytes, report its picture format, and
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! EsanCraft video: open a movie (MP4 / QuickTime MOV) from bytes, report its picture format, and
 //! decode the frame at a time to RGBA for the Video window and the Video track's thumbnails.
 //!
 //! - [`Movie::open`] (bytes) / [`Movie::open_source`] (any random-access [`ByteSource`]).
@@ -20,7 +21,7 @@
 //! (`storytold/filmcraft`, same organisation, MIT OR Apache-2.0): `filmcraft-h264` → [`h264`]
 //! (without its test-only synthetic stream module), `filmcraft-prores` → [`prores`]. Only the
 //! module paths were changed; fixes found here should be offered back upstream. [`Movie`], the
-//! pixel conversion and the frame caches are SoundThai's own.
+//! pixel conversion and the frame caches are EsanCraft's own.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 // Codec code indexes fixed-size blocks; index loops read more clearly than iterator chains there.
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]

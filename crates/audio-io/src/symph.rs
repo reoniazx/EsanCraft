@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Decode path for everything that isn't native PCM WAV/AIFF, backed by `symphonia`.
 
 use std::io::{Cursor, Seek, SeekFrom};

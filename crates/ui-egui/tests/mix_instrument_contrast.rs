@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 use egui::{Color32, Event, FullOutput, Rect, Shape, pos2, vec2};
 use egui_kittest::kittest::Queryable;
 use serde_json::json;

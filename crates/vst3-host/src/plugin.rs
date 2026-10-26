@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! `Vst3Plugin`: a loaded VST3 instance behind the safe `soundcraft_dsp::Plugin` trait.
 
 use crate::ffi::{AFTERTOUCH, BusBuffers, EVENT_CAP, EditorLink, HostContext, Instance, NoteEvent, PARAM_QUEUE_CAP, PITCH_BEND};
@@ -14,7 +15,7 @@ const MAX_CHANNELS: usize = 64;
 /// An `unsynced` slot with no value waiting (a NaN pattern, which `set_param` never stores).
 const SYNCED: u64 = u64::MAX;
 
-/// How a SoundThai parameter value maps to the VST3 normalized value.
+/// How a EsanCraft parameter value maps to the VST3 normalized value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Mapping {
     /// Toggle/choice index `0..=steps` ↔ `index / steps`.
@@ -465,7 +466,7 @@ struct Vst3Editor {
     link: Arc<EditorLink>,
     host: ComWrapper<HostContext>,
     info: &'static PluginInfo,
-    /// Position of each SoundThai param id in `info.params` (looked up once per row and frame).
+    /// Position of each EsanCraft param id in `info.params` (looked up once per row and frame).
     index: HashMap<&'static str, usize>,
     /// The plugin's own unit label of each param (same order as `ids`).
     units: Vec<String>,

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Finding CLAP plugins on disk (safe, pure `std::fs`) and mapping CLAP features to categories.
 
 use soundcraft_dsp::Category;
@@ -114,7 +115,7 @@ pub fn bundle_executable(path: &Path) -> Option<PathBuf> {
     files.into_iter().next()
 }
 
-/// Maps CLAP feature strings to a SoundThai insert-menu category.
+/// Maps CLAP feature strings to a EsanCraft insert-menu category.
 pub fn category_from_features<S: AsRef<str>>(features: &[S]) -> Category {
     let has = |names: &[&str]| features.iter().any(|f| names.iter().any(|n| f.as_ref().eq_ignore_ascii_case(n)));
     if has(&["instrument", "synthesizer", "sampler", "drum", "drum-machine"]) {

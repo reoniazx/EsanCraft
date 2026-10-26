@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Audio device selection: which audio system (cpal host), output and input device, sample rate
 //! and buffer size to open. The choice is per machine (the app keeps it with its preferences, not
 //! in sessions). Anything that cannot be honoured falls back to the system default: a device that
@@ -111,7 +112,7 @@ pub fn audio_systems() -> Vec<AudioSystem> {
 
 /// True when a cpal error means the stream is dead and only a rebuild can restore audio. cpal 0.18
 /// reports every operation through one [`cpal::Error`]: `DeviceNotAvailable` means the device went
-/// away, and `StreamInvalidated` explicitly requires the stream to be rebuilt. SoundThai has no
+/// away, and `StreamInvalidated` explicitly requires the stream to be rebuilt. EsanCraft has no
 /// in-place rebuild, so both map to the existing actionable "reconnect audio device" trouble
 /// instead of leaving a dead stream silently logging. A rerouted default device
 /// (`DeviceChanged`) keeps playing, and an xrun is transient, so neither is a lost stream.

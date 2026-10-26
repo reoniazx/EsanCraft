@@ -1,6 +1,7 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 [package]
 name = "soundcraft-time"
-description = "SoundThai timebases: samples, Bars|Beats, Min:Secs, Timecode, Feet+Frames, tempo and meter maps, grid"
+description = "EsanCraft timebases: samples, Bars|Beats, Min:Secs, Timecode, Feet+Frames, tempo and meter maps, grid"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

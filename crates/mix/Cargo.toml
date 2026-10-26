@@ -1,6 +1,7 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 [package]
 name = "soundcraft-mix"
-description = "SoundThai mix engine: renders a session's tracks, plugins, sends, busses and automation to audio"
+description = "EsanCraft mix engine: renders a session's tracks, plugins, sends, busses and automation to audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

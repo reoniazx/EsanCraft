@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Multilingual names survive text entry in the real rename dialogs and session serialization.
 
 use egui::{Event, Key, Modifiers};

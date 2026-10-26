@@ -1,3 +1,5 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # Text and font support
 
 SoundCraft embeds unmodified, openly licensed Noto fonts. Track names, clip names,

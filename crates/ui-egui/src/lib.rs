@@ -1,4 +1,5 @@
-//! SoundThai's egui user interface.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! EsanCraft's egui user interface.
 //!
 //! The UI is a thin shell over [`soundcraft_engine::Engine`]: it draws engine state and acts by
 //! executing commands. It can be replaced without touching anything below it.
@@ -992,7 +993,7 @@ impl SoundApp {
     }
 
     /// Done with the open session. Unsaved changes stay in its autosave folder for the next
-    /// launch, unless the user quit with SoundThai's Quit; a take still recording is finished
+    /// launch, unless the user quit with EsanCraft's Quit; a take still recording is finished
     /// and always stays.
     pub fn close_autosave(&mut self) {
         let recording = self.engine.transport.recording;
@@ -1019,9 +1020,9 @@ impl SoundApp {
         self.panic_rev = self.engine.revision;
         let saved = self.engine.is_dirty() && self.write_autosave();
         self.ui.status = if saved {
-            "SoundThai hit an internal error (see the log). Your changes were autosaved: save them, then restart SoundThai.".into()
+            "EsanCraft hit an internal error (see the log). Your changes were autosaved: save them, then restart EsanCraft.".into()
         } else {
-            "SoundThai hit an internal error (see the log). Restart SoundThai to be safe.".into()
+            "EsanCraft hit an internal error (see the log). Restart EsanCraft to be safe.".into()
         };
     }
 
@@ -1123,7 +1124,7 @@ impl SoundApp {
         let (cause, then) = match trouble {
             OutputTrouble::Bug => (
                 "the audio engine hit an internal error (see the log)".to_string(),
-                "Use Reconnect audio device in Setup › Playback Engine, or restart SoundThai.",
+                "Use Reconnect audio device in Setup › Playback Engine, or restart EsanCraft.",
             ),
             OutputTrouble::Gone => {
                 (format!("“{name}” is unavailable"), "Check the audio device, then use Reconnect audio device in Setup › Playback Engine.")

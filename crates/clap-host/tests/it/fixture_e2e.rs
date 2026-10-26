@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! End to end: build the test CLAP plugin in `tests/fixture` (a cdylib outside the workspace),
 //! install it as a `.clap` in a temp folder, then scan → instantiate → process → params → notes.
 
@@ -15,7 +16,7 @@ fn scan_lists_both_fixture_plugins() {
     assert_eq!(found.len(), 5);
     let g = found.iter().find(|d| d.id == GAIN).unwrap();
     assert_eq!(g.name, "Fixture Gain");
-    assert_eq!(g.vendor, "SoundThai tests");
+    assert_eq!(g.vendor, "EsanCraft tests");
     assert_eq!(g.features, vec!["audio-effect", "stereo"]);
     assert_eq!(g.category, Category::Other);
     assert!(!g.is_instrument);

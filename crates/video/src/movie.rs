@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! [`Movie`]: open an MP4/MOV, report its picture format, and decode frames at times to RGBA.
 
 use crate::convert::{Matrix, Planes, planar_to_rgba, scale_rgba};
@@ -67,7 +68,7 @@ pub struct MovieInfo {
     pub codec: String,
     /// Human-readable codec description (e.g. "H.264 High", "Apple ProRes 422 HQ").
     pub codec_detail: String,
-    /// True when SoundThai can decode this picture (otherwise frame requests return `Err`).
+    /// True when EsanCraft can decode this picture (otherwise frame requests return `Err`).
     pub decodable: bool,
     /// The file also has an audio track.
     pub has_audio: bool,
@@ -255,7 +256,7 @@ impl Movie {
             None => (Codec::Unsupported("the video track has no sample description".into()), "unknown", "unknown".into()),
         };
         if u64::from(width) * u64::from(height) > MAX_PIXELS {
-            return Err(VideoError::Unsupported(format!("{width}x{height} is larger than SoundThai decodes")));
+            return Err(VideoError::Unsupported(format!("{width}x{height} is larger than EsanCraft decodes")));
         }
         let info = MovieInfo {
             width,

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Keyboard shortcuts. Most come from the command registry's `shortcut` strings; a few
 //! context-sensitive keys (Space, Enter, F-keys, nudge, Tab) are handled here.
 

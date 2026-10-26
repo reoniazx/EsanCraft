@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
-#   $DIST/soundthai-<version>-macos-<arch>.dmg          SoundThai.app on a drag-to-Applications DMG
-#   $DIST/soundthai-cli-<version>-macos-<arch>.zip      the headless CLI
+#   $DIST/esancraft-<version>-macos-<arch>.dmg          EsanCraft.app on a drag-to-Applications DMG
+#   $DIST/esancraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
@@ -39,9 +40,9 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/SoundThai.app"
-DMG="$DIST/soundthai-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/soundthai-cli-$VERSION-macos-$ARCH.zip"
+APP="$WORK/EsanCraft.app"
+DMG="$DIST/esancraft-$VERSION-macos-$ARCH.dmg"
+CLI_ZIP="$DIST/esancraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 if [[ "$IDENTITY" = "-" ]]; then
@@ -52,18 +53,18 @@ else
   warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
 fi
 
-echo "==> SoundThai $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
+echo "==> EsanCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
 if [[ "$SKIP_BUILD" = 0 ]]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p soundthai -p soundthai-cli "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p esancraft -p esancraft-cli "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in soundthai soundthai-cli; do
+for bin in esancraft esancraft-cli; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -111,16 +112,16 @@ notarize() {
   fi
 }
 
-# ---- SoundThai.app ----------------------------------------------------------------------------
+# ---- EsanCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
-cp "$WORK/bin/soundthai" "$APP/Contents/MacOS/SoundThai"
-cp "$ROOT/assets/app-icon/soundthai.icns" "$APP/Contents/Resources/SoundThai.icns"
+cp "$WORK/bin/esancraft" "$APP/Contents/MacOS/EsanCraft"
+cp "$ROOT/assets/app-icon/esancraft.icns" "$APP/Contents/Resources/EsanCraft.icns"
 # Required embedded-font notices are independent of optional font inputs.
-cp "$ROOT/NOTICE" "$APP/Contents/Resources/NOTICE"
+copy_docs "$APP/Contents/Resources"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
-  -e "s/@BUILD_SHA@/${SOUNDTHAI_BUILD_SHA:-unknown}/g" \
+  -e "s/@BUILD_SHA@/${ESANCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
@@ -131,13 +132,13 @@ xattr -cr "$APP"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/SoundThai"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/EsanCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
 if [[ "$NOTARIZE" = 1 ]]; then
-  ditto -c -k --keepParent "$APP" "$WORK/SoundThai-notarize.zip"
-  notarize "$WORK/SoundThai-notarize.zip"
+  ditto -c -k --keepParent "$APP" "$WORK/EsanCraft-notarize.zip"
+  notarize "$WORK/EsanCraft-notarize.zip"
   stapler_retry staple "$APP"
   stapler_retry validate "$APP"
   spctl --assess --type execute -vvv "$APP"
@@ -147,12 +148,10 @@ fi
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/SoundThai.app"
+ditto "$APP" "$STAGE/EsanCraft.app"
 ln -s /Applications "$STAGE/Applications"
 # Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
-mkdir -p "$STAGE/.background"
-cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
-# SoundThai uses Finder's default layout; the upstream layout names SoundCraft.app.
+# EsanCraft uses Finder's default layout; the upstream layout names SoundCraft.app.
 rm -f "$DMG"
 # `hdiutil create -srcfolder` writes the files as they are. `makehybrid -hfs` gave every file a
 # com.apple.FinderInfo, which `codesign --verify --strict` rejects as "Finder information, or
@@ -173,7 +172,7 @@ hdiutil_retry() {
     sleep $((attempt * 10))
   done
 }
-hdiutil_retry create create -srcfolder "$STAGE" -volname "SoundThai" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
+hdiutil_retry create create -srcfolder "$STAGE" -volname "EsanCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 # The app users get must still pass --strict: inside the finished image and after a ditto copy out
@@ -184,19 +183,19 @@ rm -rf "$MOUNT" "$COPY"
 mkdir -p "$MOUNT" "$COPY"
 hdiutil_retry attach attach -nobrowse -readonly -noautoopen -mountpoint "$MOUNT" "$DMG" >/dev/null
 dmg_ok=1
-codesign --verify --strict --deep --verbose=2 "$MOUNT/SoundThai.app" || dmg_ok=0
+codesign --verify --strict --deep --verbose=2 "$MOUNT/EsanCraft.app" || dmg_ok=0
 if [[ "$dmg_ok" = 1 ]]; then
-  { ditto "$MOUNT/SoundThai.app" "$COPY/SoundThai.app" &&
-    codesign --verify --strict --deep --verbose=2 "$COPY/SoundThai.app"; } || dmg_ok=0
+  { ditto "$MOUNT/EsanCraft.app" "$COPY/EsanCraft.app" &&
+    codesign --verify --strict --deep --verbose=2 "$COPY/EsanCraft.app"; } || dmg_ok=0
 fi
 if [[ "$dmg_ok" = 1 ]] && [[ "$NOTARIZE" = 1 ]]; then
-  spctl --assess --type execute -vvv "$COPY/SoundThai.app" || dmg_ok=0
+  spctl --assess --type execute -vvv "$COPY/EsanCraft.app" || dmg_ok=0
 fi
-[[ "$dmg_ok" = 1 ]] || xattr -lr "$MOUNT/SoundThai.app" >&2 || true
+[[ "$dmg_ok" = 1 ]] || xattr -lr "$MOUNT/EsanCraft.app" >&2 || true
 hdiutil_retry detach detach "$MOUNT" >/dev/null || dmg_ok=0
 rm -rf "$COPY"
 if [[ "$dmg_ok" != 1 ]]; then
-  echo "error: SoundThai.app in $(basename "$DMG") fails strict verification" >&2
+  echo "error: EsanCraft.app in $(basename "$DMG") fails strict verification" >&2
   exit 1
 fi
 if [[ "$NOTARIZE" = 1 ]]; then
@@ -208,17 +207,17 @@ fi
 
 # ---- CLI ---------------------------------------------------------------------------------------
 echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/soundthai-cli-$VERSION-macos-$ARCH"
+CLI_DIR="$WORK/esancraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
-cp "$WORK/bin/soundthai-cli" "$CLI_DIR/"
+cp "$WORK/bin/esancraft-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
-sign --options runtime "$CLI_DIR/soundthai-cli"
-codesign --verify --strict --verbose=2 "$CLI_DIR/soundthai-cli"
+sign --options runtime "$CLI_DIR/esancraft-cli"
+codesign --verify --strict --verbose=2 "$CLI_DIR/esancraft-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
 # A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
 if [[ "$NOTARIZE" = 1 ]]; then notarize "$CLI_ZIP"; fi
 
-"$WORK/bin/soundthai-cli" --version
+"$WORK/bin/esancraft-cli" --version
 echo "==> done"
 ls -lh "$DMG" "$CLI_ZIP"

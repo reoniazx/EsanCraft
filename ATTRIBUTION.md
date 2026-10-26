@@ -1,6 +1,8 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # Attribution
 
-Every asset bundled with or committed to SoundCraft is listed here with its author, source and
+Every asset bundled with or committed to EsanCraft is listed here with its author, source and
 license. `cargo xtask assets` fails CI when a tracked asset file has no row.
 
 **Rule:** no Avid, Pro Tools, Adobe or other proprietary icons, images, sounds or presets — ever.
@@ -84,19 +86,11 @@ here. The subset uses default_fonts; the parent face uses monochrome_emoji_fonts
 | `assets/fonts/noto-cjk/NotoSansCJK-Bold.ttc` | Adobe (copyright 2014–2021), The Noto Project Authors | [upstream](https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTC) | SIL Open Font License 1.1 (`assets/fonts/noto-cjk/OFL.txt`) |
 | `assets/fonts/noto-cjk/OFL.txt` | The Noto Project Authors | [upstream license](https://github.com/notofonts/noto-cjk/blob/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE) | SIL Open Font License 1.1 |
 | `assets/fonts/noto-cjk/COPYRIGHT.txt` | Adobe, Google | copyright and trademark notices from the bundled fonts' name tables | notices supplied with the SIL Open Font License 1.1 fonts |
-| `docs/brand/artcraft-logo.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) |
-| `docs/brand/artcraft-logo.png` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
-| `docs/brand/artcraft-logo-white.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
-| `docs/brand/artcraft-logo-white.png` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
-| `docs/brand/artcraft-mark.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
-| `docs/brand/artcraft-mark.png` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
-| `docs/brand/artcraft-mark-black.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
-| `docs/brand/artcraft-mark-black.png` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms |
 | `assets/app-icon/icon.svg` | SoundCraft contributors | original (hand-placed SVG paths; placeholder app icon) | MIT OR Apache-2.0 |
 | `packaging/macos/dmg/` (all files) | @XusBadia | original (macOS DMG window background and layout, from the app icon; see `packaging/macos/dmg/README.md`) | MIT OR Apache-2.0 |
-| `assets/app-icon/soundthai-1024.png` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
-| `assets/app-icon/soundthai-macos-512.png` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
-| `assets/app-icon/soundthai.icns` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
-| `assets/app-icon/soundthai.ico` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
+| `assets/app-icon/esancraft-1024.png` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
+| `assets/app-icon/esancraft-macos-512.png` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
+| `assets/app-icon/esancraft.icns` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
+| `assets/app-icon/esancraft.ico` | SoundCraft contributors | original, rendered from `icon.svg` | MIT OR Apache-2.0 |
 | `assets/app-icon/hicolor/` | SoundCraft contributors | original, rendered from `icon.svg` (16–512 px PNGs and the scalable SVG) | MIT OR Apache-2.0 |
 | `docs/images/` | SoundCraft contributors | screenshots of SoundCraft rendered from the synthesised demo session | MIT OR Apache-2.0 |

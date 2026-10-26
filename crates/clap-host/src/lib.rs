@@ -1,11 +1,12 @@
-//! SoundThai's CLAP plugin host.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! EsanCraft's CLAP plugin host.
 //!
 //! Scans the standard CLAP folders (plus `CLAP_PATH`), loads `.clap` binaries in-process and
 //! exposes each plugin as a [`soundcraft_dsp::Plugin`], so the mix engine treats third-party
 //! plugins exactly like the built-in ones. Plugin ids are `clap:<CLAP plugin id>`; parameter ids
 //! are the CLAP param ids as decimal strings, with their human names in [`PluginInfo::params`].
 //!
-//! This is SoundThai's single isolated `unsafe` crate (craftrules never-crash): `unsafe` is
+//! This is EsanCraft's single isolated `unsafe` crate (craftrules never-crash): `unsafe` is
 //! denied crate-wide and allowed only in the private `ffi` module. The public API is safe, returns
 //! `Result`/`Option` and never panics. Limits of in-process hosting: a plugin that itself crashes
 //! (segfault) takes the process down with it; we cannot sandbox native code.
@@ -21,8 +22,8 @@
 //! [`Plugin::load_state`] as an opaque blob. Plugin editors (`clap.gui`) open as the plugin's own
 //! floating window ([`Plugin::open_editor`], or [`Plugin::editor`] for a handle usable on the main
 //! thread while the instance processes on the audio thread). Plugins that offer only an embedded
-//! editor get a host window of SoundThai's on Windows (resized on `request_resize`, closed by
-//! its title bar); elsewhere they are not hosted yet, and SoundThai's generic parameter editor
+//! editor get a host window of EsanCraft's on Windows (resized on `request_resize`, closed by
+//! its title bar); elsewhere they are not hosted yet, and EsanCraft's generic parameter editor
 //! still works for them.
 //! Parameter changes made in the plugin's GUI arrive as output events while the plugin processes
 //! and are reported by the editor's `idle`.
@@ -48,7 +49,7 @@ use std::path::{Path, PathBuf};
 /// Prefix of every hosted-CLAP plugin id.
 pub const ID_PREFIX: &str = "clap:";
 
-/// The CLAP plugin id inside a `clap:<id>` SoundThai id (`None` for other ids or an empty id).
+/// The CLAP plugin id inside a `clap:<id>` EsanCraft id (`None` for other ids or an empty id).
 pub fn parse_id(id: &str) -> Option<&str> {
     id.strip_prefix(ID_PREFIX).filter(|s| !s.is_empty() && !s.contains('\0'))
 }
@@ -56,7 +57,7 @@ pub fn parse_id(id: &str) -> Option<&str> {
 /// One plugin found by a scan.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ClapDescriptor {
-    /// SoundThai id: `clap:<plugin_id>`.
+    /// EsanCraft id: `clap:<plugin_id>`.
     pub id: String,
     /// The CLAP plugin id (reverse-DNS, e.g. `com.vendor.reverb`).
     pub plugin_id: String,

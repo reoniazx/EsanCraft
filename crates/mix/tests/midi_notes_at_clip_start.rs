@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! A clip start is a sample position, not necessarily a whole tick; the MIDI notes in the clip
 //! must still play in every block size (512-frame realtime blocks, 1024-frame bounce blocks),
 //! exactly at their sample position and never before the clip start.

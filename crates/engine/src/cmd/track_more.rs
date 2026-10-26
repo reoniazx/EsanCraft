@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! More Track menu commands: Convert Aux to Routing Folder, Extract MIDI, track presets, insert /
 //! send bypass subsets, MIDI real-time properties, trim/VCA coalescing and target playlists.
 use super::{CommandSpec, bad, has_selection, has_tracks, range_param, str_param, tracks_param, tracks_required};
@@ -274,7 +275,7 @@ fn load_preset(e: &mut Engine, p: &Value) -> Result<Value> {
     let text = crate::io::read_text(&path)?;
     let v: Value = serde_json::from_str(&text).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
     if v.get("format").and_then(Value::as_str) != Some(PRESET_FORMAT) {
-        return Err(EngineError::Io(format!("{path}: not a SoundThai track preset")));
+        return Err(EngineError::Io(format!("{path}: not a EsanCraft track preset")));
     }
     let mut mixer: soundcraft_model::Mixer =
         serde_json::from_value(v.get("mixer").cloned().unwrap_or(Value::Null)).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;

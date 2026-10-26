@@ -1,6 +1,7 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The folders automation may read and write.
 //!
-//! `soundthai-cli mcp --automation-read-root <dir> --automation-write-root <dir>` confines the
+//! `esancraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>` confines the
 //! files an agent's commands reach; each flag may be given more than once (#874). [`AutomationRoots`]
 //! holds the folders of each kind. While they are in force, every path a command reads goes through
 //! [`check_read`] and every path it writes through [`check_write`]:
@@ -14,7 +15,7 @@
 //! - Read and write access are separate: a root given alone grants only its own kind of access.
 //!
 //! Roots are in force on a thread inside [`confine`], and in the whole process after
-//! [`confine_process`] (`soundthai-cli mcp`), except inside [`unconfined`]. Without roots
+//! [`confine_process`] (`esancraft-cli mcp`), except inside [`unconfined`]. Without roots
 //! nothing is checked.
 //!
 //! A path is checked, then opened: a process that can change the folders in between (swapping in

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Test-only CLAP plugins for soundcraft-clap-host: a gain effect and a "DC synth".
 //!
 //! - `org.soundcraft.test.gain`: stereo in/out, param 7 "Gain" (0..2, default 1), param 3 "Mode"
@@ -48,7 +49,7 @@ const fn wide_desc(id: &'static CStr, name: &'static CStr) -> clap_plugin_descri
         clap_version: CLAP_VERSION,
         id: id.as_ptr(),
         name: name.as_ptr(),
-        vendor: c"SoundThai tests".as_ptr(),
+        vendor: c"EsanCraft tests".as_ptr(),
         url: std::ptr::null(),
         manual_url: std::ptr::null(),
         support_url: std::ptr::null(),
@@ -66,7 +67,7 @@ static GAIN_DESC: clap_plugin_descriptor = clap_plugin_descriptor {
     clap_version: CLAP_VERSION,
     id: c"org.soundcraft.test.gain".as_ptr(),
     name: c"Fixture Gain".as_ptr(),
-    vendor: c"SoundThai tests".as_ptr(),
+    vendor: c"EsanCraft tests".as_ptr(),
     url: c"".as_ptr(),
     manual_url: c"".as_ptr(),
     support_url: c"".as_ptr(),
@@ -79,7 +80,7 @@ static SYNTH_DESC: clap_plugin_descriptor = clap_plugin_descriptor {
     clap_version: CLAP_VERSION,
     id: c"org.soundcraft.test.synth".as_ptr(),
     name: c"Fixture Synth".as_ptr(),
-    vendor: c"SoundThai tests".as_ptr(),
+    vendor: c"EsanCraft tests".as_ptr(),
     url: std::ptr::null(),
     manual_url: std::ptr::null(),
     support_url: std::ptr::null(),

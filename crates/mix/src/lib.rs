@@ -1,4 +1,5 @@
-//! The SoundThai mix engine.
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+//! The EsanCraft mix engine.
 //!
 //! [`MixEngine::render`] produces one block of the main output for a session at a timeline
 //! position: clips (with clip gain and fades) → trim/phase → inserts → pre-fader sends → fader and

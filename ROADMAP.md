@@ -1,12 +1,14 @@
-# SoundThai roadmap
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 
-> SoundThai fork initialized 2026-10-26 from local SoundCraft `main` at `ab7ede2`.
+# EsanCraft roadmap
+
+> EsanCraft fork initialized 2026-10-26 from local SoundCraft `main` at `ab7ede2`.
 > The assessments below are inherited SoundCraft baseline estimates; the fork does not increase readiness.
-> Fork setup and upstream updates: [SoundThai guide](docs/soundthai-fork.md).
+> Fork setup and upstream updates: [EsanCraft guide](docs/esancraft-fork.md).
 
 **Stage: pre-alpha** · next: alpha, ~5% and ~110–180 h away (the alpha gate's three failing workflows)
 
-> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (independent SoundThai fork) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (EsanCraft branding and license packaging) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 SoundCraft is a clean-room, pure-Rust digital audio workstation that aims at full parity with
 Avid Pro Tools, and then beyond it: faster, open, scriptable and agent-controllable. This page is
@@ -128,7 +130,11 @@ mutated and truncated movies. Field reports from the first public week are track
 
 ## Progress log
 
-- **2026-10-26 (SoundThai):** Independent fork with its own application packages, settings, installer identities and GitHub update source. Upstream history, session compatibility, licenses and contributor credits retained. Readiness unchanged.
+- **2026-10-26 (license audit):** Removed upstream ArtCraft marks from the current tree; added per-file change notices, a modification record and font-license supplement; macOS, MSI and Flatpak packaging now include full code licenses and notices. See `docs/license-audit.md` for evidence and scope. Readiness unchanged.
+
+- **2026-10-26 (EsanCraft):** Renamed from SoundThai; separate application packages, settings, installers and update source now use EsanCraft. Session compatibility and inherited readiness unchanged.
+
+- **2026-10-26 (EsanCraft):** Independent fork with its own application packages, settings, installer identities and GitHub update source. Upstream history, session compatibility, licenses and contributor credits retained. Readiness unchanged.
 
 - **2026-10-26:** macOS dropdowns use native AppKit menus too: Track View/Playlist/Voice/Automation, routing, inserts/instruments, toolbar values, MIDI scrolling, presets, and form/settings ComboBoxes. Search and Save Preset open auxiliary controls; form choices apply once after native tracking. Windows, Linux and web retain egui. Stage and readiness estimates unchanged.
 - **2026-10-25:** macOS right-click menus use native AppKit menus, adopting the system appearance (Liquid Glass on supported macOS/SDK combinations). Track, Clip, Groups, Clip List, Insert, Instrument and Send retain their existing actions; plugin Search and detailed Send controls open from the native menus. Other platforms and left-click pickers retain egui. Stage and readiness estimates unchanged.
@@ -158,7 +164,7 @@ mutated and truncated movies. Field reports from the first public week are track
 - **2026-10-14 (MIDI Velocity sizing):** The divider above Velocity adjusts its height inside docked and floating MIDI Editors. UI preferences retain the height; keyboard adjustment and double-click reset share the UI command. Viewport bounds keep notes visible without modifying the session or playback cue. No readiness percentage change.
 - **2026-10-14 (MIDI playback visibility):** MIDI Editor displays the transport cursor within the piano roll, with six independent scrolling modes (Page by default). Center Playhead supports a stopped playback cue without replacing selections; explicit starts, loop and punch ranges retain their behavior. Tempo changes, zoom/pan, loop wraps, stops, natural completion and preference compatibility are tested. No readiness percentage change.
 - **2026-10-14:** MCP `batch` rejects more than 1000 calls before executing any command, instead of silently running only the first 1000 (#460). No readiness percentage change.
-- **2026-10-14:** `soundthai-cli convert` dithers only when the output loses resolution (fewer bits than the source, a float or lossy source, or resampled/normalized samples); a same-depth, wider or 32-bit float conversion copies the samples exactly and digital silence stays silent. `--dither` and `--no-dither` override the choice (#548)
+- **2026-10-14:** `esancraft-cli convert` dithers only when the output loses resolution (fewer bits than the source, a float or lossy source, or resampled/normalized samples); a same-depth, wider or 32-bit float conversion copies the samples exactly and digital silence stays silent. `--dither` and `--no-dither` override the choice (#548)
 - **2026-10-13:** WAV: an empty data chunk followed by metadata (LIST, bext) reads as no audio; a recording that was never finalised (sizes left at 0) still gives what was written (#466)
 - **2026-10-13:** Sampler: a ping-pong loop keeps its phase and direction when a step is wider than the loop (a narrow loop with high transposition), instead of reflecting once and dropping the rest of the travel (#463)
 - **2026-10-13 (VST3 host messages):** The VST3 host creates `IMessage` and `IAttributeList` objects for plugins (`IHostApplication::createInstance`), so plugins whose controller and processor talk through `IConnectionPoint::notify` work: Line 6 Helix Stadium Native now loads its content database (it reported "Failed to get content database recovery info (Out of memory condition)") and exposes its parameters. No readiness percentage change.
@@ -168,7 +174,7 @@ mutated and truncated movies. Field reports from the first public week are track
 - **2026-10-12 (audio device settings):** Setup › Playback Engine chooses the audio system, output and input device, sample rate and buffer size, kept per machine with the preferences; 16/32-bit integer devices are converted; ASIO is available behind the opt-in `asio` build feature (verified with an SSL 2+ at 128 samples). Channel routing, one duplex clock and latency compensation remain (G-01). No readiness percentage change.
 - **2026-10-12 (Mix in a separate window):** Window › Mix in Separate Window shows the Mix window in its own native window, so Edit and Mix can be on screen at once (e.g. one per monitor), as in Pro Tools. No readiness percentage change.
 - **2026-10-12 (plugin editors on Windows):** VST3 editors and embedded CLAP editors open in a SoundCraft host window on Windows (owned by the app window, resized on request, closed from its title bar); verified with a JUCE VST3 compressor and a CLAP effect. No readiness percentage change.
-- **2026-10-12:** `soundthai-cli convert` rejects an unparsable or zero `--rate` and an unknown `--bit-depth` (exit 1, nothing written) instead of converting with a default (#256)
+- **2026-10-12:** `esancraft-cli convert` rejects an unparsable or zero `--rate` and an unknown `--bit-depth` (exit 1, nothing written) instead of converting with a default (#256)
 - **2026-10-12:** Timecode labels with huge fields no longer overflow: frame counts are computed in 128 bits and clamp, so `setup.current_timecode` and `session.format_time` saturate instead of failing (#248)
 - **2026-10-12:** `session.format_time` with the smallest bar number no longer fails with an internal error: the bar offset saturates (#249)
 - **2026-10-12 (plugin editors on Windows):** VST3 editors and embedded CLAP editors open in a SoundCraft host window on Windows (owned by the app window, resized on request, closed from its title bar); verified with a JUCE VST3 compressor and a CLAP effect. No readiness percentage change.
@@ -195,7 +201,9 @@ mutated and truncated movies. Field reports from the first public week are track
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-26 | minor | Independent SoundThai application packages, settings, installers and update source; inherited readiness unchanged |
+| 2026-10-26 | minor | Remove upstream trademark art, add modified-file notices and complete code/font license packaging; see license audit; readiness unchanged |
+| 2026-10-26 | minor | Rename SoundThai to EsanCraft across application packages, configuration, installers and repository; readiness unchanged |
+| 2026-10-26 | minor | Independent EsanCraft application packages, settings, installers and update source; inherited readiness unchanged |
 | 2026-10-26 | trivial | Merge upstream egui 0.37, dock columns, update prompts and audio fixes while retaining local native menus, import progress and editor improvements; readiness estimates unchanged |
 | 2026-10-26 | minor | Native macOS dropdowns across track controls, routing, forms and settings; readiness estimates unchanged |
 | 2026-10-25 | minor | Native macOS context menus with plugin search and Send controls; readiness estimates unchanged |

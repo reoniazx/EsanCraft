@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Split tracks into mono without replacing the right/surround channels with channel zero.
 
 use serde_json::json;

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The FFI boundary: the only module of this crate allowed to use `unsafe`.
 //!
 //! It loads VST3 binaries (`libloading`), runs the platform module entry, calls the COM
@@ -7,7 +8,7 @@
 //!
 //! Soundness rests on the VST3 contract (the plugin honours the COM vtable signatures and the
 //! documented pointer lifetimes). A plugin that violates it can still crash the process: hosting
-//! in-process can't prevent that. What this module guarantees is that *SoundThai* never hands
+//! in-process can't prevent that. What this module guarantees is that *EsanCraft* never hands
 //! the plugin dangling or mis-sized pointers and never reads plugin strings beyond their bounds.
 
 // VST3 enum constants are `c_int` on Windows and `c_uint` elsewhere, so casts that are no-ops on
@@ -47,7 +48,7 @@ pub(crate) const PARAM_QUEUE_CAP: usize = 1024;
 const MAX_STATE_BYTES: usize = 64 << 20;
 /// Most editor parameter edits buffered between two UI frames.
 const EDIT_CAP: usize = 256;
-/// Magic of SoundThai's state container: `SCV3` + u32 LE component length + component state +
+/// Magic of EsanCraft's state container: `SCV3` + u32 LE component length + component state +
 /// u32 LE controller length + controller state.
 const STATE_MAGIC: &[u8; 4] = b"SCV3";
 
@@ -153,7 +154,7 @@ fn os_thread() -> usize {
             fn pthread_self() -> usize;
         }
         // SAFETY: `pthread_self` takes no arguments and cannot fail; `pthread_t` is an integer or
-        // a pointer of pointer size on the Unix systems SoundThai builds for.
+        // a pointer of pointer size on the Unix systems EsanCraft builds for.
         unsafe { pthread_self() }
     }
     #[cfg(windows)]
@@ -639,7 +640,7 @@ impl IHostApplicationTrait for HostContext {
         // SAFETY: the plugin passes a pointer to a writable String128 (or null, handled).
         match unsafe { name.as_mut() } {
             Some(n) => {
-                write_c16("SoundThai", n);
+                write_c16("EsanCraft", n);
                 sb::kResultOk
             }
             None => sb::kInvalidArgument,
@@ -888,7 +889,7 @@ impl sv::IMessageTrait for HostMessage {
     }
 }
 
-/// One parameter's points for one block. SoundThai sends at most one point per block; a
+/// One parameter's points for one block. EsanCraft sends at most one point per block; a
 /// plugin writing output changes may add more, of which only the last is kept.
 #[derive(Default)]
 pub(crate) struct ParamQueue {
@@ -1049,7 +1050,7 @@ impl IEventListTrait for EventList {
         // SAFETY: in-pointer from the plugin (or null, handled).
         let Some(&ev) = (unsafe { e.as_ref() }) else { return sb::kInvalidArgument };
         let cap = self.cap;
-        // Output events (e.g. MIDI out) are accepted while there is room; SoundThai ignores them.
+        // Output events (e.g. MIDI out) are accepted while there is room; EsanCraft ignores them.
         match self.with(|v| {
             if v.len() < cap {
                 v.push(ev);
@@ -1336,7 +1337,7 @@ pub(crate) struct Instance {
 }
 
 // SAFETY: an `Instance` is used through `&mut self` only, so calls into the plugin are always
-// serialised. SoundThai creates instances on the engine/UI thread and then moves them into the
+// serialised. EsanCraft creates instances on the engine/UI thread and then moves them into the
 // mix engine (documented limitation: VST3 expects `setActive`, controller calls etc. on the UI
 // thread; they may then happen on the audio thread).
 unsafe impl Send for Instance {}
@@ -1738,7 +1739,7 @@ impl Drop for Instance {
     }
 }
 
-/// Splits a state blob into (component, controller) parts. A blob without SoundThai's container
+/// Splits a state blob into (component, controller) parts. A blob without EsanCraft's container
 /// header is taken as a bare component state.
 fn split_state(data: &[u8]) -> Option<(&[u8], &[u8])> {
     if data.len() > MAX_STATE_BYTES.saturating_mul(2) {
@@ -1922,7 +1923,7 @@ impl EditorLink {
         }
     }
 
-    /// The component state plus the controller state, in SoundThai's container (see
+    /// The component state plus the controller state, in EsanCraft's container (see
     /// `STATE_MAGIC`). `None` when the component refuses `getState` or the instance is gone.
     pub fn save_state(&self) -> Option<Vec<u8>> {
         let g = self.lock();
@@ -2191,7 +2192,7 @@ mod window {
         static CLASS: OnceLock<Option<Vec<u16>>> = OnceLock::new();
         CLASS
             .get_or_init(|| {
-                let name = wide("SoundThaiVst3Editor");
+                let name = wide("EsanCraftVst3Editor");
                 // SAFETY: null asks for this process's module handle.
                 let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
                 let wc = WNDCLASSEXW {
@@ -2455,8 +2456,8 @@ mod tests {
     #[test]
     fn strings_are_bounded() {
         let mut b = [0u16; 4];
-        write_c16("SoundThai", &mut b);
-        assert_eq!(read_c16(&b), "Sou");
+        write_c16("EsanCraft", &mut b);
+        assert_eq!(read_c16(&b), "Esa");
         let full: Vec<u16> = "abcd".encode_utf16().collect();
         assert_eq!(read_c16(&full), "abcd");
         let c: Vec<c_char> = b"Fx|EQ\0junk".iter().map(|&x| x as c_char).collect();
@@ -2519,7 +2520,7 @@ mod tests {
             assert_eq!(h.getName(&mut name), sb::kResultOk);
             assert_eq!(h.restartComponent(sv::RestartFlags_::kLatencyChanged as i32), sb::kResultOk);
         }
-        assert_eq!(read_c16(&name), "SoundThai");
+        assert_eq!(read_c16(&name), "EsanCraft");
         assert!(h.latency_changed.load(Ordering::Relaxed));
         assert_eq!(hex(&[0xAB; 16]), "AB".repeat(16));
     }

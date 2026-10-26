@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The session: the whole document.
 
 use crate::clip::{bound, bound_sequence};
@@ -15,9 +16,9 @@ pub const FEET_FRAMES_START: &str = "feet_frames.start";
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SessionError {
-    #[error("not a SoundThai session: {0}")]
+    #[error("not a EsanCraft session: {0}")]
     Format(String),
-    #[error("session file version {0} is newer than this SoundThai supports")]
+    #[error("session file version {0} is newer than this EsanCraft supports")]
     Version(u32),
     #[error("{0}")]
     Invalid(String),

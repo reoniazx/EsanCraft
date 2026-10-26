@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Tracks and playlists.
 
 use crate::{AutoParam, AutomationLane, ChannelFormat, Clip, ClipId, Mixer, TrackId};
@@ -198,7 +199,7 @@ impl TrackHeight {
     }
 }
 
-/// The default track colour palette (original, chosen for SoundThai).
+/// The default track colour palette (original, chosen for EsanCraft).
 pub const TRACK_COLORS: [[u8; 3]; 16] = [
     [86, 132, 214],
     [94, 170, 214],

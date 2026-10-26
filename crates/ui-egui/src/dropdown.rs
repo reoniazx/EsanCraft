@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Native presentation for ordinary form ComboBoxes. Values remain owned by their forms:
 //! only a row identity crosses the native tracking loop, and the next frame applies it.
 use crate::context_menu::{Action, Anchor, Entry, Request, Target};
@@ -46,7 +47,7 @@ pub(crate) fn collect(app: &mut crate::SoundApp, ctx: &Context) {
     }
 }
 
-/// Same small ComboBox API used by SoundThai's forms, with an unchanged egui fallback.
+/// Same small ComboBox API used by EsanCraft's forms, with an unchanged egui fallback.
 pub struct ComboBox {
     fallback: egui::ComboBox<'static>,
     salt: Id,

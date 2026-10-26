@@ -1,6 +1,7 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 [package]
 name = "soundcraft-playback"
-description = "SoundThai audio device I/O: realtime playback and recording through the mix engine"
+description = "EsanCraft audio device I/O: realtime playback and recording through the mix engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

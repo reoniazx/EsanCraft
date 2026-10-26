@@ -1,3 +1,4 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
@@ -8,7 +9,7 @@ version = "0.13.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
-repository = "https://github.com/reoniazx/SoundThai"
+repository = "https://github.com/reoniazx/EsanCraft"
 
 [workspace.dependencies]
 # internal

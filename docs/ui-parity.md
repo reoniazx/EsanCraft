@@ -1,3 +1,5 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # UI parity
 
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** trivial (merge upstream main while retaining local features) · **Target:** Avid Pro Tools Ultimate 2026.4.1

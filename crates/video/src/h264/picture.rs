@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Picture buffers and per-macroblock state.
 
 use std::sync::{Arc, OnceLock};
@@ -195,7 +196,7 @@ impl Frame {
         #[cfg(not(feature = "threads"))]
         {
             // Rows are decoded before use on the calling thread; a missing one (never expected)
-            // reads as mid-grey intra rather than aborting. (SoundThai change: was `expect`.)
+            // reads as mid-grey intra rather than aborting. (EsanCraft change: was `expect`.)
             self.rows[r].get_or_init(|| FrameRow::grey(self.mb_w))
         }
     }

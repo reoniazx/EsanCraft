@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Small custom widgets in the studio style.
 
 use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};

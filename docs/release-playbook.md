@@ -1,6 +1,8 @@
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
+
 # Release playbook
 
-SoundThai-specific setup, its independent release channel, and signing requirements are documented in [soundthai-fork.md](soundthai-fork.md). This repository must use its own signing credentials.
+EsanCraft-specific setup, its independent release channel, and signing requirements are documented in [esancraft-fork.md](esancraft-fork.md). This repository must use its own signing credentials.
 
 The release playbook shared by every crafting app lives in craftrules:
 [`../craftrules/release/playbook.md`](../../craftrules/release/playbook.md)

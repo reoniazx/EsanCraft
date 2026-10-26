@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The menu bar, built from the incumbent's menu catalog so every item has its place. Items
 //! that map to a command are live; the rest are shown disabled (and listed in the parity report).
 
@@ -24,7 +25,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.narrow_mix", "Narrow Mix", "View > Narrow Mix", Some("Cmd+Alt+M")),
     ("window.session_info", "Session Info", "", None),
     ("window.audio_health", "Session Audio Health", "", None),
-    ("window.about", "About SoundThai", "", None),
+    ("window.about", "About EsanCraft", "", None),
     ("window.close", "Close Window", "Window > Close Window", Some("Cmd+W")),
     ("window.hide_floating", "Hide All Floating Windows", "Window > Hide All Floating Windows", Some("Cmd+Ctrl+W")),
     ("window.midi_editor", "MIDI Editor", "Window > MIDI Editor", None),
@@ -238,8 +239,8 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
         ui,
         |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("SoundThai", |ui| {
-                    if ui.button("About SoundThai").clicked() {
+                ui.menu_button("EsanCraft", |ui| {
+                    if ui.button("About EsanCraft").clicked() {
                         app.ui.show_about = true;
                     }
                     if ui.button("Check for Updates…").clicked() {
@@ -446,7 +447,7 @@ fn params_for(path: &str, id: &str) -> Value {
     }
 }
 
-/// Menu items that open a SoundThai window when clicked (programmatic calls still run the command).
+/// Menu items that open a EsanCraft window when clicked (programmatic calls still run the command).
 const MENU_WINDOWS: &[(&str, &str)] = &[
     ("Setup > Appearance", "window.ui_customization"),
     ("Setup > Hardware...", "window.playback_engine"),

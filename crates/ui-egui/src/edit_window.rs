@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The Edit window: toolbar, rulers, track headers and playlists.
 
 use crate::dialogs::Dialog;

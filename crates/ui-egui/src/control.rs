@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! The JSON control channel's UI side. The app's TCP server turns each request line into a
 //! [`ControlRequest`]; they are handled on the UI thread here, so every command an agent sends
 //! goes through exactly the same code as a click.

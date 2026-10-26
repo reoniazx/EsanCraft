@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 use soundcraft_audio_io::{
     AudioBuffer, BitDepth, BwfInfo, EncodeOptions, FileFormat, SampleFormat, decode, detect_format, encode, encode_wav_rf64, probe, wav_float_header,
 };
@@ -131,7 +132,7 @@ fn flac_rejects_unsupported_layouts() {
 fn bwf_roundtrip() {
     let bwf = BwfInfo {
         description: "Scene 12 take 3".into(),
-        originator: "SoundThai".into(),
+        originator: "EsanCraft".into(),
         originator_reference: "SC-0001".into(),
         origination_date: "2026-10-06".into(),
         origination_time: "12:34:56".into(),

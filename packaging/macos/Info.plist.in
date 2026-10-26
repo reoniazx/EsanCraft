@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Modified for EsanCraft; original notices retained. See MODIFICATIONS.md. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Template: packaging/macos/package.sh substitutes @VERSION@ (full, e.g. 0.2.0-rc.1),
      @SHORT_VERSION@ (numeric X.Y.Z) and @BUILD_SHA@. -->
@@ -7,13 +8,13 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>SoundThai</string>
+  <string>EsanCraft</string>
   <key>CFBundleName</key>
-  <string>SoundThai</string>
+  <string>EsanCraft</string>
   <key>CFBundleExecutable</key>
-  <string>SoundThai</string>
+  <string>EsanCraft</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.storyteller.soundthai</string>
+  <string>ai.storyteller.esancraft</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -24,12 +25,12 @@
   <string>@SHORT_VERSION@</string>
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
-  <key>SoundThaiVersion</key>
+  <key>EsanCraftVersion</key>
   <string>@VERSION@</string>
-  <key>SoundThaiBuildCommit</key>
+  <key>EsanCraftBuildCommit</key>
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
-  <string>SoundThai</string>
+  <string>EsanCraft</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.music</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
@@ -42,27 +43,27 @@
   <true/>
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
-  <!-- Shown by macOS the first time SoundThai opens an input device (recording). -->
+  <!-- Shown by macOS the first time EsanCraft opens an input device (recording). -->
   <key>NSMicrophoneUsageDescription</key>
-  <string>SoundThai records audio from the input you choose.</string>
+  <string>EsanCraft records audio from the input you choose.</string>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the SoundCraft authors. MIT OR Apache-2.0.</string>
 
-  <!-- SoundThai's own format: a JSON session file next to an "Audio Files" folder. -->
+  <!-- EsanCraft's own format: a JSON session file next to an "Audio Files" folder. -->
   <key>UTImportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
       <string>ai.storyteller.soundcraft.session</string>
       <key>UTTypeDescription</key>
-      <string>SoundThai Session</string>
+      <string>EsanCraft Session</string>
       <key>UTTypeConformsTo</key>
       <array>
         <string>public.data</string>
         <string>public.content</string>
       </array>
       <key>UTTypeIconFile</key>
-      <string>SoundThai</string>
+      <string>EsanCraft</string>
       <key>UTTypeTagSpecification</key>
       <dict>
         <key>public.filename-extension</key>
@@ -77,13 +78,13 @@
   <array>
     <dict>
       <key>CFBundleTypeName</key>
-      <string>SoundThai Session</string>
+      <string>EsanCraft Session</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>CFBundleTypeIconFile</key>
-      <string>SoundThai</string>
+      <string>EsanCraft</string>
       <key>LSItemContentTypes</key>
       <array><string>ai.storyteller.soundcraft.session</string></array>
     </dict>

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Event-menu operation windows: Beat Detective, Tempo Operations, Time Operations, MIDI
 //! Operations and MIDI Real-Time Properties. Each is a small form over engine commands.
 

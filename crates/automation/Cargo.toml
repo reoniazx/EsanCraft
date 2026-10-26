@@ -1,6 +1,7 @@
+# Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 [package]
 name = "soundcraft-automation"
-description = "SoundThai agent control: MCP server (stdio JSON-RPC), headless engine backend and control-channel client"
+description = "EsanCraft agent control: MCP server (stdio JSON-RPC), headless engine backend and control-channel client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

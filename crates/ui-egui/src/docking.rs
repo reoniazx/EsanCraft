@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Application panel identities and persistence around the shared docking renderer.
 //! Document contents remain owned by their existing view implementations.
 
@@ -162,7 +163,7 @@ fn canvas_placement(node: &Node<Panel>) -> Option<Result<(), &'static str>> {
     }
 }
 
-/// Check a workspace against craft-ui's rules and SoundThai's own: saved settings cannot
+/// Check a workspace against craft-ui's rules and EsanCraft's own: saved settings cannot
 /// float, hide, collapse or share the protected document view.
 pub fn validate(workspace: &Workspace) -> Result<(), String> {
     workspace.validate().map_err(|error| error.to_string())?;
@@ -295,7 +296,7 @@ fn set_visible(workspace: &mut Workspace, panel: Panel, visible: bool) -> Result
 }
 
 /// Run a shared docking command. A hidden panel that is opened or activated comes back with
-/// [`set_visible`], so it gets SoundThai's default place when it has no recorded one.
+/// [`set_visible`], so it gets EsanCraft's default place when it has no recorded one.
 fn run(workspace: &mut Workspace, command: &DockCommand<Panel>) -> Result<(), String> {
     if let DockCommand::Activate { panel } | DockCommand::UiDock(UiDock::Operation(DockOperation::Open { panel } | DockOperation::Activate { panel })) =
         command
@@ -303,7 +304,7 @@ fn run(workspace: &mut Workspace, command: &DockCommand<Panel>) -> Result<(), St
     {
         return set_visible(workspace, *panel, true);
     }
-    // Only `window.panel.float` reads the float space, and SoundThai does not register it.
+    // Only `window.panel.float` reads the float space, and EsanCraft does not register it.
     checked(workspace, |next| command.apply(next, false, &FloatSpace::new(egui::Rect::NOTHING), permissions).map(drop))
 }
 
@@ -399,7 +400,7 @@ pub(crate) fn cancel_replaced_state(app: &crate::SoundApp, next: &crate::UiState
 fn command_for(app: &mut crate::SoundApp, command: &DockCommand<Panel>, edit: bool) -> Result<Value, String> {
     let mut workspace = if edit { app.ui.docking.clone() } else { app.ui.mix_docking.clone() };
     if command.is_app_owned() {
-        // Reset is the only application-owned command SoundThai registers.
+        // Reset is the only application-owned command EsanCraft registers.
         if !matches!(command, DockCommand::ResetWorkspace {}) {
             return Err("Named panel workspaces are not supported".into());
         }

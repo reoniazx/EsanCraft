@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Fonts: egui's defaults and bundled Noto fallbacks, plus the operating system's own UI fonts
 //! loaded at runtime when present (never redistributed). The fallbacks also work on Web/WASM.
 

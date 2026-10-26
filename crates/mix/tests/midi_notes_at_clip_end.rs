@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Terminal note-offs belong to the block beginning at the clip end, even though that clip no
 //! longer overlaps the block. Check event timing as well as the rendered instrument's release.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

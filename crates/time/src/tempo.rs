@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Tempo and meter maps: the conversion between musical time (ticks) and samples.
 
 use crate::{MAX_POSITION, SampleRate, Samples, TimeError, to_samples};

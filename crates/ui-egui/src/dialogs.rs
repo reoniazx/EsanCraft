@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Modal dialogs opened by menu-style invocations.
 
 use crate::SoundApp;

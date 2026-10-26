@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Continuous timeline zoom for trackpads and other pointing devices.
 
 use super::*;

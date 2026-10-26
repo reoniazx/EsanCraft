@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Native presentation owns context menus and left-click dropdowns without an egui popup.
 #![cfg(not(target_arch = "wasm32"))]
 

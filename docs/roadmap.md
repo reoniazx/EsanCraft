@@ -1,10 +1,12 @@
-# SoundThai roadmap: milestones and what's next
+> Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 
-> SoundThai fork initialized 2026-10-26 from local SoundCraft `main` at `ab7ede2`.
+# EsanCraft roadmap: milestones and what's next
+
+> EsanCraft fork initialized 2026-10-26 from local SoundCraft `main` at `ab7ede2`.
 > The assessments below are inherited SoundCraft baseline estimates; the fork does not increase readiness.
-> Fork setup and upstream updates: [SoundThai guide](soundthai-fork.md).
+> Fork setup and upstream updates: [EsanCraft guide](esancraft-fork.md).
 
-> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (independent SoundThai fork) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (EsanCraft branding and license packaging) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 Forward-looking plan. Status and numbers: [`../ROADMAP.md`](../ROADMAP.md) and
 [`target-app-parity.md`](target-app-parity.md); the ranked work list: [`gaps.md`](gaps.md).
@@ -95,7 +97,9 @@ There is no `cargo xtask scorecard` in this repo; the measured number is `cargo 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-26 | minor | Independent SoundThai application packages, settings, installers and update source; inherited readiness unchanged |
+| 2026-10-26 | minor | Remove upstream trademark art, add modified-file notices and complete code/font license packaging; see license audit; readiness unchanged |
+| 2026-10-26 | minor | Rename SoundThai to EsanCraft across application packages, configuration, installers and repository; readiness unchanged |
+| 2026-10-26 | minor | Independent EsanCraft application packages, settings, installers and update source; inherited readiness unchanged |
 | 2026-10-26 | minor | Native macOS dropdowns across track controls, routing, forms and settings; readiness estimates unchanged |
 | 2026-10-25 | minor | Native macOS context menus with plugin search and Send controls; readiness estimates unchanged |
 | 2026-10-25 | trivial | Merge upstream updates while retaining local features, fixes and progress history; readiness estimates unchanged |

@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Video track: the movie pool (opened from `Session::videos` paths, decoded off the UI thread)
 //! and thumbnails drawn along video clips in the Edit window.
 //!

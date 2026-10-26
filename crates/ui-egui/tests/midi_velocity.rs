@@ -1,3 +1,4 @@
+// Modified for EsanCraft; original notices retained. See MODIFICATIONS.md.
 //! Exercise the real divider input, persistence and document isolation.
 use egui::{Event, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
 use serde_json::json;
