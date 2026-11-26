@@ -23,7 +23,7 @@ name = "editor_main_thread"
 harness = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-clap-sys = "0.5"
+clap-sys = "0.6"
 libloading = "0.9"
 
 # The isolated unsafe helper crate (craftrules never-crash): this crate opts out of the workspace
